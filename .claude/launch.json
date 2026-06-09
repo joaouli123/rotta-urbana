@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rotta-admin",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--env-file=railway-admin/.env", "railway-admin/server.js"],
+      "port": 4100
+    }
+  ]
+}
