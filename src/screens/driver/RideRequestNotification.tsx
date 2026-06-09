@@ -41,16 +41,11 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
       useNativeDriver: false,
     }).start();
 
-    // Countdown
+    // Countdown — visual only, does NOT auto-reject.
+    // The ride stays visible until the driver explicitly accepts/rejects,
+    // or until the passenger cancels (handled by the parent subscription).
     const interval = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          clearInterval(interval);
-          onReject();
-          return 0;
-        }
-        return s - 1;
-      });
+      setSecondsLeft((s) => (s <= 1 ? 0 : s - 1));
     }, 1000);
 
     return () => clearInterval(interval);

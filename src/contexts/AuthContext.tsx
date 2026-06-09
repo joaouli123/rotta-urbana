@@ -39,9 +39,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const loadProfile = useCallback(async (userId: string) => {
     fetchingFor.current = userId;
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single();
-    // ignore stale results if the user changed mid-flight
-    if (fetchingFor.current === userId) setProfile((data as ProfileRow) ?? null);
+    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+    if (fetchingFor.current !== userId) return; // stale result — user changed mid-flight
+    // Only update on success. On transient errors keep whatever was loaded before so
+    // a network hiccup during token-refresh doesn't flash the auth screen.
+    if (!error && data) setProfile(data as ProfileRow);
+    else if (!error && !data) setProfile(null); // profile truly absent (new user edge case)
   }, []);
 
   useEffect(() => {

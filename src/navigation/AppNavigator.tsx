@@ -241,6 +241,18 @@ const DriverFlow: React.FC = () => {
     return unsub;
   }, [online, activeRide]);
 
+  // If the pending ride is accepted by another driver or cancelled, dismiss it.
+  useEffect(() => {
+    if (!pendingRequest) return;
+    const unsub = subscribeToRide(pendingRequest.id, (r) => {
+      if (r.status !== 'searching') {
+        setPendingRequest(null);
+        if (screenRef.current === 'ride_notification') setScreen('driver_home');
+      }
+    });
+    return unsub;
+  }, [pendingRequest?.id]);
+
   // Stop the GPS watch when leaving the driver area.
   useEffect(() => () => { watchRef.current?.remove(); }, []);
 
@@ -265,6 +277,14 @@ const DriverFlow: React.FC = () => {
         }
         await setStatus('online');
         setOnline(true);
+        // Pull any ride requests that were already searching before we subscribed.
+        try {
+          const existing = await getSearchingRides();
+          if (existing.length > 0) {
+            setPendingRequest((cur) => cur ?? existing[0]);
+            setScreen('ride_notification');
+          }
+        } catch { /* no existing rides or not verified */ }
         watchRef.current = await Location.watchPositionAsync(
           { accuracy: Location.Accuracy.High, distanceInterval: 25, timeInterval: 6000 },
           (pos) => {
@@ -340,18 +360,25 @@ const DriverFlow: React.FC = () => {
 
   switch (screen) {
     case 'driver_home':
-      return (
-        <DriverHomeScreen
-          online={online}
-          onToggleOnline={toggleOnline}
-          coords={driverCoords ?? undefined}
-          onRideRequest={() => pendingRequest ? setScreen('ride_notification') : Alert.alert('Sem corridas', 'Nenhuma solicitação disponível no momento.')}
-          onEarnings={() => setScreen('driver_earnings')}
-          onProfile={openMenu}
-        />
-      );
     case 'ride_notification':
-      return <RideRequestNotification onAccept={handleAccept} onReject={() => { setPendingRequest(null); setScreen('driver_home'); }} />;
+      return (
+        <View style={{ flex: 1 }}>
+          <DriverHomeScreen
+            online={online}
+            onToggleOnline={toggleOnline}
+            coords={driverCoords ?? undefined}
+            onRideRequest={() => pendingRequest ? setScreen('ride_notification') : Alert.alert('Sem corridas', 'Nenhuma solicitação disponível no momento.')}
+            onEarnings={() => setScreen('driver_earnings')}
+            onProfile={openMenu}
+          />
+          {screen === 'ride_notification' && pendingRequest && (
+            <RideRequestNotification
+              onAccept={handleAccept}
+              onReject={() => { setPendingRequest(null); setScreen('driver_home'); }}
+            />
+          )}
+        </View>
+      );
     case 'driver_active_ride':
       return (
         <DriverActiveRideScreen
@@ -406,7 +433,8 @@ const AppNavigator: React.FC = () => {
   const { session, profile, loading } = useAuth();
 
   if (loading) return <Loading />;
-  if (!session || !profile) return <AuthFlow />;
+  if (!session) return <AuthFlow />;   // truly signed out
+  if (!profile) return <Loading />;    // signed in but profile still fetching — never flash AuthFlow
   if (profile.role === 'driver') return <DriverFlow />;
   if (profile.role === 'admin') return <AdminFlow />;
   return <PassengerFlow />;

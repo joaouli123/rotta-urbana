@@ -84,12 +84,22 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
     };
   }
 
+  // Sinop, MT — used as initial camera position before GPS kicks in.
+  const SINOP_COORD: LngLat = [-55.5024, -11.8642];
+
   return (
     <Mapbox.MapView style={[{ flex: 1 }, style]} styleURL={Mapbox.StyleURL.Street} logoEnabled={false} compassEnabled>
       {bounds ? (
-        <Mapbox.Camera bounds={bounds} animationDuration={800} />
+        // key forces Camera to animate to new bounds when origin/destination change
+        <Mapbox.Camera key={`${bounds.sw[0]},${bounds.sw[1]}`} bounds={bounds} animationDuration={800} />
       ) : follow ? (
-        <Mapbox.Camera followUserLocation followZoomLevel={15} padding={pad} animationDuration={700} />
+        <Mapbox.Camera
+          followUserLocation
+          followZoomLevel={15}
+          defaultSettings={{ centerCoordinate: SINOP_COORD, zoomLevel: 13 }}
+          padding={pad}
+          animationDuration={700}
+        />
       ) : (
         <Mapbox.Camera zoomLevel={15} centerCoordinate={center} padding={pad} animationDuration={700} />
       )}

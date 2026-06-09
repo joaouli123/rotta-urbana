@@ -55,9 +55,9 @@ export async function updateLocation(lat: number, lng: number, heading?: number)
   if (error) throw error;
 }
 
-export async function nearbyDrivers(lat: number, lng: number, radiusM = 5000, rideType?: string): Promise<NearbyDriver[]> {
+export async function nearbyDrivers(lat: number, lng: number, radiusM = 5000): Promise<NearbyDriver[]> {
   const { data, error } = await supabase.rpc('nearby_drivers', {
-    p_lat: lat, p_lng: lng, p_radius_m: radiusM, p_ride_type: rideType ?? null,
+    p_lat: lat, p_lng: lng, p_radius_m: radiusM,
   });
   if (error) throw error;
   return (data as NearbyDriver[]) ?? [];
