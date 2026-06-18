@@ -223,13 +223,22 @@ app.get('/rides', requireAuth, async (req, res) => {
     `${Number(r.distance_km ?? 0).toFixed(1)} km`,
     esc(names[r.passenger_id] ?? '—'), esc(names[r.driver_id] ?? '—'),
     r.fare_paid ? badge('approved') : badge('pending'), fmtDate(r.requested_at),
+    (r.status === 'completed' && !r.fare_paid)
+      ? `<form class="inline" method="post" action="/rides/${r.id}/mark-paid"><button class="act">Marcar pago</button></form>`
+      : '—',
   ]);
   const filters = ['', 'searching', 'in_progress', 'completed', 'cancelled'];
   const fbar = `<div class="filters" style="margin-bottom:14px">${filters.map((f) =>
     `<a href="/rides${f ? '?status=' + f : ''}" class="${(status ?? '') === f ? 'on' : ''}">${f || 'todas'}</a>`).join('')}</div>`;
   const body = `${fbar}<div class="card"><h2>Corridas</h2>
-    ${table(['Tipo', 'Status', 'Preço', 'Distância', 'Passageiro', 'Motorista', 'Pago', 'Quando'], rows)}</div>`;
+    ${table(['Tipo', 'Status', 'Preço', 'Distância', 'Passageiro', 'Motorista', 'Pago', 'Quando', 'Ação'], rows)}</div>`;
   render(res, layout({ title: 'Corridas', active: '/rides', email: req.session.email, body }));
+});
+
+app.post('/rides/:id/mark-paid', requireAuth, async (req, res) => {
+  // service_role bypasses RLS; only flip completed rides that aren't paid yet.
+  await admin.from('rides').update({ fare_paid: true }).eq('id', req.params.id).eq('status', 'completed');
+  res.redirect('/rides');
 });
 
 // ─── Subscriptions ──────────────────────────────────────────────────────────

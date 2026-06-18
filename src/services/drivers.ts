@@ -35,6 +35,12 @@ export async function getMyCategories(): Promise<string[]> {
   return (data as string[]) ?? [];
 }
 
+/** Driver confirms a completed ride was paid (cash/PIX-direto). Admin can too. */
+export async function markFarePaid(rideId: string): Promise<void> {
+  const { error } = await supabase.rpc('mark_fare_paid', { p_ride_id: rideId });
+  if (error) throw error;
+}
+
 export async function setStatus(status: DriverStatus): Promise<void> {
   const { error } = await supabase.rpc('set_driver_status', { p_status: status });
   if (error) throw error;
