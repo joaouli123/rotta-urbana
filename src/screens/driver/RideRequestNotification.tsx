@@ -8,7 +8,7 @@ import {
   Animated,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MapPin, Navigation, Clock, DollarSign, X, Check } from 'lucide-react-native';
+import { MapPin, Navigation, Clock, DollarSign, X, Check, ShieldCheck } from 'lucide-react-native';
 import { Colors, Radius, Typography } from '../../constants';
 import { Avatar } from '../../components/ui';
 import { getRideCounterpart, getRidePoints, type RideCounterpart } from '../../services/rides';
@@ -120,6 +120,14 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
           <Animated.View style={[styles.progressFill, { width: progressWidth }]} />
         </View>
 
+        {/* Female-only badge (only female drivers ever see these requests) */}
+        {ride.requires_female_driver && (
+          <View style={styles.femaleOnlyBadge}>
+            <ShieldCheck size={13} color={Colors.success} />
+            <Text style={styles.femaleOnlyTxt}>Corrida exclusiva para motoristas mulheres</Text>
+          </View>
+        )}
+
         {/* Passenger */}
         <View style={styles.passengerRow}>
           <Avatar name={passengerName} size={48} />
@@ -224,6 +232,13 @@ const styles = StyleSheet.create({
   timerText: { ...Typography.smallMedium, color: Colors.warning, fontWeight: '700' },
   progressTrack: { height: 3, backgroundColor: Colors.border, borderRadius: 2, marginBottom: 20, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: Colors.warning, borderRadius: 2 },
+  femaleOnlyBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    backgroundColor: Colors.success + '14', borderRadius: Radius.sm,
+    paddingVertical: 8, paddingHorizontal: 10, marginBottom: 14,
+    borderWidth: 1, borderColor: Colors.success + '33',
+  },
+  femaleOnlyTxt: { ...Typography.caption, color: Colors.successLight, flex: 1, fontFamily: 'Poppins_600SemiBold' },
   passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
   passengerName: { ...Typography.h5, color: Colors.textPrimary },
   ratingRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 4 },

@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useState, useCallback, use
 import { AppState } from 'react-native';
 import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
-import type { ProfileRow, Role } from '../types/db';
+import type { ProfileRow, Role, Gender } from '../types/db';
 
 interface SignUpInput {
   fullName: string;
@@ -10,6 +10,7 @@ interface SignUpInput {
   phone: string;
   password: string;
   role: Extract<Role, 'passenger' | 'driver'>;
+  gender?: Gender;
 }
 
 interface AuthContextValue {
@@ -89,6 +90,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           full_name: input.fullName.trim(),
           phone: input.phone.trim(),
           role: input.role,
+          ...(input.gender ? { gender: input.gender } : {}),
         },
       },
     });

@@ -16,6 +16,13 @@ import { Colors, Radius } from '../../constants';
 import { useAuth } from '../../contexts/AuthContext';
 import { friendlyError } from '../../lib/errors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import type { Gender } from '../../types/db';
+
+const GENDER_OPTIONS: { value: Gender; label: string }[] = [
+  { value: 'female', label: 'Feminino' },
+  { value: 'male', label: 'Masculino' },
+  { value: 'other', label: 'Outro' },
+];
 
 interface RegisterPassengerScreenProps {
   onBack: () => void;
@@ -29,11 +36,16 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [gender, setGender] = useState<Gender | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleRegister = async () => {
     if (!name.trim() || !email.trim() || !phone.trim() || !password) {
       Alert.alert('Atenção', 'Preencha todos os campos.');
+      return;
+    }
+    if (!gender) {
+      Alert.alert('Atenção', 'Selecione seu sexo (usamos para a preferência de segurança).');
       return;
     }
     if (password.length < 8) {
@@ -45,7 +57,7 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
       return;
     }
     setLoading(true);
-    const { error } = await signUp({ fullName: name, email, phone, password, role: 'passenger' });
+    const { error } = await signUp({ fullName: name, email, phone, password, role: 'passenger', gender: gender ?? undefined });
     setLoading(false);
     // Success -> session is created and the navigator routes to the home.
     if (error) Alert.alert('Erro no cadastro', friendlyError(error));
@@ -110,6 +122,27 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
               keyboardType="phone-pad"
               leftIcon={<Phone size={18} color={Colors.textMuted} />}
             />
+
+            <Text style={styles.genderLabel}>Sexo</Text>
+            <View style={styles.genderRow}>
+              {GENDER_OPTIONS.map((g) => {
+                const active = gender === g.value;
+                return (
+                  <TouchableOpacity
+                    key={g.value}
+                    style={[styles.genderChip, active && styles.genderChipActive]}
+                    onPress={() => setGender(g.value)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[styles.genderChipTxt, active && styles.genderChipTxtActive]}>{g.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            <Text style={styles.genderHint}>
+              Usamos para priorizar motoristas mulheres quando uma passageira pede corrida.
+            </Text>
+
             <Input
               label="Senha"
               value={password}
@@ -196,6 +229,17 @@ const styles = StyleSheet.create({
   },
 
   form: { gap: 0, marginBottom: 4 },
+
+  genderLabel: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary, marginTop: 14, marginBottom: 8 },
+  genderRow: { flexDirection: 'row', gap: 8 },
+  genderChip: {
+    flex: 1, paddingVertical: 12, borderRadius: Radius.md, alignItems: 'center',
+    borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.surface,
+  },
+  genderChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  genderChipTxt: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
+  genderChipTxtActive: { color: Colors.textInverse },
+  genderHint: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 8, lineHeight: 16 },
 
   securityRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

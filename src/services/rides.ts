@@ -8,6 +8,7 @@ export interface RequestRideInput {
   originLat: number; originLng: number; originAddress: string;
   destLat: number; destLng: number; destAddress: string;
   rideType?: RideTypeDb; paymentMethod?: PaymentMethodDb;
+  requiresFemaleDriver?: boolean;
 }
 
 export async function requestRide(i: RequestRideInput): Promise<RideRow> {
@@ -15,7 +16,15 @@ export async function requestRide(i: RequestRideInput): Promise<RideRow> {
     p_origin_lat: i.originLat, p_origin_lng: i.originLng, p_origin_address: i.originAddress,
     p_dest_lat: i.destLat, p_dest_lng: i.destLng, p_dest_address: i.destAddress,
     p_ride_type: i.rideType ?? 'economy', p_payment_method: i.paymentMethod ?? 'pix',
+    p_requires_female_driver: i.requiresFemaleDriver ?? false,
   });
+  if (error) throw error;
+  return first<RideRow>(data)!;
+}
+
+/** Passenger relaxes the female-driver preference so any driver can accept. */
+export async function relaxFemalePreference(rideId: string): Promise<RideRow> {
+  const { data, error } = await supabase.rpc('relax_female_preference', { p_ride_id: rideId });
   if (error) throw error;
   return first<RideRow>(data)!;
 }

@@ -9,6 +9,7 @@ import {
   Image,
   TextInput,
   Dimensions,
+  Switch,
 } from 'react-native';
 import {
   ChevronLeft,
@@ -20,7 +21,9 @@ import {
   Banknote,
   CreditCard,
   Check,
+  ShieldCheck,
 } from 'lucide-react-native';
+import { useAuth } from '../../contexts/AuthContext';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -103,6 +106,7 @@ export interface RidePayload {
   originLng: number; originLat: number; originAddress: string;
   destLng: number; destLat: number; destAddress: string;
   paymentMethod: 'pix' | 'cash' | 'card';
+  requiresFemaleDriver?: boolean;
 }
 
 interface RideRequestScreenProps {
@@ -116,9 +120,12 @@ const { height: SCREEN_H } = Dimensions.get('window');
 
 const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '', onConfirm, onBack }) => {
   const insets = useSafeAreaInsets();
+  const { profile } = useAuth();
+  const isFemale = profile?.gender === 'female';
   const [selectedDest, setSelectedDest] = useState(destination);
   const [selectedType, setSelectedType] = useState('economy');
   const [selectedPayment, setSelectedPayment] = useState<'pix' | 'cash' | 'card'>('pix');
+  const [preferFemaleDriver, setPreferFemaleDriver] = useState(true);
   const [step, setStep] = useState<'search' | 'choose'>(destination ? 'choose' : 'search');
   const [origin, setOrigin] = useState<[number, number] | null>(null);
   const [destCoords, setDestCoords] = useState<[number, number] | null>(null);
@@ -221,6 +228,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
         originLng: origin[0], originLat: origin[1], originAddress: 'Minha localização',
         destLng: destCoords[0], destLat: destCoords[1], destAddress,
         paymentMethod: selectedPayment,
+        requiresFemaleDriver: isFemale && preferFemaleDriver,
       });
     } else {
       onConfirm(selectedType);
@@ -379,6 +387,29 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
                 </TouchableOpacity>
               );
             })}
+            {isFemale && (
+              <>
+                <Text style={[styles.sectionLabel, { marginTop: 18 }]}>SEGURANÇA</Text>
+                <View style={styles.safetyCard}>
+                  <View style={styles.safetyIconWrap}>
+                    <ShieldCheck size={20} color={Colors.success} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.safetyTitle}>Prefiro motorista mulher</Text>
+                    <Text style={styles.safetyDesc}>
+                      Priorizamos motoristas mulheres. Se nenhuma estiver disponível, você decide se aguarda ou aceita um motorista homem.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={preferFemaleDriver}
+                    onValueChange={setPreferFemaleDriver}
+                    trackColor={{ false: Colors.border, true: Colors.success }}
+                    thumbColor="#FFFFFF"
+                  />
+                </View>
+              </>
+            )}
+
             <Text style={[styles.sectionLabel, { marginTop: 18 }]}>FORMA DE PAGAMENTO</Text>
             <View style={styles.payList}>
               {/* PIX (logo oficial) */}
@@ -447,6 +478,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
               title="Confirmar corrida"
               onPress={confirm}
               loading={resolving}
+              disabled={!destCoords}
               style={{ marginTop: 16 }}
             />
           </ScrollView>
@@ -596,6 +628,19 @@ const styles = StyleSheet.create({
   rideTypePrice: { fontSize: 16, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
   timeRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   rideTypeTime: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: Colors.textMuted },
+
+  // ── Safety: prefer female driver ──────────────────────────
+  safetyCard: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    padding: 14, borderRadius: Radius.md,
+    backgroundColor: Colors.success + '0D', borderWidth: 1, borderColor: Colors.success + '33',
+  },
+  safetyIconWrap: {
+    width: 38, height: 38, borderRadius: Radius.sm,
+    backgroundColor: Colors.success + '1A', alignItems: 'center', justifyContent: 'center',
+  },
+  safetyTitle: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
+  safetyDesc: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 2, lineHeight: 15 },
 
   // ── Payment method (lista compacta estilo Uber) ───────────
   payList: {

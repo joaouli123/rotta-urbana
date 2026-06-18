@@ -11,7 +11,7 @@ import {
   Easing,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { X, Car, Check, Star, Clock } from 'lucide-react-native';
+import { X, Car, Check, Star, Clock, ShieldAlert } from 'lucide-react-native';
 import { Colors, Radius } from '../../constants';
 
 interface RideMatchingScreenProps {
@@ -21,15 +21,23 @@ interface RideMatchingScreenProps {
   price?: number | null;
   distanceKm?: number | null;
   durationMin?: number | null;
+  requiresFemaleDriver?: boolean;
+  rideStatus?: string;
+  onAcceptMale?: () => void;
 }
+
+// How long to look for a female driver before offering the fallback prompt.
+const FEMALE_WAIT_MS = 75_000;
 
 const { height: SCREEN_H } = Dimensions.get('window');
 const SHEET_H = Math.min(SCREEN_H * 0.40, 280);
 const RING_BASE = 108;
 
-const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, onCancel, destinationAddress, price, distanceKm, durationMin }) => {
+const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, onCancel, destinationAddress, price, distanceKm, durationMin, requiresFemaleDriver = false, rideStatus = 'searching', onAcceptMale }) => {
   const [phase, setPhase] = useState<'searching' | 'found'>('searching');
   const [dotIdx, setDotIdx] = useState(0);
+  const [showFemalePrompt, setShowFemalePrompt] = useState(false);
+  const [promptRound, setPromptRound] = useState(0);
 
   const r1 = useRef(new Animated.Value(0)).current;
   const r2 = useRef(new Animated.Value(0)).current;
@@ -112,6 +120,15 @@ const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, 
     };
   }, []);
 
+  // Female-driver wait: after a while with no woman driver, offer the fallback.
+  // Only while the ride is genuinely still searching (a driver may have accepted).
+  const stillSearching = rideStatus === 'searching';
+  useEffect(() => {
+    if (phase !== 'searching' || !requiresFemaleDriver || !stillSearching) { setShowFemalePrompt(false); return; }
+    const t = setTimeout(() => setShowFemalePrompt(true), FEMALE_WAIT_MS);
+    return () => clearTimeout(t);
+  }, [phase, requiresFemaleDriver, stillSearching, promptRound]);
+
   const ringStyle = (anim: Animated.Value) => ({
     opacity: anim.interpolate({ inputRange: [0, 0.18, 1], outputRange: [0, 0.65, 0] }),
     transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [1, 2.9] }) }],
@@ -177,8 +194,14 @@ const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, 
         <View style={styles.infoBlock}>
           {phase === 'searching' ? (
             <>
-              <Text style={styles.searchTitle}>Procurando motorista</Text>
-              <Text style={styles.searchSub}>Aguarde, encontrando o melhor{'\n'}motorista perto de você</Text>
+              <Text style={styles.searchTitle}>
+                {requiresFemaleDriver ? 'Procurando motorista mulher' : 'Procurando motorista'}
+              </Text>
+              <Text style={styles.searchSub}>
+                {requiresFemaleDriver
+                  ? 'Priorizando motoristas mulheres\nperto de você'
+                  : 'Aguarde, encontrando o melhor\nmotorista perto de você'}
+              </Text>
               <View style={styles.dotsRow}>
                 {[0, 1, 2].map(i => (
                   <View key={i} style={[styles.dot, { opacity: dotIdx === i ? 1 : 0.22 }]} />
@@ -257,6 +280,37 @@ const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, 
           </View>
         )}
       </View>
+
+      {showFemalePrompt && requiresFemaleDriver && phase === 'searching' && stillSearching && (
+        <View style={styles.promptOverlay}>
+          <View style={styles.promptCard}>
+            <View style={styles.promptIcon}>
+              <ShieldAlert size={26} color={Colors.warning} />
+            </View>
+            <Text style={styles.promptTitle}>Nenhuma motorista mulher por perto</Text>
+            <Text style={styles.promptDesc}>
+              Não encontramos uma motorista mulher disponível agora. Você prefere aguardar mais um pouco ou seguir com um motorista homem?
+            </Text>
+            <TouchableOpacity
+              style={styles.promptPrimary}
+              activeOpacity={0.85}
+              onPress={() => { setShowFemalePrompt(false); setPromptRound((r) => r + 1); }}
+            >
+              <Text style={styles.promptPrimaryTxt}>Aguardar mais um pouco</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.promptSecondary}
+              activeOpacity={0.85}
+              onPress={() => { setShowFemalePrompt(false); onAcceptMale?.(); }}
+            >
+              <Text style={styles.promptSecondaryTxt}>Aceitar motorista homem</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.promptCancel} activeOpacity={0.7} onPress={onCancel}>
+              <Text style={styles.promptCancelTxt}>Cancelar corrida</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
     </View>
   );
 };
@@ -360,6 +414,34 @@ const styles = StyleSheet.create({
 
   etaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 10 },
   etaTxt: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary },
+
+  // Fallback prompt (no female driver available)
+  promptOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(6,12,20,0.72)',
+    alignItems: 'center', justifyContent: 'center', padding: 28,
+  },
+  promptCard: {
+    width: '100%', backgroundColor: '#FFFFFF', borderRadius: 22, padding: 22, alignItems: 'center',
+  },
+  promptIcon: {
+    width: 56, height: 56, borderRadius: 28, backgroundColor: Colors.warning + '1F',
+    alignItems: 'center', justifyContent: 'center', marginBottom: 14,
+  },
+  promptTitle: { fontSize: 17, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary, textAlign: 'center', marginBottom: 8 },
+  promptDesc: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary, textAlign: 'center', lineHeight: 19, marginBottom: 18 },
+  promptPrimary: {
+    width: '100%', backgroundColor: Colors.success, borderRadius: Radius.md,
+    paddingVertical: 14, alignItems: 'center', marginBottom: 10,
+  },
+  promptPrimaryTxt: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: '#FFFFFF' },
+  promptSecondary: {
+    width: '100%', backgroundColor: Colors.surface, borderRadius: Radius.md,
+    paddingVertical: 14, alignItems: 'center', borderWidth: 1, borderColor: Colors.border,
+  },
+  promptSecondaryTxt: { fontSize: 15, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
+  promptCancel: { paddingVertical: 12, marginTop: 4 },
+  promptCancelTxt: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: Colors.danger },
 });
 
 export default RideMatchingScreen;

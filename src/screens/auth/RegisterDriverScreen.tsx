@@ -31,8 +31,15 @@ import { friendlyError } from '../../lib/errors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { addVehicle, updateDriverPix } from '../../services/drivers';
 import FipePicker from '../../components/FipePicker';
+import type { Gender } from '../../types/db';
 
 type VehicleKind = 'sedan' | 'moto';
+
+const GENDER_OPTIONS: { value: Gender; label: string }[] = [
+  { value: 'female', label: 'Feminino' },
+  { value: 'male', label: 'Masculino' },
+  { value: 'other', label: 'Outro' },
+];
 
 interface RegisterDriverScreenProps {
   onBack: () => void;
@@ -62,6 +69,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
   const [phone, setPhone] = useState('');
   const [cpf, setCpf] = useState('');
   const [password, setPassword] = useState('');
+  const [gender, setGender] = useState<Gender | null>(null);
 
   const [vehicleType, setVehicleType] = useState<VehicleKind>('sedan');
   const [vehicleModel, setVehicleModel] = useState('');
@@ -76,7 +84,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
 
   const submit = async () => {
     setLoading(true);
-    const { error } = await signUp({ fullName: name, email, phone, password, role: 'driver' });
+    const { error } = await signUp({ fullName: name, email, phone, password, role: 'driver', gender: gender ?? undefined });
     if (error) {
       setLoading(false);
       Alert.alert('Erro no cadastro', friendlyError(error));
@@ -114,6 +122,10 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
         Alert.alert('Atenção', 'A senha precisa de ao menos 8 caracteres.');
         return;
       }
+      if (!gender) {
+        Alert.alert('Atenção', 'Selecione seu sexo (usado na preferência de segurança das passageiras).');
+        return;
+      }
     }
     if (step === 1 && (!vehicleModel.trim() || !vehiclePlate.trim())) {
       Alert.alert('Atenção', 'Informe modelo e placa do veículo.');
@@ -147,6 +159,24 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
             <Input label="Telefone" value={phone} onChangeText={setPhone}
               placeholder="(65) 9 9999-9999" keyboardType="phone-pad"
               leftIcon={<Phone size={18} color={Colors.textMuted} />} />
+
+            <Text style={styles.genderLabel}>Sexo</Text>
+            <View style={styles.genderRow}>
+              {GENDER_OPTIONS.map((g) => {
+                const active = gender === g.value;
+                return (
+                  <TouchableOpacity
+                    key={g.value}
+                    style={[styles.genderChip, active && styles.genderChipActive]}
+                    onPress={() => setGender(g.value)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={[styles.genderChipTxt, active && styles.genderChipTxtActive]}>{g.label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
             <Input label="Senha" value={password} onChangeText={setPassword}
               isPassword placeholder="Minimo 8 caracteres"
               leftIcon={<Lock size={18} color={Colors.textMuted} />} />
@@ -395,6 +425,17 @@ const styles = StyleSheet.create({
     fontSize: 14, fontFamily: 'Poppins_400Regular',
     color: Colors.textSecondary, marginBottom: 24, lineHeight: 22,
   },
+
+  // Gender selector (Feminino / Masculino / Outro)
+  genderLabel: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary, marginTop: 6, marginBottom: 8 },
+  genderRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
+  genderChip: {
+    flex: 1, paddingVertical: 12, borderRadius: Radius.md, alignItems: 'center',
+    borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.surface,
+  },
+  genderChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  genderChipTxt: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
+  genderChipTxtActive: { color: Colors.textInverse },
 
   // Vehicle type selector (Carro / Moto)
   typeRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },

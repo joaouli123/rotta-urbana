@@ -4,7 +4,7 @@ import * as Location from 'expo-location';
 import { useAuth } from '../contexts/AuthContext';
 import { Colors } from '../constants';
 import type { RideRow, RideTypeDb } from '../types/db';
-import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide } from '../services/rides';
+import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide, relaxFemalePreference } from '../services/rides';
 import { getSearchingRides, subscribeSearchingRides, setStatus, updateLocation } from '../services/drivers';
 import { setSubscriptionPlan, buildSubscriptionPix, buildRideFarePix } from '../services/payments';
 import { friendlyError } from '../lib/errors';
@@ -184,6 +184,7 @@ const PassengerFlow: React.FC = () => {
         originLat: originLngLat[1], originLng: originLngLat[0], originAddress: originAddr,
         destLat: destLngLat[1], destLng: destLngLat[0], destAddress: destAddr,
         rideType: type, paymentMethod: payload?.paymentMethod ?? 'pix',
+        requiresFemaleDriver: payload?.requiresFemaleDriver ?? false,
       });
       setRide(created);
       setScreen('ride_matching');
@@ -235,6 +236,21 @@ const PassengerFlow: React.FC = () => {
     setScreen('passenger_home');
   };
 
+  // No female driver available → passenger chooses to accept a male driver.
+  const handleAcceptMale = async () => {
+    if (!ride) return;
+    try {
+      const updated = await relaxFemalePreference(ride.id);
+      setRide(updated);
+    } catch (e: any) {
+      const msg = (e?.message ?? '').toLowerCase();
+      // A driver may have accepted in the meantime → ride no longer 'searching'.
+      // That's benign: realtime/poll will move us to tracking; don't alarm the user.
+      if (msg.includes('not found') || msg.includes('not yours')) return;
+      Alert.alert('Erro', friendlyError(e?.message));
+    }
+  };
+
   switch (screen) {
     case 'passenger_home':
       return (
@@ -260,6 +276,9 @@ const PassengerFlow: React.FC = () => {
         price={ride?.price}
         distanceKm={ride?.distance_km}
         durationMin={ride?.duration_min}
+        requiresFemaleDriver={ride?.requires_female_driver}
+        rideStatus={ride?.status}
+        onAcceptMale={handleAcceptMale}
       />;
     case 'ride_tracking':
       return <RideTrackingScreen rideId={ride?.id} status={ride?.status} origin={originCoords ?? undefined} destination={destCoords ?? undefined} price={ride?.price} distanceKm={ride?.distance_km} durationMin={ride?.duration_min} destinationAddress={ride?.destination_address} onRideCompleted={() => setScreen('ride_completed')} onPanic={() => Alert.alert('Emergência', 'Deseja ligar para a emergência (190)?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Ligar 190', style: 'destructive', onPress: () => Linking.openURL('tel:190') }])} />;
@@ -292,7 +311,7 @@ const PassengerFlow: React.FC = () => {
 };
 
 // ─── Driver flow ─────────────────────────────────────────────────────────────
-type DScreen = 'driver_home' | 'ride_notification' | 'driver_active_ride' | 'driver_rate' | 'driver_earnings' | 'driver_documents' | 'driver_profile' | 'driver_rides' | 'driver_subscription' | 'driver_ratings';
+type DScreen = 'driver_home' | 'ride_notification' | 'driver_active_ride' | 'driver_rate' | 'driver_earnings' | 'driver_documents' | 'driver_profile' | 'driver_rides' | 'driver_subscription' | 'driver_ratings' | 'driver_support';
 
 const DriverFlow: React.FC = () => {
   const { signOut } = useAuth();
@@ -316,6 +335,23 @@ const DriverFlow: React.FC = () => {
     });
     return unsub;
   }, [online, activeRide]);
+
+  // Poll fallback: realtime only fires on INSERT, so rides that become eligible
+  // later (e.g. a female-only ride relaxed to allow male drivers) arrive as an
+  // UPDATE the subscription misses. Polling surfaces them to already-online drivers.
+  useEffect(() => {
+    if (!online || activeRide || pendingRequest) return;
+    const iv = setInterval(async () => {
+      try {
+        const existing = await getSearchingRides();
+        if (existing.length > 0) {
+          setPendingRequest((cur) => cur ?? existing[0]);
+          if (screenRef.current === 'driver_home') setScreen('ride_notification');
+        }
+      } catch { /* not verified / offline */ }
+    }, 12000);
+    return () => clearInterval(iv);
+  }, [online, activeRide?.id, pendingRequest?.id]);
 
   // If the pending ride is accepted by another driver or cancelled, dismiss it.
   useEffect(() => {
@@ -481,6 +517,8 @@ const DriverFlow: React.FC = () => {
       return <DriverEarningsScreen onBack={() => setScreen('driver_home')} />;
     case 'driver_documents':
       return <DriverDocumentsScreen onBack={() => setScreen('driver_home')} />;
+    case 'driver_support':
+      return <SupportScreen onBack={() => setScreen('driver_profile')} onSubmit={() => setScreen('driver_home')} />;
     case 'driver_profile':
       return (
         <DriverProfileScreen
@@ -490,7 +528,7 @@ const DriverFlow: React.FC = () => {
           onRatings={() => setScreen('driver_ratings')}
           onDocuments={() => setScreen('driver_documents')}
           onSubscription={() => setScreen('driver_subscription')}
-          onSupport={() => Alert.alert('Suporte', 'Entre em contato: suporte@rottaurbana.com.br')}
+          onSupport={() => setScreen('driver_support')}
           onLogout={signOut}
         />
       );

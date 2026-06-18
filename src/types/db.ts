@@ -7,6 +7,7 @@ export type RideStatusDb =
 export type RideTypeDb = 'economy' | 'comfort' | 'premium' | 'moto';
 export type PaymentMethodDb = 'pix' | 'card' | 'boleto' | 'cash';
 export type SubscriptionStatus = 'active' | 'expired' | 'suspended';
+export type Gender = 'female' | 'male' | 'other';
 
 export interface ProfileRow {
   id: string;
@@ -14,6 +15,7 @@ export interface ProfileRow {
   email: string | null;
   phone: string | null;
   role: Role;
+  gender: Gender | null;
   avatar_url: string | null;
   rating: number;
   total_ratings: number;
@@ -44,6 +46,7 @@ export interface RideRow {
   distance_km: number | null;
   duration_min: number | null;
   payment_method: PaymentMethodDb;
+  requires_female_driver: boolean;
   cancel_reason: string | null;
   cancelled_by: Role | null;
   requested_at: string;

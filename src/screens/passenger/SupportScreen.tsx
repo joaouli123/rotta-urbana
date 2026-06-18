@@ -13,7 +13,7 @@ import {
 import {
   ArrowLeft, CreditCard, Car, Package, MapPin,
   Wallet, Shield, Smartphone, HelpCircle,
-  ChevronRight, ChevronDown, Paperclip, Send, X,
+  ChevronRight, ChevronDown, Paperclip, Send, X, AlertTriangle,
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants';
@@ -36,6 +36,7 @@ const fmtPrice = (v?: number | null) =>
 
 // ── Help Topics ───────────────────────────────────────────────
 const TOPICS = [
+  { id: 'assedio',    icon: AlertTriangle, label: 'Assedio ou ma conduta',        desc: 'Importunacao, abuso, ameaca ou desrespeito' },
   { id: 'cobranca',   icon: CreditCard,  label: 'Cobranca incorreta',           desc: 'Valor cobrado diferente do esperado' },
   { id: 'nochegou',   icon: Car,         label: 'Motorista nao chegou',          desc: 'Motorista cancelou ou nao apareceu' },
   { id: 'perdido',    icon: Package,     label: 'Objeto perdido',                desc: 'Esqueci algo no veiculo' },
@@ -99,6 +100,9 @@ const SupportScreen: React.FC<Props> = ({ onBack, onSubmit }) => {
     setSending(true);
     try {
       const subjectParts = [topic?.label ?? 'Suporte'];
+      // Harassment/safety reports are flagged so the admin triages them first.
+      if (selectedTopic === 'assedio') subjectParts.unshift('[URGENTE - ASSÉDIO]');
+      else if (selectedTopic === 'seguranca') subjectParts.unshift('[URGENTE]');
       if (ride) subjectParts.push(`(corrida ${ride.date} — ${ride.dest})`);
       const message = ride
         ? `${comment.trim()}\n\n[Corrida relacionada: ${selectedRide}]`
