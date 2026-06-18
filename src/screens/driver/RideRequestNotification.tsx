@@ -11,19 +11,54 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { MapPin, Navigation, Clock, DollarSign, X, Check } from 'lucide-react-native';
 import { Colors, Radius, Typography } from '../../constants';
 import { Avatar } from '../../components/ui';
+import { getRideCounterpart, getRidePoints, type RideCounterpart } from '../../services/rides';
+import type { RideRow } from '../../types/db';
 
 interface RideRequestNotificationProps {
+  ride: RideRow;
+  driverCoords?: [number, number]; // [lng, lat]
   onAccept: () => void;
   onReject: () => void;
 }
 
+const fmtMoney = (v?: number | null) =>
+  v != null ? 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+
+function haversineKm(a: [number, number], b: [number, number]): number {
+  const R = 6371;
+  const dLat = ((b[1] - a[1]) * Math.PI) / 180;
+  const dLng = ((b[0] - a[0]) * Math.PI) / 180;
+  const lat1 = (a[1] * Math.PI) / 180, lat2 = (b[1] * Math.PI) / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
 const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
+  ride,
+  driverCoords,
   onAccept,
   onReject,
 }) => {
   const slideAnim = useRef(new Animated.Value(300)).current;
   const progressAnim = useRef(new Animated.Value(1)).current;
   const [secondsLeft, setSecondsLeft] = useState(20);
+  const [counterpart, setCounterpart] = useState<RideCounterpart | null>(null);
+  const [pickupDist, setPickupDist] = useState<string | null>(null);
+
+  // Real passenger info
+  useEffect(() => {
+    let active = true;
+    getRideCounterpart(ride.id).then((c) => { if (active) setCounterpart(c); }).catch(() => {});
+    // distance from driver to pickup, if we know both
+    if (driverCoords) {
+      getRidePoints(ride.id).then((p) => {
+        if (!active || !p) return;
+        const km = haversineKm(driverCoords, [p.originLng, p.originLat]);
+        setPickupDist(km < 1 ? `${Math.round(km * 1000)}m de você` : `${km.toFixed(1)} km de você`);
+      }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, [ride.id, driverCoords?.[0], driverCoords?.[1]]);
 
   useEffect(() => {
     // Slide in
@@ -56,6 +91,12 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
     outputRange: ['0%', '100%'],
   });
 
+  const passengerName = counterpart?.name ?? 'Passageiro';
+  const passengerRating = (counterpart?.rating ?? 5).toFixed(1);
+  const priceText = fmtMoney(ride.price);
+  const distText = ride.distance_km != null ? `${ride.distance_km.toFixed(1)} km` : '—';
+  const durText = ride.duration_min != null ? `~${ride.duration_min} min` : '—';
+
   return (
     <View style={styles.overlay}>
       <StatusBar barStyle="light-content" />
@@ -81,18 +122,16 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
 
         {/* Passenger */}
         <View style={styles.passengerRow}>
-          <Avatar name="Lucas Silva" size={48} />
+          <Avatar name={passengerName} size={48} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.passengerName}>Lucas Silva</Text>
+            <Text style={styles.passengerName}>{passengerName}</Text>
             <View style={styles.ratingRow}>
-              {[1, 2, 3, 4, 5].map((i) => (
-                <Text key={i} style={{ color: Colors.warning, fontSize: 11 }}>★</Text>
-              ))}
-              <Text style={styles.ratingText}>4.9</Text>
+              <Text style={{ color: Colors.warning, fontSize: 11 }}>★</Text>
+              <Text style={styles.ratingText}>{passengerRating}</Text>
             </View>
           </View>
           <View style={styles.priceTag}>
-            <Text style={styles.priceValue}>R$ 14,00</Text>
+            <Text style={styles.priceValue}>{priceText}</Text>
             <Text style={styles.priceLabel}>Estimativa</Text>
           </View>
         </View>
@@ -101,19 +140,19 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
         <View style={styles.routeCard}>
           <View style={styles.routePoint}>
             <View style={[styles.routeDot, { backgroundColor: Colors.success }]} />
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.routeLabel}>EMBARQUE</Text>
-              <Text style={styles.routeAddr}>Rua das Palmeiras, 220</Text>
-              <Text style={styles.routeDist}>300m de você</Text>
+              <Text style={styles.routeAddr} numberOfLines={1}>{ride.origin_address}</Text>
+              {pickupDist && <Text style={styles.routeDist}>{pickupDist}</Text>}
             </View>
           </View>
           <View style={styles.routeLine} />
           <View style={styles.routePoint}>
             <View style={[styles.routeDot, { backgroundColor: Colors.danger }]} />
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={styles.routeLabel}>DESTINO</Text>
-              <Text style={styles.routeAddr}>Shopping Sinop</Text>
-              <Text style={styles.routeDist}>2.1 km</Text>
+              <Text style={styles.routeAddr} numberOfLines={1}>{ride.destination_address}</Text>
+              <Text style={styles.routeDist}>{distText}</Text>
             </View>
           </View>
         </View>
@@ -122,15 +161,15 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
         <View style={styles.tripStats}>
           <View style={styles.tripStat}>
             <Navigation size={14} color={Colors.textMuted} />
-            <Text style={styles.tripStatText}>2.1 km</Text>
+            <Text style={styles.tripStatText}>{distText}</Text>
           </View>
           <View style={styles.tripStat}>
             <Clock size={14} color={Colors.textMuted} />
-            <Text style={styles.tripStatText}>~12 min</Text>
+            <Text style={styles.tripStatText}>{durText}</Text>
           </View>
           <View style={styles.tripStat}>
             <DollarSign size={14} color={Colors.success} />
-            <Text style={[styles.tripStatText, { color: Colors.success }]}>R$ 14,00</Text>
+            <Text style={[styles.tripStatText, { color: Colors.success }]}>{priceText}</Text>
           </View>
         </View>
 

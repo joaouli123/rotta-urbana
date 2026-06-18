@@ -82,24 +82,19 @@ export function subscribeSearchingRides(onInsert: (ride: RideRow) => void) {
   return () => { supabase.removeChannel(channel); };
 }
 
-/** Aggregate completed-ride earnings for the logged-in driver. */
+/**
+ * Aggregate completed-ride earnings for the logged-in driver. Computed in SQL
+ * via the driver_earnings RPC (one small payload) instead of pulling every ride.
+ */
 export async function getEarnings(): Promise<{ today: number; week: number; month: number; total: number; rides: number }> {
-  const { data, error } = await supabase
-    .from('rides').select('price, completed_at').eq('status', 'completed').not('price', 'is', null);
+  const { data, error } = await supabase.rpc('driver_earnings');
   if (error) throw error;
-  const rows = (data as { price: number; completed_at: string }[]) ?? [];
-  const now = new Date();
-  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-  const weekAgo = now.getTime() - 7 * 864e5;
-  const monthAgo = now.getTime() - 30 * 864e5;
-  let today = 0, week = 0, month = 0, total = 0;
-  for (const r of rows) {
-    const t = r.completed_at ? new Date(r.completed_at).getTime() : 0;
-    const p = Number(r.price) || 0;
-    total += p;
-    if (t >= startToday) today += p;
-    if (t >= weekAgo) week += p;
-    if (t >= monthAgo) month += p;
-  }
-  return { today, week, month, total, rides: rows.length };
+  const d = (data ?? {}) as Record<string, unknown>;
+  return {
+    today: Number(d.today) || 0,
+    week: Number(d.week) || 0,
+    month: Number(d.month) || 0,
+    total: Number(d.total) || 0,
+    rides: Number(d.rides) || 0,
+  };
 }

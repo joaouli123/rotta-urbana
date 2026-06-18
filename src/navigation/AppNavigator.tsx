@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, ActivityIndicator, Alert, Linking } from 'react-native';
+import { View, ActivityIndicator, Alert, Linking, Share } from 'react-native';
 import * as Location from 'expo-location';
 import { useAuth } from '../contexts/AuthContext';
 import { Colors } from '../constants';
 import type { RideRow, RideTypeDb } from '../types/db';
-import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide } from '../services/rides';
+import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide } from '../services/rides';
 import { getSearchingRides, subscribeSearchingRides, setStatus, updateLocation } from '../services/drivers';
 import { setSubscriptionPlan, buildSubscriptionPix, buildRideFarePix } from '../services/payments';
 import { friendlyError } from '../lib/errors';
@@ -32,6 +32,11 @@ import RideRequestNotification from '../screens/driver/RideRequestNotification';
 import DriverActiveRideScreen from '../screens/driver/DriverActiveRideScreen';
 import DriverEarningsScreen from '../screens/driver/DriverEarningsScreen';
 import DriverDocumentsScreen from '../screens/driver/DriverDocumentsScreen';
+import DriverProfileScreen from '../screens/driver/DriverProfileScreen';
+import DriverRidesScreen from '../screens/driver/DriverRidesScreen';
+import DriverSubscriptionScreen from '../screens/driver/DriverSubscriptionScreen';
+import DriverRatingsScreen from '../screens/driver/DriverRatingsScreen';
+import DriverRatePassengerScreen from '../screens/driver/DriverRatePassengerScreen';
 
 // Admin
 import AdminDashboardScreen from '../screens/admin/AdminDashboardScreen';
@@ -116,17 +121,41 @@ const PassengerFlow: React.FC = () => {
     return () => { unsub(); clearInterval(iv); };
   }, [ride?.id, screen]);
 
-  // On completion, surface the PIX copia-e-cola to pay the driver directly.
+  // On completion, tell the passenger how to pay the driver directly (per method).
+  // Nothing here goes through the platform — payment is always P2P passenger ↔ driver.
   useEffect(() => {
     if (screen !== 'ride_completed' || !ride) return;
     (async () => {
-      try {
-        const pix = await buildRideFarePix(ride.id);
-        if (pix?.code) {
-          Alert.alert(`Pagar ${pix.driverName}`,
-            `Valor: R$ ${pix.amount.toFixed(2)} — PIX direto ao motorista\n\nCopia-e-cola:\n${pix.code}`);
+      const valor = `R$ ${(ride.price ?? 0).toFixed(2)}`;
+      if (ride.payment_method === 'cash') {
+        Alert.alert('Pagamento em dinheiro', `Pague ${valor} em dinheiro diretamente ao motorista.`);
+        return;
+      }
+      if (ride.payment_method === 'card') {
+        Alert.alert('Pagamento no cartão', `Pague ${valor} na maquininha do motorista.`);
+        return;
+      }
+      // PIX → show the driver's copia-e-cola, with a share/copy action.
+      if (ride.payment_method === 'pix') {
+        try {
+          const pix = await buildRideFarePix(ride.id);
+          if (pix?.code) {
+            Alert.alert(
+              `Pagar ${pix.driverName} via PIX`,
+              `Valor: R$ ${pix.amount.toFixed(2)}\n\nPIX copia-e-cola:\n${pix.code}`,
+              [
+                { text: 'Compartilhar / copiar', onPress: () => { Share.share({ message: pix.code }).catch(() => {}); } },
+                { text: 'Fechar', style: 'cancel' },
+              ],
+            );
+          } else {
+            // Driver has no PIX key saved — fall back to a generic instruction.
+            Alert.alert('Pagamento via PIX', `Pague ${valor} ao motorista usando a chave PIX que ele informar.`);
+          }
+        } catch {
+          Alert.alert('Pagamento via PIX', `Pague ${valor} ao motorista usando a chave PIX que ele informar.`);
         }
-      } catch { /* driver may not have a PIX key yet */ }
+      }
     })();
   }, [screen, ride?.id]);
 
@@ -154,11 +183,48 @@ const PassengerFlow: React.FC = () => {
       const created = await requestRide({
         originLat: originLngLat[1], originLng: originLngLat[0], originAddress: originAddr,
         destLat: destLngLat[1], destLng: destLngLat[0], destAddress: destAddr,
-        rideType: type, paymentMethod: 'pix',
+        rideType: type, paymentMethod: payload?.paymentMethod ?? 'pix',
       });
       setRide(created);
       setScreen('ride_matching');
     } catch (e: any) {
+      const msg = (e?.message ?? '').toLowerCase();
+      if (msg.includes('already have an active ride') || msg.includes('active ride')) {
+        // Stuck ride from a previous session — offer recovery without touching anything automatically.
+        try {
+          const stuck = await getActiveRide();
+          if (stuck) {
+            const activeTracking = ['driver_on_way', 'driver_arrived', 'in_progress'];
+            Alert.alert(
+              'Corrida em aberto',
+              'Você já tem uma corrida ativa. O que deseja fazer?',
+              [
+                {
+                  text: 'Retomar corrida',
+                  onPress: () => {
+                    setRide(stuck);
+                    setScreen(activeTracking.includes(stuck.status) ? 'ride_tracking' : 'ride_matching');
+                  },
+                },
+                {
+                  text: 'Cancelar e pedir nova',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      await cancelRide(stuck.id, 'Passageiro cancelou para pedir nova corrida');
+                      await confirmRide(type, payload);
+                    } catch (err: any) {
+                      Alert.alert('Erro', friendlyError(err?.message));
+                    }
+                  },
+                },
+                { text: 'Voltar', style: 'cancel' },
+              ]
+            );
+            return;
+          }
+        } catch { /* fall through to generic error */ }
+      }
       Alert.alert('Não foi possível pedir a corrida', friendlyError(e?.message));
     }
   };
@@ -187,12 +253,20 @@ const PassengerFlow: React.FC = () => {
         />
       );
     case 'ride_matching':
-      return <RideMatchingScreen onDriverFound={() => setScreen('ride_tracking')} onCancel={handleCancel} />;
+      return <RideMatchingScreen
+        onDriverFound={() => setScreen('ride_tracking')}
+        onCancel={handleCancel}
+        destinationAddress={ride?.destination_address}
+        price={ride?.price}
+        distanceKm={ride?.distance_km}
+        durationMin={ride?.duration_min}
+      />;
     case 'ride_tracking':
-      return <RideTrackingScreen rideId={ride?.id} status={ride?.status} origin={originCoords ?? undefined} destination={destCoords ?? undefined} onRideCompleted={() => setScreen('ride_completed')} onPanic={() => Alert.alert('Emergência', 'Deseja ligar para a emergência (190)?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Ligar 190', style: 'destructive', onPress: () => Linking.openURL('tel:190') }])} />;
+      return <RideTrackingScreen rideId={ride?.id} status={ride?.status} origin={originCoords ?? undefined} destination={destCoords ?? undefined} price={ride?.price} distanceKm={ride?.distance_km} durationMin={ride?.duration_min} destinationAddress={ride?.destination_address} onRideCompleted={() => setScreen('ride_completed')} onPanic={() => Alert.alert('Emergência', 'Deseja ligar para a emergência (190)?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Ligar 190', style: 'destructive', onPress: () => Linking.openURL('tel:190') }])} />;
     case 'ride_completed':
       return (
         <RideCompletedScreen
+          ride={ride}
           rideType={rideType}
           onGoHome={() => { setRide(null); setScreen('passenger_home'); }}
           onSupport={() => setScreen('support')}
@@ -200,13 +274,14 @@ const PassengerFlow: React.FC = () => {
         />
       );
     case 'ride_history':
-      return <RideHistoryScreen onBack={() => setScreen('passenger_home')} />;
+      return <RideHistoryScreen onBack={() => setScreen('passenger_profile')} onSupport={() => setScreen('support')} />;
     case 'passenger_profile':
       return (
         <PassengerProfileScreen
           onBack={() => setScreen('passenger_home')}
           onLogout={signOut}
           onSupport={() => setScreen('support')}
+          onHistory={() => setScreen('ride_history')}
         />
       );
     case 'support':
@@ -217,7 +292,7 @@ const PassengerFlow: React.FC = () => {
 };
 
 // ─── Driver flow ─────────────────────────────────────────────────────────────
-type DScreen = 'driver_home' | 'ride_notification' | 'driver_active_ride' | 'driver_earnings' | 'driver_documents';
+type DScreen = 'driver_home' | 'ride_notification' | 'driver_active_ride' | 'driver_rate' | 'driver_earnings' | 'driver_documents' | 'driver_profile' | 'driver_rides' | 'driver_subscription' | 'driver_ratings';
 
 const DriverFlow: React.FC = () => {
   const { signOut } = useAuth();
@@ -226,6 +301,7 @@ const DriverFlow: React.FC = () => {
   const [driverCoords, setDriverCoords] = useState<[number, number] | null>(null);
   const [pendingRequest, setPendingRequest] = useState<RideRow | null>(null);
   const [activeRide, setActiveRide] = useState<RideRow | null>(null);
+  const [ratingRide, setRatingRide] = useState<RideRow | null>(null);
   const [activePoints, setActivePoints] = useState<{ origin: [number, number]; dest: [number, number] } | null>(null);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
   const screenRef = useRef(screen);
@@ -286,7 +362,7 @@ const DriverFlow: React.FC = () => {
           }
         } catch { /* no existing rides or not verified */ }
         watchRef.current = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, distanceInterval: 25, timeInterval: 6000 },
+          { accuracy: Location.Accuracy.High, distanceInterval: 0, timeInterval: 4000 },
           (pos) => {
             setDriverCoords([pos.coords.longitude, pos.coords.latitude]);
             updateLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.heading ?? undefined).catch(() => {});
@@ -317,10 +393,12 @@ const DriverFlow: React.FC = () => {
     }
   };
 
-  const completeRide = async () => {
-    try { if (activeRide) await updateRideStatus(activeRide.id, 'completed'); } catch (e: any) { Alert.alert('Erro', friendlyError(e?.message)); }
-    setActiveRide(null);
-    setScreen('driver_home');
+  const completeRide = () => {
+    // The ride was already marked 'completed' inside DriverActiveRideScreen (goNext).
+    // Re-calling updateRideStatus here would fail and show a false error — instead,
+    // move to the passenger-rating step.
+    if (activeRide) { setRatingRide(activeRide); setActiveRide(null); setScreen('driver_rate'); }
+    else setScreen('driver_home');
   };
 
   const startSubPayment = async (plan: 'daily' | 'monthly') => {
@@ -350,13 +428,7 @@ const DriverFlow: React.FC = () => {
     ]);
   };
 
-  const openMenu = () => {
-    Alert.alert('Conta', undefined, [
-      { text: 'Pagar assinatura', onPress: paySubscription },
-      { text: 'Sair', style: 'destructive', onPress: signOut },
-      { text: 'Fechar', style: 'cancel' },
-    ]);
-  };
+  const openMenu = () => setScreen('driver_profile');
 
   switch (screen) {
     case 'driver_home':
@@ -370,9 +442,14 @@ const DriverFlow: React.FC = () => {
             onRideRequest={() => pendingRequest ? setScreen('ride_notification') : Alert.alert('Sem corridas', 'Nenhuma solicitação disponível no momento.')}
             onEarnings={() => setScreen('driver_earnings')}
             onProfile={openMenu}
+            onRides={() => setScreen('driver_rides')}
+            onRatings={() => setScreen('driver_ratings')}
+            onSubscription={() => setScreen('driver_subscription')}
           />
           {screen === 'ride_notification' && pendingRequest && (
             <RideRequestNotification
+              ride={pendingRequest}
+              driverCoords={driverCoords ?? undefined}
               onAccept={handleAccept}
               onReject={() => { setPendingRequest(null); setScreen('driver_home'); }}
             />
@@ -385,14 +462,44 @@ const DriverFlow: React.FC = () => {
           rideId={activeRide?.id}
           origin={activePoints?.origin}
           destination={activePoints?.dest}
+          originAddress={activeRide?.origin_address}
+          destinationAddress={activeRide?.destination_address}
+          paymentMethod={activeRide?.payment_method}
           onCompleted={completeRide}
+          onCancel={() => { setActiveRide(null); setScreen('driver_home'); }}
           onPanic={() => Alert.alert('Emergência', 'Deseja ligar para a emergência (190)?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Ligar 190', style: 'destructive', onPress: () => Linking.openURL('tel:190') }])}
+        />
+      );
+    case 'driver_rate':
+      return (
+        <DriverRatePassengerScreen
+          rideId={ratingRide?.id}
+          onDone={() => { setRatingRide(null); setScreen('driver_home'); }}
         />
       );
     case 'driver_earnings':
       return <DriverEarningsScreen onBack={() => setScreen('driver_home')} />;
     case 'driver_documents':
       return <DriverDocumentsScreen onBack={() => setScreen('driver_home')} />;
+    case 'driver_profile':
+      return (
+        <DriverProfileScreen
+          onBack={() => setScreen('driver_home')}
+          onEarnings={() => setScreen('driver_earnings')}
+          onRides={() => setScreen('driver_rides')}
+          onRatings={() => setScreen('driver_ratings')}
+          onDocuments={() => setScreen('driver_documents')}
+          onSubscription={() => setScreen('driver_subscription')}
+          onSupport={() => Alert.alert('Suporte', 'Entre em contato: suporte@rottaurbana.com.br')}
+          onLogout={signOut}
+        />
+      );
+    case 'driver_rides':
+      return <DriverRidesScreen onBack={() => setScreen('driver_profile')} />;
+    case 'driver_subscription':
+      return <DriverSubscriptionScreen onBack={() => setScreen('driver_profile')} />;
+    case 'driver_ratings':
+      return <DriverRatingsScreen onBack={() => setScreen('driver_profile')} />;
     default:
       return null;
   }

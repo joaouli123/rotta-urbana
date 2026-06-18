@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -18,10 +18,15 @@ import {
   Power,
   ChevronRight,
   Clock,
+  TrendingUp,
 } from 'lucide-react-native';
 import { Avatar, Badge, Card } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
 import RouteMap from '../../components/RouteMap';
+import { useAuth } from '../../contexts/AuthContext';
+import { getMyDriver, getEarnings } from '../../services/drivers';
+import { getSubscription } from '../../services/payments';
+import type { DriverRow, SubscriptionRow } from '../../types/db';
 
 interface DriverHomeScreenProps {
   online: boolean;
@@ -30,6 +35,17 @@ interface DriverHomeScreenProps {
   onRideRequest: () => void;
   onEarnings: () => void;
   onProfile: () => void;
+  onRides?: () => void;
+  onRatings?: () => void;
+  onSubscription?: () => void;
+}
+
+const fmtMoney = (v: number, decimals = 0) =>
+  'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+
+function fmtDueDate(iso?: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
 const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
@@ -39,8 +55,44 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
   onRideRequest,
   onEarnings,
   onProfile,
+  onRides,
+  onRatings,
+  onSubscription,
 }) => {
   const insets = useSafeAreaInsets();
+  const { profile } = useAuth();
+  const [driver, setDriver] = useState<DriverRow | null>(null);
+  const [sub, setSub] = useState<SubscriptionRow | null>(null);
+  const [earnings, setEarnings] = useState<{ today: number; week: number; rides: number } | null>(null);
+
+  const loadData = useCallback(async () => {
+    try {
+      const [d, s, e] = await Promise.all([
+        getMyDriver().catch(() => null),
+        getSubscription().catch(() => null),
+        getEarnings().catch(() => null),
+      ]);
+      if (d) setDriver(d);
+      if (s) setSub(s);
+      if (e) setEarnings({ today: e.today, week: e.week, rides: e.rides });
+    } catch { /* ignore */ }
+  }, []);
+
+  // Reload whenever the driver toggles online (also runs on mount).
+  useEffect(() => { loadData(); }, [loadData, online]);
+
+  const driverName = profile?.full_name ?? 'Motorista';
+  const rating = profile?.rating ?? 5;
+
+  // Subscription status: derive badge from real status + due date.
+  const subActive = sub?.status === 'active';
+  const subDue = sub?.due_date ? new Date(sub.due_date) : null;
+  const subOverdue = subDue ? subDue < new Date() && !subActive : sub?.status === 'expired';
+  const subBadge = subOverdue
+    ? { label: 'Vencida', variant: 'danger' as const }
+    : sub?.status === 'suspended'
+      ? { label: 'Suspensa', variant: 'warning' as const }
+      : { label: subActive ? 'Em dia' : '—', variant: 'success' as const };
 
   return (
     <View style={styles.container}>
@@ -52,7 +104,7 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
       {/* Top Bar */}
       <View style={[styles.topBar, { top: insets.top + 6 }]}>
         <TouchableOpacity onPress={onProfile} style={styles.avatarBtn}>
-          <Avatar name="Carlos Mendes" size={42} />
+          <Avatar name={driverName} size={42} />
           <View style={[styles.statusDot, { backgroundColor: online ? Colors.success : Colors.offline }]} />
         </TouchableOpacity>
 
@@ -90,26 +142,26 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
         <View style={styles.handle} />
 
         {/* Today's Stats */}
-        <Text style={styles.sectionTitle}>Hoje</Text>
+        <Text style={styles.sectionTitle}>Resumo</Text>
         <View style={styles.statsRow}>
           <View style={styles.statCard}>
-            <DollarSign size={18} color={Colors.success} />
-            <Text style={styles.statValue}>R$ 142</Text>
-            <Text style={styles.statLabel}>Ganhos</Text>
+            <DollarSign size={18} color={Colors.textPrimary} />
+            <Text style={styles.statValue}>{earnings ? fmtMoney(earnings.today) : '—'}</Text>
+            <Text style={styles.statLabel}>Hoje</Text>
           </View>
           <View style={styles.statCard}>
-            <Navigation size={18} color={Colors.info} />
-            <Text style={styles.statValue}>8</Text>
+            <TrendingUp size={18} color={Colors.textPrimary} />
+            <Text style={styles.statValue}>{earnings ? fmtMoney(earnings.week) : '—'}</Text>
+            <Text style={styles.statLabel}>Semana</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Navigation size={18} color={Colors.textPrimary} />
+            <Text style={styles.statValue}>{driver?.total_rides ?? earnings?.rides ?? 0}</Text>
             <Text style={styles.statLabel}>Corridas</Text>
           </View>
           <View style={styles.statCard}>
-            <Clock size={18} color={Colors.warning} />
-            <Text style={styles.statValue}>5h 20m</Text>
-            <Text style={styles.statLabel}>Online</Text>
-          </View>
-          <View style={styles.statCard}>
-            <Star size={18} color={Colors.warning} />
-            <Text style={styles.statValue}>4.9</Text>
+            <Star size={18} color={Colors.textPrimary} />
+            <Text style={styles.statValue}>{rating.toFixed(1)}</Text>
             <Text style={styles.statLabel}>Nota</Text>
           </View>
         </View>
@@ -120,29 +172,33 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
             <DollarSign size={20} color={Colors.primary} />
             <Text style={styles.quickActionText}>Ganhos</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.quickAction}>
+          <TouchableOpacity style={styles.quickAction} onPress={onRides}>
             <MapPin size={20} color={Colors.primary} />
             <Text style={styles.quickActionText}>Corridas</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.quickAction}>
+          <TouchableOpacity style={styles.quickAction} onPress={onRatings}>
             <Star size={20} color={Colors.primary} />
             <Text style={styles.quickActionText}>Avaliações</Text>
           </TouchableOpacity>
         </View>
 
         {/* Subscription Status */}
-        <Card style={styles.subCard}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <View>
-              <Text style={styles.subTitle}>Mensalidade</Text>
-              <Text style={styles.subDate}>Vence em 10/06/2026</Text>
+        <TouchableOpacity onPress={onSubscription} activeOpacity={0.8}>
+          <Card style={styles.subCard}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <View>
+                <Text style={styles.subTitle}>Mensalidade</Text>
+                <Text style={styles.subDate}>
+                  {sub ? `Vence em ${fmtDueDate(sub.due_date)}` : 'Toque para ver detalhes'}
+                </Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                {sub && <Badge label={subBadge.label} variant={subBadge.variant} />}
+                <ChevronRight size={16} color={Colors.textMuted} />
+              </View>
             </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Badge label="Em dia" variant="success" />
-              <ChevronRight size={16} color={Colors.textMuted} />
-            </View>
-          </View>
-        </Card>
+          </Card>
+        </TouchableOpacity>
 
         {/* Simulate Ride Request Button */}
         {online && (

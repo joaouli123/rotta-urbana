@@ -14,24 +14,28 @@ export interface FipeResult {
   reference: string;
 }
 
+// FIPE has separate tables for cars and motorcycles; pick by vehicle kind.
+export type FipeKind = 'cars' | 'motorcycles';
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`);
   if (!res.ok) throw new Error(`FIPE ${res.status}`);
   return res.json() as Promise<T>;
 }
 
-export const fipeBrands = () => get<FipeItem[]>('/cars/brands');
-export const fipeModels = (brandId: string) => get<FipeItem[]>(`/cars/brands/${brandId}/models`);
-export const fipeYears = (brandId: string, modelId: string) =>
-  get<FipeItem[]>(`/cars/brands/${brandId}/models/${modelId}/years`);
+export const fipeBrands = (kind: FipeKind = 'cars') => get<FipeItem[]>(`/${kind}/brands`);
+export const fipeModels = (brandId: string, kind: FipeKind = 'cars') =>
+  get<FipeItem[]>(`/${kind}/brands/${brandId}/models`);
+export const fipeYears = (brandId: string, modelId: string, kind: FipeKind = 'cars') =>
+  get<FipeItem[]>(`/${kind}/brands/${brandId}/models/${modelId}/years`);
 
 function parseBRL(s: string): number {
   // "R$ 10.000,00" -> 10000
   return Number(String(s).replace('R$', '').trim().replace(/\./g, '').replace(',', '.')) || 0;
 }
 
-export async function fipePrice(brandId: string, modelId: string, yearId: string): Promise<FipeResult> {
-  const d = await get<any>(`/cars/brands/${brandId}/models/${modelId}/years/${yearId}`);
+export async function fipePrice(brandId: string, modelId: string, yearId: string, kind: FipeKind = 'cars'): Promise<FipeResult> {
+  const d = await get<any>(`/${kind}/brands/${brandId}/models/${modelId}/years/${yearId}`);
   return {
     value: parseBRL(d.price),
     code: d.codeFipe ?? '',

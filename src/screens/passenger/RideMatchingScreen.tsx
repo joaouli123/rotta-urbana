@@ -17,13 +17,17 @@ import { Colors, Radius } from '../../constants';
 interface RideMatchingScreenProps {
   onDriverFound: () => void;
   onCancel: () => void;
+  destinationAddress?: string;
+  price?: number | null;
+  distanceKm?: number | null;
+  durationMin?: number | null;
 }
 
 const { height: SCREEN_H } = Dimensions.get('window');
 const SHEET_H = Math.min(SCREEN_H * 0.40, 280);
 const RING_BASE = 108;
 
-const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, onCancel }) => {
+const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, onCancel, destinationAddress, price, distanceKm, durationMin }) => {
   const [phase, setPhase] = useState<'searching' | 'found'>('searching');
   const [dotIdx, setDotIdx] = useState(0);
 
@@ -115,6 +119,11 @@ const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, 
 
   const arcRotate = arcSpin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
+  const destText = destinationAddress ? destinationAddress.split(',')[0] : 'Destino';
+  const priceText = price != null ? `R$ ${Math.round(price)}` : '—';
+  const distText = distanceKm != null ? `${distanceKm.toFixed(1)} km` : '—';
+  const etaText = durationMin != null ? `~${durationMin} min` : '—';
+
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
@@ -185,13 +194,13 @@ const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, 
                 style={[styles.driverCard, { opacity: driverOpacity, transform: [{ translateY: driverY }] }]}
               >
                 <View style={styles.driverAvatar}>
-                  <Text style={styles.driverAvatarTxt}>CM</Text>
+                  <Car size={18} color={Colors.textInverse} />
                 </View>
                 <View>
-                  <Text style={styles.driverName}>Carlos Mendes</Text>
+                  <Text style={styles.driverName}>Motorista a caminho</Text>
                   <View style={styles.ratingRow}>
                     <Star size={11} color="#F59E0B" fill="#F59E0B" />
-                    <Text style={styles.ratingTxt}>4.9  •  Toyota Corolla</Text>
+                    <Text style={styles.ratingTxt}>Conectando você ao motorista</Text>
                   </View>
                 </View>
               </Animated.View>
@@ -217,13 +226,13 @@ const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, 
             </View>
             <View style={{ marginTop: 8 }}>
               <Text style={styles.routeLabel}>DESTINO</Text>
-              <Text style={styles.routeAddr}>Shopping Sinop</Text>
+              <Text style={styles.routeAddr} numberOfLines={1}>{destText}</Text>
             </View>
           </View>
         </View>
 
         <View style={styles.statsRow}>
-          {[{ val: 'R$ 14', lbl: 'Estimativa' }, { val: '2.1 km', lbl: 'Distância' }, { val: '~8 min', lbl: 'Chegada' }].map(
+          {[{ val: priceText, lbl: 'Estimativa' }, { val: distText, lbl: 'Distância' }, { val: etaText, lbl: 'Duração' }].map(
             (s, i, arr) => (
               <React.Fragment key={s.lbl}>
                 <View style={styles.stat}>

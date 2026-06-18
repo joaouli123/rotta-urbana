@@ -17,6 +17,7 @@ import {
   Phone,
   ChevronLeft,
   Car,
+  Bike,
   FileText,
   Camera,
   CheckCircle,
@@ -30,6 +31,8 @@ import { friendlyError } from '../../lib/errors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { addVehicle, updateDriverPix } from '../../services/drivers';
 import FipePicker from '../../components/FipePicker';
+
+type VehicleKind = 'sedan' | 'moto';
 
 interface RegisterDriverScreenProps {
   onBack: () => void;
@@ -60,6 +63,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
   const [cpf, setCpf] = useState('');
   const [password, setPassword] = useState('');
 
+  const [vehicleType, setVehicleType] = useState<VehicleKind>('sedan');
   const [vehicleModel, setVehicleModel] = useState('');
   const [vehiclePlate, setVehiclePlate] = useState('');
   const [vehicleYear, setVehicleYear] = useState('');
@@ -82,14 +86,15 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
     try {
       const yearNum = Math.min(2100, Math.max(1980, parseInt(vehicleYear, 10) || new Date().getFullYear()));
       await addVehicle({
-        model: vehicleModel.trim() || 'Veículo',
+        model: vehicleModel.trim() || (vehicleType === 'moto' ? 'Moto' : 'Veículo'),
         plate: vehiclePlate.trim().toUpperCase().replace(/\s+/g, ''),
         year: yearNum,
         color: vehicleColor.trim() || 'N/D',
+        type: vehicleType,
         brand: brand.trim() || undefined,
         fipeCode: fipeCode || undefined,
         fipeValue,
-        seats: Math.min(9, Math.max(1, parseInt(vehicleSeats, 10) || 4)),
+        seats: vehicleType === 'moto' ? 1 : Math.min(9, Math.max(1, parseInt(vehicleSeats, 10) || 4)),
       });
       if (pixKey.trim()) await updateDriverPix(pixKey, inferPixType(pixKey));
     } catch {
@@ -151,29 +156,63 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
         return (
           <>
             <Text style={styles.stepTitle}>Dados do Veiculo</Text>
-            <Text style={styles.stepDesc}>Busque seu carro na tabela FIPE (preenche modelo, ano e valor — define as categorias que voce atende):</Text>
-            <FipePicker onSelected={(r) => {
-              setVehicleModel(`${r.brand} ${r.model}`.trim());
-              setVehicleYear(String(r.year));
-              setBrand(r.brand);
-              setFipeValue(r.value);
-              setFipeCode(r.code);
-            }} />
-            <Input label="Modelo do veiculo" value={vehicleModel} onChangeText={setVehicleModel}
-              placeholder="Ex: Toyota Corolla 2022"
-              leftIcon={<Car size={18} color={Colors.textMuted} />} />
+            <Text style={styles.stepDesc}>Escolha o tipo de veiculo e busque na tabela FIPE (define as categorias que voce atende):</Text>
+
+            {/* Tipo de veículo — Carro vs Moto */}
+            <View style={styles.typeRow}>
+              {([
+                { key: 'sedan' as VehicleKind, label: 'Carro', Icon: Car },
+                { key: 'moto' as VehicleKind,  label: 'Moto',  Icon: Bike },
+              ]).map(({ key, label, Icon }) => {
+                const active = vehicleType === key;
+                return (
+                  <TouchableOpacity
+                    key={key}
+                    style={[styles.typeCard, active && styles.typeCardActive]}
+                    onPress={() => {
+                      setVehicleType(key);
+                      // reset FIPE selection so the picker reloads the right table
+                      setVehicleModel(''); setVehicleYear(''); setBrand('');
+                      setFipeValue(undefined); setFipeCode('');
+                      setVehicleSeats(key === 'moto' ? '1' : '4');
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <Icon size={22} color={active ? Colors.textInverse : Colors.textPrimary} strokeWidth={2} />
+                    <Text style={[styles.typeCardTxt, active && styles.typeCardTxtActive]}>{label}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <FipePicker
+              key={vehicleType}
+              kind={vehicleType === 'moto' ? 'motorcycles' : 'cars'}
+              onSelected={(r) => {
+                setVehicleModel(`${r.brand} ${r.model}`.trim());
+                setVehicleYear(String(r.year));
+                setBrand(r.brand);
+                setFipeValue(r.value);
+                setFipeCode(r.code);
+              }}
+            />
+            <Input label={vehicleType === 'moto' ? 'Modelo da moto' : 'Modelo do veiculo'} value={vehicleModel} onChangeText={setVehicleModel}
+              placeholder={vehicleType === 'moto' ? 'Ex: Honda CG 160 2022' : 'Ex: Toyota Corolla 2022'}
+              leftIcon={vehicleType === 'moto' ? <Bike size={18} color={Colors.textMuted} /> : <Car size={18} color={Colors.textMuted} />} />
             <Input label="Placa" value={vehiclePlate} onChangeText={setVehiclePlate}
               placeholder="ABC-1234" autoCapitalize="characters"
               leftIcon={<FileText size={18} color={Colors.textMuted} />} />
             <Input label="Ano de fabricacao" value={vehicleYear} onChangeText={setVehicleYear}
               placeholder="2020" keyboardType="numeric"
-              leftIcon={<Car size={18} color={Colors.textMuted} />} />
-            <Input label="Cor do veiculo" value={vehicleColor} onChangeText={setVehicleColor}
+              leftIcon={vehicleType === 'moto' ? <Bike size={18} color={Colors.textMuted} /> : <Car size={18} color={Colors.textMuted} />} />
+            <Input label={vehicleType === 'moto' ? 'Cor da moto' : 'Cor do veiculo'} value={vehicleColor} onChangeText={setVehicleColor}
               placeholder="Preto, Branco, Prata..."
-              leftIcon={<Car size={18} color={Colors.textMuted} />} />
-            <Input label="Assentos (passageiros)" value={vehicleSeats} onChangeText={setVehicleSeats}
-              placeholder="4" keyboardType="numeric"
-              leftIcon={<User size={18} color={Colors.textMuted} />} />
+              leftIcon={vehicleType === 'moto' ? <Bike size={18} color={Colors.textMuted} /> : <Car size={18} color={Colors.textMuted} />} />
+            {vehicleType !== 'moto' && (
+              <Input label="Assentos (passageiros)" value={vehicleSeats} onChangeText={setVehicleSeats}
+                placeholder="4" keyboardType="numeric"
+                leftIcon={<User size={18} color={Colors.textMuted} />} />
+            )}
             <Input label="Chave PIX (para receber as corridas)" value={pixKey} onChangeText={setPixKey}
               placeholder="CPF, e-mail, telefone ou chave aleatoria"
               autoCapitalize="none"
@@ -356,6 +395,17 @@ const styles = StyleSheet.create({
     fontSize: 14, fontFamily: 'Poppins_400Regular',
     color: Colors.textSecondary, marginBottom: 24, lineHeight: 22,
   },
+
+  // Vehicle type selector (Carro / Moto)
+  typeRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
+  typeCard: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    paddingVertical: 14, borderRadius: Radius.md,
+    backgroundColor: Colors.surface, borderWidth: 1.5, borderColor: Colors.border,
+  },
+  typeCardActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  typeCardTxt: { fontSize: 15, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
+  typeCardTxtActive: { color: Colors.textInverse },
 
   // Doc cards
   docCard: {

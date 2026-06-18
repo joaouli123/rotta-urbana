@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,18 +8,26 @@ import {
   ScrollView,
   Image,
   TextInput,
+  Share,
+  Alert,
 } from 'react-native';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
 import { Star, Share2, HelpCircle, ChevronRight, Home, User } from 'lucide-react-native';
 import { Button, Card, Avatar } from '../../components/ui';
+import MotoIcon from '../../components/icons/MotoIcon';
 import { Colors, Radius } from '../../constants';
+import { rateRide, getRideCounterpart, type RideCounterpart } from '../../services/rides';
+import type { RideRow, RideTypeDb } from '../../types/db';
+
+const fmtMoney = (v?: number | null) =>
+  v != null ? 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
 
 const imgEconomico = require('../../../assets/icons/icone_economico.png');
 const imgConforto  = require('../../../assets/icons/icone_conforto.png');
 const imgPremium   = require('../../../assets/icons/icone_premium.png');
 
 // ── Trip Completed Illustration ──────────────────────────────
-const IllustrationRideComplete = ({ rideType = 'economy' }: { rideType?: 'economy' | 'comfort' | 'premium' }) => {
+const IllustrationRideComplete = ({ rideType = 'economy' }: { rideType?: RideTypeDb }) => {
   const carImg = rideType === 'premium' ? imgPremium : rideType === 'comfort' ? imgConforto : imgEconomico;
   return (
     <View style={{ alignItems: 'center' }}>
@@ -43,28 +51,74 @@ const IllustrationRideComplete = ({ rideType = 'economy' }: { rideType?: 'econom
         <Path d="M18 70 L21 61 L24 70 L33 70 L27 75 L29 84 L21 79 L13 84 L15 75 L9 70 Z" fill="#F59E0B" opacity={0.8} />
         <Path d="M193 48 L196 39 L199 48 L208 48 L202 53 L204 62 L196 57 L188 62 L190 53 L184 48 Z" fill="#F59E0B" opacity={0.65} />
       </Svg>
-      {/* Real car PNG from chosen ride type */}
-      <Image source={carImg} style={{ width: 160, height: 84, marginTop: -8 }} resizeMode="contain" />
+      {/* Real vehicle art from chosen ride type */}
+      {rideType === 'moto' ? (
+        <View style={{ marginTop: -4 }}><MotoIcon size={84} /></View>
+      ) : (
+        <Image source={carImg} style={{ width: 160, height: 84, marginTop: -8 }} resizeMode="contain" />
+      )}
     </View>
   );
 };
 // ─────────────────────────────────────────────────────────────
 
 interface RideCompletedScreenProps {
+  ride?: RideRow | null;
   onGoHome: () => void;
   onSupport?: () => void;
   onProfile?: () => void;
-  rideType?: 'economy' | 'comfort' | 'premium';
+  rideType?: RideTypeDb;
 }
 
-const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ onGoHome, onSupport, onProfile = () => {}, rideType = 'economy' }) => {
+const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHome, onSupport, onProfile = () => {}, rideType = 'economy' }) => {
   const [rating, setRating] = useState(0);
   const [comment, setComment] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [driver, setDriver] = useState<RideCounterpart | null>(null);
 
-  const handleSubmit = () => {
-    setSubmitted(true);
-    setTimeout(onGoHome, 2000);
+  const effectiveType = (ride?.ride_type as any) ?? rideType;
+
+  // Real driver info for the rating card
+  useEffect(() => {
+    if (!ride?.id) return;
+    let active = true;
+    getRideCounterpart(ride.id).then((c) => { if (active) setDriver(c); }).catch(() => {});
+    return () => { active = false; };
+  }, [ride?.id]);
+
+  const driverName = driver?.name ?? 'Motorista';
+  const destShort = ride?.destination_address?.split(',')[0] ?? 'Destino';
+
+  const finish = () => { setSubmitted(true); setTimeout(onGoHome, 1800); };
+
+  // Save the rating, then go home. "Pular" skips the RPC.
+  const handleSubmit = async () => {
+    if (rating > 0 && ride?.id) {
+      setSaving(true);
+      try {
+        await rateRide(ride.id, rating, comment.trim() || undefined);
+      } catch {
+        // Non-blocking: even if the rating fails to save, don't trap the user.
+      } finally {
+        setSaving(false);
+      }
+    }
+    finish();
+  };
+
+  const handleShare = async () => {
+    try {
+      const lines = [
+        'Comprovante de corrida - Rotta Urbana',
+        ride?.origin_address ? `Origem: ${ride.origin_address}` : null,
+        ride?.destination_address ? `Destino: ${ride.destination_address}` : null,
+        ride?.distance_km != null ? `Distância: ${ride.distance_km.toFixed(1)} km` : null,
+        ride?.duration_min != null ? `Duração: ${ride.duration_min} min` : null,
+        `Total: ${fmtMoney(ride?.price)}`,
+      ].filter(Boolean).join('\n');
+      await Share.share({ message: lines });
+    } catch { /* user dismissed */ }
   };
 
   return (
@@ -85,7 +139,7 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ onGoHome, onS
 
         {/* Illustration + Title */}
         <View style={styles.successSection}>
-          <IllustrationRideComplete rideType={rideType} />
+          <IllustrationRideComplete rideType={effectiveType} />
           <Text style={styles.successTitle}>Chegou ao destino!</Text>
           <Text style={styles.successSub}>Corrida concluida com sucesso</Text>
         </View>
@@ -95,35 +149,35 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ onGoHome, onS
           <Text style={styles.cardTitle}>Resumo da corrida</Text>
           <View style={styles.summaryRow}>
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue}>2.1 km</Text>
+              <Text style={styles.summaryValue}>{ride?.distance_km != null ? `${ride.distance_km.toFixed(1)} km` : '—'}</Text>
               <Text style={styles.summaryLabel}>Distancia</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue}>12 min</Text>
+              <Text style={styles.summaryValue}>{ride?.duration_min != null ? `${ride.duration_min} min` : '—'}</Text>
               <Text style={styles.summaryLabel}>Duracao</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.summaryItem}>
-              <Text style={styles.summaryValue} numberOfLines={1}>Shopping</Text>
+              <Text style={styles.summaryValue} numberOfLines={1}>{destShort}</Text>
               <Text style={styles.summaryLabel}>Destino</Text>
             </View>
           </View>
 
           <View style={styles.priceBox}>
             <Text style={styles.priceLabel}>Total cobrado</Text>
-            <Text style={styles.priceValue}>R$ 14,00</Text>
+            <Text style={styles.priceValue}>{fmtMoney(ride?.price)}</Text>
           </View>
 
           <View style={styles.originDestRow}>
             <View style={styles.odPoint}>
               <View style={[styles.odDot, { backgroundColor: Colors.success }]} />
-              <Text style={styles.odText}>Ponto de partida</Text>
+              <Text style={styles.odText} numberOfLines={1}>{ride?.origin_address ?? 'Ponto de partida'}</Text>
             </View>
             <View style={styles.odLine} />
             <View style={styles.odPoint}>
               <View style={[styles.odDot, { backgroundColor: Colors.danger }]} />
-              <Text style={styles.odText}>Shopping Sinop</Text>
+              <Text style={styles.odText} numberOfLines={1}>{ride?.destination_address ?? 'Destino'}</Text>
             </View>
           </View>
         </Card>
@@ -132,10 +186,10 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ onGoHome, onS
         {!submitted ? (
           <Card style={styles.ratingCard}>
             <View style={styles.driverRatingRow}>
-              <Avatar name="Carlos Mendes" size={52} />
+              <Avatar name={driverName} size={52} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.ratingTitle}>Como foi a corrida com</Text>
-                <Text style={styles.driverRatingName}>Carlos Mendes?</Text>
+                <Text style={styles.driverRatingName}>{driverName}?</Text>
               </View>
             </View>
             <View style={styles.starsRow}>
@@ -169,15 +223,18 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ onGoHome, onS
             <View style={styles.ratingBtnRow}>
               <Button
                 title="Pular"
-                onPress={handleSubmit}
+                onPress={finish}
                 variant="ghost"
                 style={{ flex: 1 }}
+                disabled={saving}
               />
               <Button
                 title="Enviar avaliação"
                 onPress={handleSubmit}
                 variant="primary"
                 style={{ flex: 2 }}
+                loading={saving}
+                disabled={saving || rating === 0}
               />
             </View>
           </Card>
@@ -194,7 +251,7 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ onGoHome, onS
         )}
 
         {/* Share receipt */}
-        <TouchableOpacity style={styles.shareBtn} activeOpacity={0.7}>
+        <TouchableOpacity style={styles.shareBtn} activeOpacity={0.7} onPress={handleShare}>
           <Share2 size={16} color={Colors.textPrimary} strokeWidth={2} />
           <Text style={styles.shareText}>Compartilhar comprovante</Text>
         </TouchableOpacity>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,22 @@ import {
 } from 'lucide-react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants';
+import { getRideHistory } from '../../services/rides';
+import { openSupportTicket } from '../../services/profile';
+import type { RideRow } from '../../types/db';
+
+interface SupportRide { id: string; date: string; dest: string; price: string; }
+
+function fmtRideDate(iso: string): string {
+  const d = new Date(iso);
+  const diff = Date.now() - d.getTime();
+  const time = d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+  if (diff < 86_400_000) return `Hoje, ${time}`;
+  if (diff < 172_800_000) return `Ontem, ${time}`;
+  return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ', ' + time;
+}
+const fmtPrice = (v?: number | null) =>
+  v != null ? 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
 
 // ── Help Topics ───────────────────────────────────────────────
 const TOPICS = [
@@ -30,15 +46,6 @@ const TOPICS = [
   { id: 'outro',      icon: HelpCircle,  label: 'Outro',                         desc: 'Qualquer outra situacao' },
 ] as const;
 
-// ── Mock rides ────────────────────────────────────────────────
-const MOCK_RIDES = [
-  { id: 'r1', date: 'Hoje, 14:32',    dest: 'Shopping Sinop',    price: 'R$ 14,00' },
-  { id: 'r2', date: 'Ontem, 09:10',   dest: 'Terminal Urbano',   price: 'R$ 8,50'  },
-  { id: 'r3', date: '10/06, 18:45',   dest: 'Hospital Geral',    price: 'R$ 22,00' },
-  { id: 'r4', date: '09/06, 11:20',   dest: 'Centro de Sinop',   price: 'R$ 11,00' },
-  { id: 'r5', date: '08/06, 16:05',   dest: 'Aeroporto Sinop',   price: 'R$ 35,00' },
-];
-
 interface Props {
   onBack: () => void;
   onSubmit: () => void;
@@ -51,9 +58,24 @@ const SupportScreen: React.FC<Props> = ({ onBack, onSubmit }) => {
   const [photo, setPhoto]                 = useState<string | null>(null);
   const [showRides, setShowRides]         = useState(false);
   const [submitted, setSubmitted]         = useState(false);
+  const [sending, setSending]             = useState(false);
+  const [protocol, setProtocol]           = useState('');
+  const [rides, setRides]                 = useState<SupportRide[]>([]);
+
+  // Load the user's real rides for the "corrida relacionada" selector
+  useEffect(() => {
+    getRideHistory(20).then((rows: RideRow[]) => {
+      setRides(rows.map(r => ({
+        id: r.id,
+        date: fmtRideDate(r.requested_at),
+        dest: r.destination_address.split(',')[0],
+        price: fmtPrice(r.price),
+      })));
+    }).catch(() => {});
+  }, []);
 
   const topic = TOPICS.find(t => t.id === selectedTopic);
-  const ride  = MOCK_RIDES.find(r => r.id === selectedRide);
+  const ride  = rides.find(r => r.id === selectedRide);
 
   const pickImage = async () => {
     const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -72,9 +94,24 @@ const SupportScreen: React.FC<Props> = ({ onBack, onSubmit }) => {
 
   const canSubmit = selectedTopic !== null && comment.trim().length >= 10;
 
-  const handleSubmit = () => {
-    setSubmitted(true);
-    setTimeout(onSubmit, 2000);
+  const handleSubmit = async () => {
+    if (!canSubmit || sending) return;
+    setSending(true);
+    try {
+      const subjectParts = [topic?.label ?? 'Suporte'];
+      if (ride) subjectParts.push(`(corrida ${ride.date} — ${ride.dest})`);
+      const message = ride
+        ? `${comment.trim()}\n\n[Corrida relacionada: ${selectedRide}]`
+        : comment.trim();
+      const id = await openSupportTicket(subjectParts.join(' '), message);
+      setProtocol(id ? id.slice(0, 8).toUpperCase() : '');
+      setSubmitted(true);
+      setTimeout(onSubmit, 2200);
+    } catch (e: any) {
+      Alert.alert('Erro ao enviar', e?.message ?? 'Não foi possível enviar sua solicitação. Tente novamente.');
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -100,7 +137,7 @@ const SupportScreen: React.FC<Props> = ({ onBack, onSubmit }) => {
           <Text style={styles.successSub}>
             Nossa equipe vai analisar o seu caso{'\n'}e retornar em breve.
           </Text>
-          <Text style={styles.successNote}>Protocolo: #{Math.floor(Math.random() * 900000 + 100000)}</Text>
+          {protocol ? <Text style={styles.successNote}>Protocolo: #{protocol}</Text> : null}
         </View>
       ) : (
         <ScrollView
@@ -145,7 +182,11 @@ const SupportScreen: React.FC<Props> = ({ onBack, onSubmit }) => {
               </TouchableOpacity>
               {showRides && (
                 <View style={styles.rideDropdown}>
-                  {MOCK_RIDES.map(r => (
+                  {rides.length === 0 ? (
+                    <View style={styles.rideItem}>
+                      <Text style={[styles.rideDate, { flex: 1 }]}>Nenhuma corrida encontrada</Text>
+                    </View>
+                  ) : rides.map(r => (
                     <TouchableOpacity
                       key={r.id}
                       style={[styles.rideItem, selectedRide === r.id && styles.rideItemActive]}
@@ -201,13 +242,14 @@ const SupportScreen: React.FC<Props> = ({ onBack, onSubmit }) => {
 
               {/* ── Submit ──────────────────────────────────── */}
               <TouchableOpacity
-                style={[styles.submitBtn, !canSubmit && styles.submitBtnDisabled]}
-                onPress={canSubmit ? handleSubmit : undefined}
+                style={[styles.submitBtn, (!canSubmit || sending) && styles.submitBtnDisabled]}
+                onPress={handleSubmit}
+                disabled={!canSubmit || sending}
                 activeOpacity={canSubmit ? 0.85 : 1}
               >
-                <Send size={18} color={canSubmit ? Colors.textInverse : Colors.textMuted} strokeWidth={2} />
-                <Text style={[styles.submitText, !canSubmit && styles.submitTextDisabled]}>
-                  Enviar solicitacao
+                <Send size={18} color={canSubmit && !sending ? Colors.textInverse : Colors.textMuted} strokeWidth={2} />
+                <Text style={[styles.submitText, (!canSubmit || sending) && styles.submitTextDisabled]}>
+                  {sending ? 'Enviando...' : 'Enviar solicitacao'}
                 </Text>
               </TouchableOpacity>
               <Text style={styles.disclaimer}>

@@ -38,6 +38,7 @@ import { Colors, Radius } from '../../constants';
 import RouteMap from '../../components/RouteMap';
 import { getRoute } from '../../services/geo';
 import { getRideDriverLocation, getRideCounterpart, type RideCounterpart } from '../../services/rides';
+import { openSupportTicket } from '../../services/profile';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ChatModal from '../../components/ChatModal';
 import { subscribeMessages, currentUserId } from '../../services/chat';
@@ -49,23 +50,25 @@ interface RideTrackingScreenProps {
   destination?: [number, number];
   rideId?: string;
   status?: string;
+  price?: number | null;
+  distanceKm?: number | null;
+  durationMin?: number | null;
+  destinationAddress?: string;
 }
 
 type RideStatus = 'on_way' | 'arrived' | 'in_ride';
 
-// ── Mock chat messages ────────────────────────────────────────
-const INITIAL_MSGS = [
-  { id: '1', from: 'driver', text: 'Olá! Estou a caminho.', time: '14:32' },
-  { id: '2', from: 'driver', text: 'Chego em ~3 minutos.', time: '14:32' },
-];
+const fmtMoney = (v?: number | null) =>
+  v != null ? 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
 
-// ── Mock driver reviews ───────────────────────────────────────
-const REVIEWS = [
-  { id: '1', author: 'Lucas S.', avatar: 'LS', rating: 5, text: 'Motorista excelente, pontual e educado!', date: 'Há 2 dias' },
-  { id: '2', author: 'Ana P.', avatar: 'AP', rating: 5, text: 'Carro limpo, ótima viagem.', date: 'Há 5 dias' },
-  { id: '3', author: 'Bruno T.', avatar: 'BT', rating: 4, text: 'Bom motorista, chegou rápido.', date: 'Há 1 sem' },
-  { id: '4', author: 'Carla F.', avatar: 'CF', rating: 5, text: 'Super recomendo, muito simpático.', date: 'Há 2 sem' },
-];
+function haversineKm(a: [number, number], b: [number, number]): number {
+  const R = 6371;
+  const dLat = ((b[1] - a[1]) * Math.PI) / 180;
+  const dLng = ((b[0] - a[0]) * Math.PI) / 180;
+  const lat1 = (a[1] * Math.PI) / 180, lat2 = (b[1] * Math.PI) / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
 
 const REPORT_REASONS = [
   'Comportamento inadequado',
@@ -76,7 +79,7 @@ const REPORT_REASONS = [
   'Outro motivo',
 ];
 
-const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted, onPanic, origin, destination, rideId, status }) => {
+const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted, onPanic, origin, destination, rideId, status, price, distanceKm, durationMin, destinationAddress }) => {
   const insets = useSafeAreaInsets();
   const [rideStatus, setRideStatus] = useState<RideStatus>('on_way');
   const [route, setRoute] = useState<{ type: 'LineString'; coordinates: [number, number][] } | null>(null);
@@ -142,10 +145,9 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
   const [chatOpen, setChatOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
-  const [messages, setMessages] = useState(INITIAL_MSGS);
-  const [inputTxt, setInputTxt] = useState('');
   const [selectedReason, setSelectedReason] = useState('');
   const [reportSent, setReportSent] = useState(false);
+  const [reportSending, setReportSending] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const chatOpenRef = useRef(false);
   chatOpenRef.current = chatOpen;
@@ -157,7 +159,6 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
       if (m.sender_id !== meRef.current && !chatOpenRef.current) setUnreadCount((c) => c + 1);
     }, 'unread');
   }, [rideId]);
-  const scrollRef = useRef<ScrollView>(null);
 
   // Arrived pulse animation
   const arrivedPulse = useRef(new Animated.Value(1)).current;
@@ -176,33 +177,32 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     }
   }, [rideStatus]);
 
-  const simulateNext = () => {
-    if (rideStatus === 'on_way') setRideStatus('arrived');
-    else if (rideStatus === 'arrived') setRideStatus('in_ride');
-    else onRideCompleted();
-  };
-
-  const sendMessage = () => {
-    if (!inputTxt.trim()) return;
-    setMessages(prev => [
-      ...prev,
-      { id: String(Date.now()), from: 'me', text: inputTxt.trim(), time: new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) },
-    ]);
-    setInputTxt('');
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
-  };
-
   const openChat = () => {
     setUnreadCount(0);
     setChatOpen(true);
   };
 
-  const sendReport = () => {
-    if (!selectedReason) return;
-    setReportSent(true);
-    Vibration.vibrate(60);
-    setTimeout(() => { setReportOpen(false); setReportSent(false); setSelectedReason(''); }, 1800);
+  // Persist the report as a support ticket so the admin can act on it.
+  const sendReport = async () => {
+    if (!selectedReason || reportSending) return;
+    setReportSending(true);
+    try {
+      const message = `Denúncia durante a corrida.\nMotivo: ${selectedReason}\nMotorista: ${driverName}${rideId ? `\n[Corrida: ${rideId}]` : ''}`;
+      await openSupportTicket(`Denúncia: ${selectedReason}`, message);
+      setReportSent(true);
+      Vibration.vibrate(60);
+      setTimeout(() => { setReportOpen(false); setReportSent(false); setSelectedReason(''); }, 1800);
+    } catch (e: any) {
+      Alert.alert('Erro ao enviar', e?.message ?? 'Não foi possível registrar a denúncia. Tente novamente.');
+    } finally {
+      setReportSending(false);
+    }
   };
+
+  // Live ETA to pickup, computed from the driver's last known position.
+  const pickupEtaMin = driverLoc && origin
+    ? Math.max(1, Math.round((haversineKm(driverLoc, origin) / 30) * 60))
+    : null;
 
   // ── Status config ─────────────────────────────────────────
   const statusConfig = {
@@ -233,10 +233,9 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
             {/* ETA strip */}
             <View style={styles.etaBanner}>
               <Clock size={15} color={Colors.info} />
-              <Text style={styles.etaBannerTxt}>Chegando em <Text style={{ fontFamily: 'Poppins_700Bold', color: Colors.info }}>~3 min</Text></Text>
-              <View style={styles.etaProgressBg}>
-                <View style={[styles.etaProgressFill, { width: '60%', backgroundColor: Colors.info }]} />
-              </View>
+              <Text style={styles.etaBannerTxt}>
+                {pickupEtaMin ? <>Chegando em <Text style={{ fontFamily: 'Poppins_700Bold', color: Colors.info }}>~{pickupEtaMin} min</Text></> : 'Motorista a caminho'}
+              </Text>
             </View>
             {/* Driver card */}
             <DriverCard
@@ -249,7 +248,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
               unreadCount={unreadCount}
             />
             {/* Trip summary */}
-            <TripSummary price="R$ 14,00" distance="2.1 km" />
+            <TripSummary price={fmtMoney(price)} distance={distanceKm != null ? `${distanceKm.toFixed(1)} km` : '—'} duration={durationMin != null ? `~${durationMin} min` : '—'} />
           </View>
         )}
 
@@ -269,9 +268,10 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
               onChat={openChat}
               unreadCount={unreadCount}
             />
-            <TouchableOpacity style={styles.boardBtn} onPress={simulateNext} activeOpacity={0.85}>
-              <Text style={styles.boardBtnTxt}>Estou no carro</Text>
-            </TouchableOpacity>
+            <View style={styles.boardHint}>
+              <Clock size={14} color={Colors.textMuted} />
+              <Text style={styles.boardHintTxt}>Entre no veículo. A corrida inicia quando o motorista confirmar.</Text>
+            </View>
           </View>
         )}
 
@@ -283,21 +283,21 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
                 <Car size={15} color={Colors.primaryDark} />
                 <Text style={styles.inRidePillTxt}>Em corrida</Text>
               </LinearGradient>
-              <Text style={styles.inRideEta}>Chegada em ~8 min</Text>
+              <Text style={styles.inRideEta}>{durationMin != null ? `Chegada em ~${durationMin} min` : 'Em andamento'}</Text>
             </View>
             {/* Progress */}
             <View style={styles.progressRow}>
               <View style={[styles.progressDot, { backgroundColor: Colors.primary }]} />
               <View style={styles.progressTrack}>
-                <View style={[styles.progressFill, { width: '35%' }]} />
+                <View style={[styles.progressFill, { width: '50%' }]} />
               </View>
               <View style={[styles.progressDot, { backgroundColor: Colors.danger }]} />
             </View>
             <View style={styles.progressLabels}>
               <Text style={styles.progressLbl}>Sua localização</Text>
-              <Text style={styles.progressLbl}>Shopping Sinop</Text>
+              <Text style={styles.progressLbl} numberOfLines={1}>{destinationAddress?.split(',')[0] ?? 'Destino'}</Text>
             </View>
-            <TripSummary price="R$ 14,00" distance="2.1 km" />
+            <TripSummary price={fmtMoney(price)} distance={distanceKm != null ? `${distanceKm.toFixed(1)} km` : '—'} duration={durationMin != null ? `~${durationMin} min` : '—'} />
             <View style={styles.inRideActions}>
               <TouchableOpacity style={styles.inRideBtn} onPress={openChat} activeOpacity={0.8}>
                 <MessageCircle size={15} color={Colors.primary} strokeWidth={2.5} />
@@ -345,13 +345,13 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
                   ))}
                 </ScrollView>
                 <TouchableOpacity
-                  style={[styles.reportSubmitBtn, { opacity: selectedReason ? 1 : 0.45 }]}
+                  style={[styles.reportSubmitBtn, { opacity: selectedReason && !reportSending ? 1 : 0.45 }]}
                   onPress={sendReport}
-                  disabled={!selectedReason}
+                  disabled={!selectedReason || reportSending}
                   activeOpacity={0.8}
                 >
                   <Flag size={16} color="#FFF" />
-                  <Text style={styles.reportSubmitTxt}>Enviar denúncia</Text>
+                  <Text style={styles.reportSubmitTxt}>{reportSending ? 'Enviando...' : 'Enviar denúncia'}</Text>
                 </TouchableOpacity>
               </>
             ) : (
@@ -378,48 +378,30 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
             <ScrollView showsVerticalScrollIndicator={false}>
               {/* Driver info */}
               <View style={styles.profileInfo}>
-                <View style={styles.profileAvatar}><Text style={styles.profileAvatarTxt}>CM</Text></View>
+                <Avatar name={driverName} size={60} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.profileName}>Carlos Mendes</Text>
-                  <Text style={styles.profileVehicle}>Toyota Corolla Prata • ABC-1234</Text>
+                  <Text style={styles.profileName}>{driverName}</Text>
+                  <Text style={styles.profileVehicle}>{vehicleInfo}</Text>
                   <View style={styles.profileStatsRow}>
                     <View style={styles.profileStat}>
-                      <Text style={styles.profileStatVal}>4.9</Text>
+                      <Text style={styles.profileStatVal}>{(counterpart?.rating ?? 5).toFixed(1)}</Text>
                       <Text style={styles.profileStatLbl}>Nota</Text>
-                    </View>
-                    <View style={styles.profileStat}>
-                      <Text style={styles.profileStatVal}>847</Text>
-                      <Text style={styles.profileStatLbl}>Corridas</Text>
-                    </View>
-                    <View style={styles.profileStat}>
-                      <Text style={styles.profileStatVal}>2 anos</Text>
-                      <Text style={styles.profileStatLbl}>Ativo</Text>
                     </View>
                   </View>
                 </View>
               </View>
 
-              {/* Reviews */}
-              <Text style={styles.reviewsTitle}>Avaliações recentes</Text>
-              {REVIEWS.map(r => (
-                <View key={r.id} style={styles.reviewItem}>
-                  <View style={styles.reviewLeft}>
-                    <View style={styles.reviewAvatar}><Text style={styles.reviewAvatarTxt}>{r.avatar}</Text></View>
-                  </View>
-                  <View style={styles.reviewRight}>
-                    <View style={styles.reviewTopRow}>
-                      <Text style={styles.reviewAuthor}>{r.author}</Text>
-                      <Text style={styles.reviewDate}>{r.date}</Text>
-                    </View>
-                    <View style={styles.reviewStars}>
-                      {Array.from({ length: 5 }).map((_, i) => (
-                        <Star key={i} size={11} color="#F59E0B" fill={i < r.rating ? '#F59E0B' : 'none'} />
-                      ))}
-                    </View>
-                    <Text style={styles.reviewTxt}>{r.text}</Text>
-                  </View>
-                </View>
-              ))}
+              {/* Contact actions */}
+              <View style={styles.profileActions}>
+                <TouchableOpacity style={styles.profileActionBtn} onPress={callNow} activeOpacity={0.8}>
+                  <Phone size={17} color={Colors.textInverse} />
+                  <Text style={styles.profileActionTxt}>Ligar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.profileActionBtn, { backgroundColor: Colors.primary }]} onPress={() => { setProfileOpen(false); openChat(); }} activeOpacity={0.8}>
+                  <MessageCircle size={17} color={Colors.textInverse} />
+                  <Text style={styles.profileActionTxt}>Mensagem</Text>
+                </TouchableOpacity>
+              </View>
             </ScrollView>
           </View>
         </View>
@@ -470,9 +452,9 @@ const DriverCard: React.FC<{
   </View>
 );
 
-const TripSummary: React.FC<{ price: string; distance: string }> = ({ price, distance }) => (
+const TripSummary: React.FC<{ price: string; distance: string; duration: string }> = ({ price, distance, duration }) => (
   <View style={styles.tripSummary}>
-    {[{ val: price, lbl: 'Valor' }, { val: distance, lbl: 'Distância' }, { val: '~8 min', lbl: 'Tempo est.' }].map(
+    {[{ val: price, lbl: 'Valor' }, { val: distance, lbl: 'Distância' }, { val: duration, lbl: 'Tempo est.' }].map(
       (s, i, arr) => (
         <React.Fragment key={s.lbl}>
           <View style={styles.tripStat}>
@@ -570,12 +552,13 @@ const styles = StyleSheet.create({
   },
   unreadTxt: { fontSize: 9, fontFamily: 'Poppins_700Bold', color: '#FFF' },
 
-  // Board button
-  boardBtn: {
-    backgroundColor: Colors.primary, borderRadius: Radius.md,
-    paddingVertical: 14, alignItems: 'center', marginTop: 4,
+  // Board hint (passenger waits for driver to start the ride)
+  boardHint: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: Colors.surface, borderRadius: Radius.md,
+    paddingVertical: 12, paddingHorizontal: 14, marginTop: 4,
   },
-  boardBtnTxt: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: Colors.textInverse },
+  boardHintTxt: { flex: 1, fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary, lineHeight: 17 },
 
   // In-ride
   inRideHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 },
@@ -701,6 +684,12 @@ const styles = StyleSheet.create({
   profileStat: { alignItems: 'center' },
   profileStatVal: { fontSize: 16, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
   profileStatLbl: { fontSize: 10, fontFamily: 'Poppins_400Regular', color: Colors.textMuted },
+  profileActions: { flexDirection: 'row', gap: 10, marginTop: 4, marginBottom: 8 },
+  profileActionBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: '#111', borderRadius: Radius.md, paddingVertical: 13,
+  },
+  profileActionTxt: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textInverse },
   reviewsTitle: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary, marginBottom: 12, letterSpacing: 0.3 },
   reviewItem: { flexDirection: 'row', gap: 10, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
   reviewLeft: {},

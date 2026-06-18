@@ -4,8 +4,8 @@ export type DriverStatus = 'online' | 'offline' | 'on_ride';
 export type RideStatusDb =
   | 'searching' | 'driver_found' | 'driver_on_way' | 'driver_arrived'
   | 'in_progress' | 'completed' | 'cancelled';
-export type RideTypeDb = 'economy' | 'comfort' | 'premium';
-export type PaymentMethodDb = 'pix' | 'card' | 'boleto';
+export type RideTypeDb = 'economy' | 'comfort' | 'premium' | 'moto';
+export type PaymentMethodDb = 'pix' | 'card' | 'boleto' | 'cash';
 export type SubscriptionStatus = 'active' | 'expired' | 'suspended';
 
 export interface ProfileRow {
@@ -85,6 +85,7 @@ export interface AppSettings {
   platform_pix_key: string;
   platform_pix_name: string;
   platform_pix_city: string;
+  subscription_portal_url: string | null;
 }
 
 export interface PaymentRow {

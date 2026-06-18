@@ -66,9 +66,22 @@ export async function getRideHistory(limit = 50): Promise<RideRow[]> {
   return (data as RideRow[]) ?? [];
 }
 
+/**
+ * Completed rides for the logged-in driver (RLS scopes to driver_id), ordered
+ * by completion time. Used by the earnings screen to aggregate by period.
+ */
+export async function getDriverCompletedRides(limit = 500): Promise<RideRow[]> {
+  const { data, error } = await supabase
+    .from('rides').select('*').eq('status', 'completed')
+    .order('completed_at', { ascending: false, nullsFirst: false })
+    .limit(limit);
+  if (error) throw error;
+  return (data as RideRow[]) ?? [];
+}
+
 /** Estimated fare per ride category for a given distance/duration. */
 export async function estimateFares(distanceKm: number, durationMin: number): Promise<Record<string, number>> {
-  const types = ['economy', 'comfort', 'premium'] as const;
+  const types = ['moto', 'economy', 'comfort', 'premium'] as const;
   const entries = await Promise.all(types.map(async (t) => {
     const { data } = await supabase.rpc('fare_estimate', {
       p_ride_type: t, p_distance_km: distanceKm, p_duration_min: durationMin,

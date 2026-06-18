@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,8 @@ import {
   ScrollView,
   TouchableOpacity,
   StatusBar,
+  ActivityIndicator,
+  RefreshControl,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -15,15 +17,15 @@ import {
   AlertTriangle,
   TrendingUp,
   Activity,
-  MapPin,
   Bell,
   ChevronRight,
   CheckCircle,
   Clock,
   XCircle,
 } from 'lucide-react-native';
-import { Card, Badge } from '../../components/ui';
+import { Card } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
+import { getAdminKpis, type AdminKpis } from '../../services/admin';
 
 interface AdminDashboardProps {
   onDrivers: () => void;
@@ -33,12 +35,13 @@ interface AdminDashboardProps {
   onSupport?: () => void;
 }
 
-const RECENT_EVENTS = [
-  { id: '1', type: 'driver_joined', text: 'Novo motorista cadastrado: Pedro Lima', time: '2 min atrás', icon: Users, color: Colors.success },
-  { id: '2', type: 'payment', text: 'Mensalidade paga: Carlos Mendes — R$ 150,00', time: '15 min atrás', icon: DollarSign, color: Colors.primary },
-  { id: '3', type: 'ride', text: '12 corridas concluídas na última hora', time: '1h atrás', icon: Navigation, color: Colors.info },
-  { id: '4', type: 'panic', text: 'Botão de pânico acionado — Corrida #4521', time: '2h atrás', icon: AlertTriangle, color: Colors.danger },
-  { id: '5', type: 'overdue', text: 'Motorista inadimplente: João Santos (15 dias)', time: '3h atrás', icon: Clock, color: Colors.warning },
+const fmtK = (v: number) => v >= 1000 ? `R$ ${(v / 1000).toFixed(1)}k` : `R$ ${Math.round(v)}`;
+
+const CATEGORY_LABELS: { key: 'moto' | 'economy' | 'comfort' | 'premium'; label: string }[] = [
+  { key: 'moto', label: 'Moto' },
+  { key: 'economy', label: 'Econômico' },
+  { key: 'comfort', label: 'Conforto' },
+  { key: 'premium', label: 'Premium' },
 ];
 
 const AdminDashboardScreen: React.FC<AdminDashboardProps> = ({
@@ -48,11 +51,35 @@ const AdminDashboardScreen: React.FC<AdminDashboardProps> = ({
   onReports,
   onSupport,
 }) => {
+  const [kpis, setKpis] = useState<AdminKpis | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setKpis(await getAdminKpis()); } catch { /* ignore */ }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  // Real actionable activity feed derived from KPIs.
+  const events = kpis ? [
+    kpis.drivers_pending > 0 && { id: 'p', text: `${kpis.drivers_pending} motorista(s) aguardando verificação`, time: 'Ação necessária', icon: Users, color: Colors.warning, onPress: onDrivers },
+    kpis.support_open > 0 && { id: 's', text: `${kpis.support_open} chamado(s) de suporte aberto(s)`, time: 'Pendente', icon: AlertTriangle, color: Colors.danger, onPress: onSupport },
+    kpis.subs_expired > 0 && { id: 'e', text: `${kpis.subs_expired} motorista(s) com mensalidade vencida`, time: 'Inadimplência', icon: Clock, color: Colors.warning, onPress: onPayments },
+    { id: 'r', text: `${kpis.rides_completed} corridas concluídas no total`, time: `${kpis.rides_today} hoje`, icon: Navigation, color: Colors.info, onPress: onMonitoring },
+    { id: 'c', text: `${kpis.rides_cancelled} corridas canceladas no total`, time: 'Histórico', icon: XCircle, color: Colors.danger, onPress: onMonitoring },
+  ].filter(Boolean) as { id: string; text: string; time: string; icon: any; color: string; onPress?: () => void }[] : [];
+
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar barStyle="dark-content" />
 
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        showsVerticalScrollIndicator={false}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} tintColor={Colors.primary} />}
+      >
 
         {/* Header */}
         <View style={styles.header}>
@@ -60,40 +87,46 @@ const AdminDashboardScreen: React.FC<AdminDashboardProps> = ({
             <Text style={styles.headerSub}>Painel Administrativo</Text>
             <Text style={styles.headerTitle}>ROTTA URBANA</Text>
           </View>
-          <TouchableOpacity style={styles.bellBtn}>
+          <TouchableOpacity style={styles.bellBtn} onPress={onSupport}>
             <Bell size={22} color={Colors.textPrimary} />
-            <View style={styles.bellBadge}><Text style={styles.bellCount}>3</Text></View>
+            {kpis && kpis.support_open > 0 && (
+              <View style={styles.bellBadge}><Text style={styles.bellCount}>{kpis.support_open}</Text></View>
+            )}
           </TouchableOpacity>
         </View>
 
+        {loading && !kpis ? (
+          <View style={{ paddingVertical: 60 }}><ActivityIndicator color={Colors.primary} size="large" /></View>
+        ) : (
+        <>
         {/* KPI Cards */}
         <View style={styles.kpiGrid}>
-          <LinearGradient colors={[Colors.primary, Colors.primaryDark]} style={styles.kpiCard}>
-            <Navigation size={20} color="rgba(255,255,255,0.8)" />
-            <Text style={styles.kpiValue}>247</Text>
+          <LinearGradient colors={[Colors.dark, Colors.darkElevated]} style={styles.kpiCard}>
+            <Navigation size={20} color={Colors.primary} />
+            <Text style={styles.kpiValue}>{kpis?.rides_today ?? 0}</Text>
             <Text style={styles.kpiLabel}>Corridas hoje</Text>
-            <Text style={styles.kpiTrend}>+18% ↑</Text>
+            <Text style={styles.kpiTrend}>{kpis?.rides_week ?? 0} na semana</Text>
           </LinearGradient>
 
           <LinearGradient colors={[Colors.success, Colors.successLight]} style={styles.kpiCard}>
-            <Users size={20} color="rgba(255,255,255,0.8)" />
-            <Text style={styles.kpiValue}>89</Text>
+            <Users size={20} color="rgba(255,255,255,0.85)" />
+            <Text style={styles.kpiValue}>{kpis?.drivers_online ?? 0}</Text>
             <Text style={styles.kpiLabel}>Motoristas online</Text>
-            <Text style={styles.kpiTrend}>de 142 total</Text>
+            <Text style={styles.kpiTrend}>de {kpis?.drivers_total ?? 0} total</Text>
           </LinearGradient>
 
           <LinearGradient colors={[Colors.info, '#1a6af0']} style={styles.kpiCard}>
-            <DollarSign size={20} color="rgba(255,255,255,0.8)" />
-            <Text style={styles.kpiValue}>R$ 4.2k</Text>
-            <Text style={styles.kpiLabel}>Mensalidades</Text>
-            <Text style={styles.kpiTrend}>este mês</Text>
+            <DollarSign size={20} color="rgba(255,255,255,0.85)" />
+            <Text style={styles.kpiValue}>{fmtK(kpis?.revenue_subscriptions ?? 0)}</Text>
+            <Text style={styles.kpiLabel}>Receita assinaturas</Text>
+            <Text style={styles.kpiTrend}>aprovadas</Text>
           </LinearGradient>
 
           <LinearGradient colors={[Colors.warning, '#d97706']} style={styles.kpiCard}>
-            <AlertTriangle size={20} color="rgba(255,255,255,0.8)" />
-            <Text style={styles.kpiValue}>7</Text>
+            <AlertTriangle size={20} color="rgba(255,255,255,0.85)" />
+            <Text style={styles.kpiValue}>{kpis?.subs_expired ?? 0}</Text>
             <Text style={styles.kpiLabel}>Inadimplentes</Text>
-            <Text style={styles.kpiTrend}>ação necessária</Text>
+            <Text style={styles.kpiTrend}>{kpis?.drivers_pending ?? 0} p/ verificar</Text>
           </LinearGradient>
         </View>
 
@@ -151,24 +184,42 @@ const AdminDashboardScreen: React.FC<AdminDashboardProps> = ({
           </View>
           <View style={styles.liveStats}>
             <View style={styles.liveStat}>
-              <Text style={styles.liveStatValue}>23</Text>
+              <Text style={styles.liveStatValue}>{kpis?.rides_in_progress ?? 0}</Text>
               <Text style={styles.liveStatLabel}>Em andamento</Text>
             </View>
             <View style={styles.liveStat}>
-              <Text style={[styles.liveStatValue, { color: Colors.warning }]}>14</Text>
-              <Text style={styles.liveStatLabel}>Procurando mot.</Text>
+              <Text style={[styles.liveStatValue, { color: Colors.info }]}>{kpis?.drivers_on_ride ?? 0}</Text>
+              <Text style={styles.liveStatLabel}>Em corrida</Text>
             </View>
             <View style={styles.liveStat}>
-              <Text style={[styles.liveStatValue, { color: Colors.success }]}>89</Text>
+              <Text style={[styles.liveStatValue, { color: Colors.success }]}>{kpis?.drivers_online ?? 0}</Text>
               <Text style={styles.liveStatLabel}>Motoristas disp.</Text>
             </View>
           </View>
         </Card>
 
+        {/* Rides by category (last 30 days) — full visibility incl. moto */}
+        <Card style={styles.liveCard}>
+          <Text style={styles.cardTitle}>Corridas por categoria (30 dias)</Text>
+          {CATEGORY_LABELS.map((c) => {
+            const count = kpis?.rides_by_type?.[c.key] ?? 0;
+            const gross = kpis?.gross_fares_by_type?.[c.key] ?? 0;
+            return (
+              <View key={c.key} style={styles.catRow}>
+                <Text style={styles.catLabel}>{c.label}</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 14 }}>
+                  <Text style={styles.catCount}>{count} corridas</Text>
+                  <Text style={styles.catGross}>{fmtK(gross)}</Text>
+                </View>
+              </View>
+            );
+          })}
+        </Card>
+
         {/* Recent Events */}
         <Text style={styles.sectionTitle}>Atividade recente</Text>
-        {RECENT_EVENTS.map((event) => (
-          <TouchableOpacity key={event.id} style={styles.eventItem}>
+        {events.map((event) => (
+          <TouchableOpacity key={event.id} style={styles.eventItem} onPress={event.onPress}>
             <View style={[styles.eventIcon, { backgroundColor: event.color + '22' }]}>
               <event.icon size={16} color={event.color} />
             </View>
@@ -179,6 +230,8 @@ const AdminDashboardScreen: React.FC<AdminDashboardProps> = ({
             <ChevronRight size={14} color={Colors.textMuted} />
           </TouchableOpacity>
         ))}
+        </>
+        )}
 
       </ScrollView>
     </View>
@@ -190,7 +243,7 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: 16, paddingTop: 52, paddingBottom: 40 },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 },
   headerSub: { ...Typography.small, color: Colors.textMuted, marginBottom: 2 },
-  headerTitle: { fontSize: 22, fontWeight: '800', color: Colors.white, letterSpacing: 3 },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: Colors.textPrimary, letterSpacing: 3 },
   bellBtn: { position: 'relative' },
   bellBadge: {
     position: 'absolute', top: -4, right: -4,
@@ -229,6 +282,13 @@ const styles = StyleSheet.create({
   liveStat: { alignItems: 'center' },
   liveStatValue: { ...Typography.h3, color: Colors.textPrimary, fontWeight: '800' },
   liveStatLabel: { ...Typography.caption, color: Colors.textMuted, marginTop: 4 },
+  catRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: Colors.borderLight,
+  },
+  catLabel: { ...Typography.smallMedium, color: Colors.textPrimary },
+  catCount: { ...Typography.small, color: Colors.textSecondary },
+  catGross: { ...Typography.smallMedium, color: Colors.primaryDark, minWidth: 60, textAlign: 'right' },
   eventItem: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.border,

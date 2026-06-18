@@ -4,15 +4,17 @@ import {
 } from 'react-native';
 import { ChevronDown, Search, X, Check } from 'lucide-react-native';
 import { Colors, Radius } from '../constants';
-import { fipeBrands, fipeModels, fipeYears, fipePrice, type FipeItem, type FipeResult } from '../services/fipe';
+import { fipeBrands, fipeModels, fipeYears, fipePrice, type FipeItem, type FipeResult, type FipeKind } from '../services/fipe';
 
 interface Props {
   onSelected: (r: FipeResult) => void;
+  /** Which FIPE table to query — cars (default) or motorcycles. */
+  kind?: FipeKind;
 }
 
 type Level = 'brand' | 'model' | 'year';
 
-export default function FipePicker({ onSelected }: Props) {
+export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
   const [open, setOpen] = useState<Level | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -30,9 +32,9 @@ export default function FipePicker({ onSelected }: Props) {
 
   const openLevel = (lvl: Level) => {
     setSearch(''); setOpen(lvl);
-    if (lvl === 'brand') load(fipeBrands);
-    else if (lvl === 'model' && brand) load(() => fipeModels(brand.code));
-    else if (lvl === 'year' && brand && model) load(() => fipeYears(brand.code, model.code));
+    if (lvl === 'brand') load(() => fipeBrands(kind));
+    else if (lvl === 'model' && brand) load(() => fipeModels(brand.code, kind));
+    else if (lvl === 'year' && brand && model) load(() => fipeYears(brand.code, model.code, kind));
   };
 
   const pick = async (item: FipeItem) => {
@@ -41,7 +43,7 @@ export default function FipePicker({ onSelected }: Props) {
     else if (open === 'year' && brand && model) {
       setYear(item); setOpen(null); setLoading(true);
       try {
-        const r = await fipePrice(brand.code, model.code, item.code);
+        const r = await fipePrice(brand.code, model.code, item.code, kind);
         setResult(r); onSelected(r);
       } catch { /* keep manual fallback */ } finally { setLoading(false); }
       return;

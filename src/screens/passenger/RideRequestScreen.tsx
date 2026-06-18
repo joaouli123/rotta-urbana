@@ -17,6 +17,9 @@ import {
   Search,
   Clock,
   X,
+  Banknote,
+  CreditCard,
+  Check,
 } from 'lucide-react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
@@ -24,13 +27,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Button } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
 import RouteMap from '../../components/RouteMap';
+import PixIcon from '../../components/icons/PixIcon';
+import MotoIcon from '../../components/icons/MotoIcon';
 import { geocode, getRoute } from '../../services/geo';
 import { estimateFares, getRideHistory } from '../../services/rides';
 const imgEconomico = require('../../../assets/icons/icone_economico.png');
 const imgConforto  = require('../../../assets/icons/icone_conforto.png');
 const imgPremium   = require('../../../assets/icons/icone_premium.png');
 
-// ── Car Icons ─────────────────────────────────────────────
+// ── Vehicle Icons ─────────────────────────────────────────
 const EconomyCar = ({ size = 44 }: { size?: number }) => (
   <Image source={imgEconomico} style={{ width: size * 1.9, height: size }} resizeMode="contain" />
 );
@@ -43,6 +48,8 @@ const PremiumCar = ({ size = 44 }: { size?: number }) => (
   <Image source={imgPremium} style={{ width: size * 1.9, height: size }} resizeMode="contain" />
 );
 
+const MotoVehicle = ({ size = 44 }: { size?: number }) => <MotoIcon size={size} />;
+
 const SUGGESTIONS = [
   { id: '1', name: 'Shopping Sinop', address: 'Av. Cel. Joao Ponce de Arruda, 1065', distance: '2.1 km' },
   { id: '2', name: 'Hospital Regional de Sinop', address: 'Av. das Figueiras, 940', distance: '3.4 km' },
@@ -52,6 +59,15 @@ const SUGGESTIONS = [
 ];
 
 const RIDE_TYPES = [
+  {
+    id: 'moto',
+    label: 'Moto',
+    desc: 'Rapido e economico',
+    price: 'R$ 9',
+    time: '2 min',
+    CarIcon: MotoVehicle,
+    badge: 'Mais rapido',
+  },
   {
     id: 'economy',
     label: 'Economico',
@@ -84,6 +100,7 @@ const RIDE_TYPES = [
 export interface RidePayload {
   originLng: number; originLat: number; originAddress: string;
   destLng: number; destLat: number; destAddress: string;
+  paymentMethod: 'pix' | 'cash' | 'card';
 }
 
 interface RideRequestScreenProps {
@@ -99,6 +116,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
   const insets = useSafeAreaInsets();
   const [selectedDest, setSelectedDest] = useState(destination);
   const [selectedType, setSelectedType] = useState('economy');
+  const [selectedPayment, setSelectedPayment] = useState<'pix' | 'cash' | 'card'>('pix');
   const [step, setStep] = useState<'search' | 'choose'>(destination ? 'choose' : 'search');
   const [origin, setOrigin] = useState<[number, number] | null>(null);
   const [destCoords, setDestCoords] = useState<[number, number] | null>(null);
@@ -111,6 +129,8 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
   const [suggestions, setSuggestions] = useState<{ id: string; name: string; address: string; lng: number; lat: number }[]>([]);
   const [searching, setSearching] = useState(false);
   const [recents, setRecents] = useState<{ id: string; name: string; address: string }[]>([]);
+  // Measured bottom-panel height → used to frame the route in the visible map area (like Uber).
+  const [panelH, setPanelH] = useState(Math.round(SCREEN_H * 0.5));
 
   // Driver/passenger origin (GPS).
   useEffect(() => {
@@ -198,6 +218,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
       onConfirm(selectedType, {
         originLng: origin[0], originLat: origin[1], originAddress: 'Minha localização',
         destLng: destCoords[0], destLat: destCoords[1], destAddress,
+        paymentMethod: selectedPayment,
       });
     } else {
       onConfirm(selectedType);
@@ -215,7 +236,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
         route={route}
         followUser={!destCoords}
         paddingTop={insets.top + 70}
-        paddingBottom={Math.round(SCREEN_H * 0.62)}
+        paddingBottom={Math.min(panelH, Math.round(SCREEN_H * 0.52))}
         style={styles.mapArea}
       />
 
@@ -229,7 +250,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
       </View>
 
       {/* Bottom Panel */}
-      <View style={styles.panel}>
+      <View style={styles.panel} onLayout={(e) => setPanelH(e.nativeEvent.layout.height)}>
         <View style={styles.handleBar} />
 
         {/* Origin/Dest Fields */}
@@ -351,6 +372,70 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
                 </TouchableOpacity>
               );
             })}
+            <Text style={[styles.sectionLabel, { marginTop: 18 }]}>FORMA DE PAGAMENTO</Text>
+            <View style={styles.payList}>
+              {/* PIX (logo oficial) */}
+              <TouchableOpacity
+                style={[styles.payItem, selectedPayment === 'pix' && styles.payItemActive]}
+                onPress={() => setSelectedPayment('pix')}
+                activeOpacity={0.8}
+              >
+                <View style={styles.payIconWrap}>
+                  <PixIcon size={26} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.payName}>PIX</Text>
+                  <Text style={styles.payDescTxt}>Chave do motorista</Text>
+                </View>
+                <View style={[styles.radio, selectedPayment === 'pix' && styles.radioOn]}>
+                  {selectedPayment === 'pix' && <Check size={12} color="#fff" strokeWidth={3} />}
+                </View>
+              </TouchableOpacity>
+
+              <View style={styles.paySep} />
+
+              {/* Dinheiro */}
+              <TouchableOpacity
+                style={[styles.payItem, selectedPayment === 'cash' && styles.payItemActive]}
+                onPress={() => setSelectedPayment('cash')}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.payIconWrap, { backgroundColor: Colors.success + '18' }]}>
+                  <Banknote size={20} color={Colors.success} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.payName}>Dinheiro</Text>
+                  <Text style={styles.payDescTxt}>Pague na corrida</Text>
+                </View>
+                <View style={[styles.radio, selectedPayment === 'cash' && styles.radioOn]}>
+                  {selectedPayment === 'cash' && <Check size={12} color="#fff" strokeWidth={3} />}
+                </View>
+              </TouchableOpacity>
+
+              <View style={styles.paySep} />
+
+              {/* Cartão (máquina do motorista) */}
+              <TouchableOpacity
+                style={[styles.payItem, selectedPayment === 'card' && styles.payItemActive]}
+                onPress={() => setSelectedPayment('card')}
+                activeOpacity={0.8}
+              >
+                <View style={[styles.payIconWrap, { backgroundColor: Colors.info + '14' }]}>
+                  <CreditCard size={20} color={Colors.info} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.payName}>Cartão</Text>
+                  <Text style={styles.payDescTxt}>Maquininha do motorista</Text>
+                </View>
+                <View style={[styles.radio, selectedPayment === 'card' && styles.radioOn]}>
+                  {selectedPayment === 'card' && <Check size={12} color="#fff" strokeWidth={3} />}
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {/* Aviso discreto: o app não processa o pagamento da corrida */}
+            <Text style={styles.payNotice}>Pagamento combinado direto com o motorista.</Text>
+
             <Button
               title="Confirmar corrida"
               onPress={confirm}
@@ -489,17 +574,43 @@ const styles = StyleSheet.create({
   carIconWrap: {
     width: 60, alignItems: 'center', justifyContent: 'center',
   },
-  rideTypeName: { fontSize: 15, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary, flexShrink: 1 },
+  rideTypeName: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary, flexShrink: 1 },
   rideTypeDesc: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 2 },
   selectedBadge: {
     backgroundColor: Colors.primary, borderRadius: Radius.xs,
-    paddingHorizontal: 6, paddingVertical: 2,
+    paddingHorizontal: 5, paddingVertical: 2, flexShrink: 0,
   },
-  selectedBadgeText: { fontSize: 10, fontFamily: 'Poppins_600SemiBold', color: Colors.textInverse },
+  selectedBadgeText: { fontSize: 9, fontFamily: 'Poppins_600SemiBold', color: Colors.textInverse },
   priceCol: { alignItems: 'flex-end', gap: 4, marginLeft: 10, minWidth: 64 },
   rideTypePrice: { fontSize: 16, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
   timeRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   rideTypeTime: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: Colors.textMuted },
+
+  // ── Payment method (lista compacta estilo Uber) ───────────
+  payList: {
+    borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md, overflow: 'hidden',
+    backgroundColor: '#FFFFFF',
+  },
+  payItem: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 12, paddingHorizontal: 12, backgroundColor: '#FFFFFF',
+  },
+  payItemActive: { backgroundColor: Colors.surface },
+  payItemDisabled: { opacity: 0.6 },
+  payIconWrap: {
+    width: 38, height: 38, borderRadius: Radius.sm,
+    backgroundColor: Colors.pix + '14', alignItems: 'center', justifyContent: 'center',
+  },
+  payPixImg: { width: 26, height: 26 },
+  payName: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
+  payDescTxt: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 1 },
+  paySep: { height: 1, backgroundColor: Colors.borderLight, marginLeft: 62 },
+  payNotice: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, textAlign: 'center', marginTop: 10 },
+  radio: {
+    width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: Colors.border,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  radioOn: { borderColor: Colors.textPrimary, backgroundColor: Colors.textPrimary },
 });
 
 export default RideRequestScreen;

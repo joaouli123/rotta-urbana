@@ -10,6 +10,11 @@ export const Colors = {
   card: '#FFFFFF',
   cardElevated: '#F0F0F0',
 
+  // Dark hero cards (summary/financial) — white text reads cleanly here
+  dark: '#17181C',
+  darkElevated: '#22242B',
+  darkBorder: '#2E3138',
+
   // Text — black
   textPrimary: '#000000',
   textSecondary: '#555555',

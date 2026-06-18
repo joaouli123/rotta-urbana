@@ -67,9 +67,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
   const pad = { paddingTop: paddingTop ?? 0, paddingBottom: paddingBottom ?? 0, paddingLeft: 0, paddingRight: 0 };
 
   // Frame the WHOLE trip when we have a route or both endpoints.
-  const framePts: LngLat[] | null =
-    route && route.coordinates.length > 1 ? route.coordinates
-      : (origin && destination ? [origin, destination] : null);
+  // Also extend bounds to include the live driver position so the pin stays on screen.
+  const basePts: LngLat[] =
+    route && route.coordinates.length > 1 ? [...route.coordinates]
+      : (origin && destination ? [origin, destination] : []);
+  if (driverLocation && basePts.length > 0) basePts.push(driverLocation);
+  const framePts: LngLat[] | null = basePts.length > 1 ? basePts : null;
   let bounds: any = null;
   if (framePts) {
     let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
@@ -77,10 +80,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
       minLng = Math.min(minLng, lng); maxLng = Math.max(maxLng, lng);
       minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
     }
+    // Caller padding is authoritative (it already accounts for the bottom sheet).
+    // Add only a small margin so the pins aren't glued to the edges.
     bounds = {
       ne: [maxLng, maxLat], sw: [minLng, minLat],
-      paddingTop: (paddingTop ?? 0) + 60, paddingBottom: (paddingBottom ?? 0) + 60,
-      paddingLeft: 50, paddingRight: 50,
+      paddingTop: (paddingTop ?? 0) + 24, paddingBottom: (paddingBottom ?? 0) + 24,
+      paddingLeft: 40, paddingRight: 40,
     };
   }
 
@@ -90,8 +95,13 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
   return (
     <Mapbox.MapView style={[{ flex: 1 }, style]} styleURL={Mapbox.StyleURL.Street} logoEnabled={false} compassEnabled>
       {bounds ? (
-        // key forces Camera to animate to new bounds when origin/destination change
-        <Mapbox.Camera key={`${bounds.sw[0]},${bounds.sw[1]}`} bounds={bounds} animationDuration={800} />
+        // key is based on the destination only — it forces a re-mount (hard animation) when
+        // the user picks a new destination, but NOT on every driver location poll.
+        <Mapbox.Camera
+          key={destination ? `${destination[0].toFixed(4)},${destination[1].toFixed(4)}` : 'static'}
+          bounds={bounds}
+          animationDuration={400}
+        />
       ) : follow ? (
         <Mapbox.Camera
           followUserLocation

@@ -11,8 +11,17 @@ const {
   PORT = 3000,
 } = process.env;
 
+const IS_PROD = process.env.NODE_ENV === 'production';
+
 if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
   console.error('Missing SUPABASE_URL / SUPABASE_SECRET_KEY');
+  process.exit(1);
+}
+
+// Fail closed: never run with a guessable session secret in production. The
+// default is committed in the repo, so a forged cookie = full service_role panel.
+if (IS_PROD && (!process.env.SESSION_SECRET || SESSION_SECRET === 'dev-insecure-secret-change-me')) {
+  console.error('Refusing to start: set a strong SESSION_SECRET in production.');
   process.exit(1);
 }
 
@@ -23,13 +32,52 @@ const admin = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
 
 const app = express();
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
 app.use(express.urlencoded({ extended: false }));
+
+// Baseline security headers (no extra deps).
+app.use((req, res, next) => {
+  res.set('X-Frame-Options', 'DENY');
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Referrer-Policy', 'same-origin');
+  next();
+});
+
 app.use(session({
   secret: SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 12 * 3600 * 1000 },
+  cookie: { httpOnly: true, sameSite: 'lax', secure: IS_PROD, maxAge: 12 * 3600 * 1000 },
 }));
+
+// ─── CSRF: same-origin check on every state-changing request ────────────────
+// Combined with the SameSite=lax cookie, rejecting cross-origin POSTs blocks
+// CSRF without needing a token in every form.
+app.use((req, res, next) => {
+  if (req.method !== 'POST') return next();
+  const origin = req.get('origin');
+  const referer = req.get('referer');
+  const host = req.get('host');
+  const sameOrigin = (u) => { try { return new URL(u).host === host; } catch { return false; } };
+  if (origin ? sameOrigin(origin) : referer ? sameOrigin(referer) : false) return next();
+  return res.status(403).send('Origem inválida.');
+});
+
+// ─── In-memory login rate limiter (per IP) ──────────────────────────────────
+const LOGIN_MAX = 8;            // attempts
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const loginHits = new Map();    // ip -> { count, resetAt }
+const loginLimiter = (req, res, next) => {
+  const ip = req.ip || 'unknown';
+  const now = Date.now();
+  let e = loginHits.get(ip);
+  if (!e || now > e.resetAt) { e = { count: 0, resetAt: now + LOGIN_WINDOW_MS }; loginHits.set(ip, e); }
+  if (e.count >= LOGIN_MAX) return render(res, loginPage('Muitas tentativas. Tente novamente em alguns minutos.'));
+  e.count++;
+  next();
+};
+// Opportunistic cleanup so the Map can't grow unbounded.
+setInterval(() => { const now = Date.now(); for (const [ip, e] of loginHits) if (now > e.resetAt) loginHits.delete(ip); }, LOGIN_WINDOW_MS).unref?.();
 
 const requireAuth = (req, res, next) => (req.session?.userId ? next() : res.redirect('/login'));
 const render = (res, html) => res.set('Content-Type', 'text/html; charset=utf-8').send(html);
@@ -37,7 +85,7 @@ const render = (res, html) => res.set('Content-Type', 'text/html; charset=utf-8'
 // ─── Auth ─────────────────────────────────────────────────────────────────
 app.get('/login', (req, res) => render(res, loginPage()));
 
-app.post('/login', async (req, res) => {
+app.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
   try {
     const authClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY ?? SUPABASE_SECRET_KEY, {
@@ -102,14 +150,23 @@ app.get('/', requireAuth, async (req, res) => {
       ${kpiCard('Suporte aberto', kpis.support_open ?? 0)}
     </div>
     <div class="card"><h2>Corridas nos últimos 14 dias</h2><canvas id="chart" height="90"></canvas></div>
+    <div class="card"><h2>Corridas por categoria (últimos 30 dias)</h2>
+      ${table(['Categoria', 'Corridas concluídas', 'Receita (tarifas)'], (() => {
+        const labels = { moto: 'Moto', economy: 'Econômico', comfort: 'Conforto', premium: 'Premium' };
+        const counts = kpis.rides_by_type ?? {};
+        const gross = kpis.gross_fares_by_type ?? {};
+        return ['moto', 'economy', 'comfort', 'premium'].map((t) =>
+          [esc(labels[t]), String(counts[t] ?? 0), brl(gross[t])]);
+      })())}
+    </div>
     <div class="card"><h2>Corridas recentes</h2>
       ${table(['Tipo', 'Status', 'Preço', 'Passageiro', 'Motorista', 'Quando'], recentRows)}
     </div>
     <script>
       const ctx = document.getElementById('chart');
       new Chart(ctx, { type:'line', data:{ labels:${JSON.stringify(days.map((d) => d.label))},
-        datasets:[{ label:'Corridas', data:${JSON.stringify(days.map((d) => d.n))}, borderColor:'#18b56a', backgroundColor:'#18b56a33', fill:true, tension:.3 }]},
-        options:{ plugins:{legend:{display:false}}, scales:{ x:{grid:{color:'#23362d'},ticks:{color:'#8a9a93'}}, y:{grid:{color:'#23362d'},ticks:{color:'#8a9a93'},beginAtZero:true} } } });
+        datasets:[{ label:'Corridas', data:${JSON.stringify(days.map((d) => d.n))}, borderColor:'#18b56a', backgroundColor:'#18b56a22', fill:true, tension:.3 }]},
+        options:{ plugins:{legend:{display:false}}, scales:{ x:{grid:{color:'#E3E8EE'},ticks:{color:'#6B7785'}}, y:{grid:{color:'#E3E8EE'},ticks:{color:'#6B7785'},beginAtZero:true} } } });
     </script>`;
   render(res, layout({ title: 'Visão geral', active: '/', email: req.session.email, body }));
 });
@@ -248,7 +305,7 @@ app.get('/settings', requireAuth, async (req, res) => {
   const { data: fares } = await admin.from('fare_config').select('*').order('ride_type');
   const set = s ?? {};
   const okMsg = req.query.ok ? `<div class="ok">Salvo com sucesso.</div>` : '';
-  const order = ['economy', 'comfort', 'premium'];
+  const order = ['moto', 'economy', 'comfort', 'premium'];
   const fareRows = (fares ?? [])
     .slice().sort((a, b) => order.indexOf(a.ride_type) - order.indexOf(b.ride_type))
     .map((f) => `
@@ -311,7 +368,7 @@ app.post('/settings', requireAuth, async (req, res) => {
 app.post('/settings/fares', requireAuth, async (req, res) => {
   const b = req.body;
   const arr = (s) => String(s ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
-  for (const t of ['economy', 'comfort', 'premium']) {
+  for (const t of ['moto', 'economy', 'comfort', 'premium']) {
     if (b[`base_${t}`] === undefined) continue;
     await admin.from('fare_config').update({
       display_name: b[`name_${t}`] || null,

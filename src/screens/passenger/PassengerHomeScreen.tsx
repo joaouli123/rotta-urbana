@@ -29,6 +29,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import RouteMap, { type DriverPin } from '../../components/RouteMap';
 import { nearbyDrivers } from '../../services/drivers';
 import { getRideHistory } from '../../services/rides';
+import { useAuth } from '../../contexts/AuthContext';
 
 const { height } = Dimensions.get('window');
 
@@ -36,11 +37,6 @@ const RECENT_PLACES = [
   { id: '1', name: 'Shopping Sinop', address: 'Av. Cel. João Ponce de Arruda, 1065', icon: Clock },
   { id: '2', name: 'Hospital Regional', address: 'Av. das Figueiras, 940', icon: Clock },
   { id: '3', name: 'Aeroporto Sinop', address: 'Rod. MT-170, Km 4', icon: Clock },
-];
-
-const QUICK_DESTINATIONS = [
-  { id: '1', name: 'Casa', address: 'Rua das Palmeiras, 220', icon: Home },
-  { id: '2', name: 'Trabalho', address: 'Av. das Castanheiras, 555', icon: Briefcase },
 ];
 
 interface PassengerHomeProps {
@@ -55,6 +51,7 @@ const PassengerHomeScreen: React.FC<PassengerHomeProps> = ({
   onProfile,
 }) => {
   const insets = useSafeAreaInsets();
+  const { profile } = useAuth();
   const [searchFocused, setSearchFocused] = useState(false);
   const [coords, setCoords] = useState<[number, number] | null>(null);
   const [drivers, setDrivers] = useState<DriverPin[]>([]);
@@ -113,7 +110,7 @@ const PassengerHomeScreen: React.FC<PassengerHomeProps> = ({
       {/* Top Bar */}
       <View style={[styles.topBar, { top: insets.top + 6 }]}>
         <TouchableOpacity onPress={onProfile} style={styles.avatarBtn}>
-          <Avatar name="Lucas Silva" size={40} />
+          <Avatar name={profile?.full_name ?? 'Passageiro'} size={40} />
         </TouchableOpacity>
         <View style={styles.locationPill}>
           <MapPin size={14} color={Colors.primary} />
@@ -142,25 +139,6 @@ const PassengerHomeScreen: React.FC<PassengerHomeProps> = ({
           <Text style={styles.searchPlaceholder}>Buscar destino...</Text>
           <Search size={18} color={Colors.textMuted} />
         </TouchableOpacity>
-
-        {/* Quick Destinations */}
-        <View style={styles.quickRow}>
-          {QUICK_DESTINATIONS.map((d) => (
-            <TouchableOpacity
-              key={d.id}
-              style={styles.quickCard}
-              onPress={() => onRequestRide(d.address)}
-            >
-              <View style={styles.quickIcon}>
-                <d.icon size={18} color={Colors.primary} />
-              </View>
-              <View>
-                <Text style={styles.quickName}>{d.name}</Text>
-                <Text style={styles.quickAddr} numberOfLines={1}>{d.address}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </View>
 
         {/* Recent Places */}
         <Text style={styles.sectionTitle}>Recentes</Text>
