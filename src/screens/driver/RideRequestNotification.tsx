@@ -12,6 +12,7 @@ import { MapPin, Navigation, Clock, DollarSign, X, Check, ShieldCheck } from 'lu
 import { Colors, Radius, Typography } from '../../constants';
 import { Avatar } from '../../components/ui';
 import { getRideCounterpart, getRidePoints, type RideCounterpart } from '../../services/rides';
+import { playSound, stopSound } from '../../lib/sounds';
 import type { RideRow } from '../../types/db';
 
 interface RideRequestNotificationProps {
@@ -83,7 +84,10 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
       setSecondsLeft((s) => (s <= 1 ? 0 : s - 1));
     }, 1000);
 
-    return () => clearInterval(interval);
+    // Loud alert loop while the request is on screen (driver must hear it).
+    playSound('request', { loop: true });
+
+    return () => { clearInterval(interval); stopSound('request'); };
   }, []);
 
   const progressWidth = progressAnim.interpolate({

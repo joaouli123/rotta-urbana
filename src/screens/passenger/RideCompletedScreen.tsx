@@ -16,6 +16,7 @@ import { Star, Share2, HelpCircle, ChevronRight, Home, User } from 'lucide-react
 import { Button, Card, Avatar } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
 import { rateRide, getRideCounterpart, type RideCounterpart } from '../../services/rides';
+import { playSound } from '../../lib/sounds';
 import type { RideRow, RideTypeDb } from '../../types/db';
 
 const fmtMoney = (v?: number | null) =>
@@ -74,6 +75,9 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
   const [driver, setDriver] = useState<RideCounterpart | null>(null);
 
   const effectiveType = (ride?.ride_type as any) ?? rideType;
+
+  // Celebratory chime when the trip-complete screen opens (once).
+  useEffect(() => { playSound('complete'); }, []);
 
   // Real driver info for the rating card
   useEffect(() => {

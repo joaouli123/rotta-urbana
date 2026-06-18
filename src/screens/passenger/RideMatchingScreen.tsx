@@ -13,6 +13,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { X, Car, Check, Star, Clock, ShieldAlert } from 'lucide-react-native';
 import { Colors, Radius } from '../../constants';
+import { playSound, stopSound } from '../../lib/sounds';
 
 interface RideMatchingScreenProps {
   onDriverFound: () => void;
@@ -119,6 +120,13 @@ const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, 
       if (findTimer.current) clearTimeout(findTimer.current);
     };
   }, []);
+
+  // Soft "searching" loop while looking for a driver; stops on found/unmount.
+  useEffect(() => {
+    if (phase === 'searching' && rideStatus === 'searching') playSound('searching', { loop: true, volume: 0.6 });
+    else stopSound('searching');
+    return () => stopSound('searching');
+  }, [phase, rideStatus]);
 
   // Female-driver wait: after a while with no woman driver, offer the fallback.
   // Only while the ride is genuinely still searching (a driver may have accepted).

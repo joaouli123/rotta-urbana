@@ -40,5 +40,12 @@ module.exports = ({ config }) => ({
       },
     ],
     'expo-font',
+    'expo-audio',
+    [
+      'expo-notifications',
+      {
+        color: '#C1F11D',
+      },
+    ],
   ],
 });

@@ -5,7 +5,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { Colors } from '../constants';
 import type { RideRow, RideTypeDb } from '../types/db';
 import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide, relaxFemalePreference } from '../services/rides';
-import { getSearchingRides, subscribeSearchingRides, setStatus, updateLocation } from '../services/drivers';
+import { getSearchingRides, subscribeSearchingRides, setStatus, updateLocation, getMyDriver } from '../services/drivers';
+import { playSound, stopSound } from '../lib/sounds';
+import { registerForPushNotifications, clearPushToken } from '../services/push';
 import { setSubscriptionPlan, buildSubscriptionPix, buildRideFarePix } from '../services/payments';
 import { friendlyError } from '../lib/errors';
 
@@ -106,10 +108,13 @@ const PassengerFlow: React.FC = () => {
     const apply = (r: RideRow) => {
       setRide(r);
       if (['driver_on_way', 'driver_arrived', 'in_progress'].includes(r.status)) {
+        if (screen === 'ride_matching') { stopSound('searching'); playSound('found'); }
         setScreen((s) => (s === 'ride_matching' ? 'ride_tracking' : s));
       } else if (r.status === 'completed') {
+        stopSound('searching');
         setScreen('ride_completed');
       } else if (r.status === 'cancelled') {
+        stopSound('searching');
         Alert.alert('Corrida cancelada', r.cancel_reason || 'A corrida foi cancelada.');
         setRide(null);
         setScreen('passenger_home');
@@ -336,21 +341,24 @@ const DriverFlow: React.FC = () => {
     return unsub;
   }, [online, activeRide]);
 
-  // Poll fallback: realtime only fires on INSERT, so rides that become eligible
-  // later (e.g. a female-only ride relaxed to allow male drivers) arrive as an
-  // UPDATE the subscription misses. Polling surfaces them to already-online drivers.
+  // Poll fallback: realtime push can be missed (app was backgrounded when the
+  // ride was created, a dropped socket, or a female-only ride later relaxed via
+  // an UPDATE the INSERT-subscription ignores). Polling guarantees an online
+  // driver still picks up any waiting request within a few seconds.
   useEffect(() => {
     if (!online || activeRide || pendingRequest) return;
-    const iv = setInterval(async () => {
+    let cancelled = false;
+    const pull = async () => {
       try {
         const existing = await getSearchingRides();
-        if (existing.length > 0) {
-          setPendingRequest((cur) => cur ?? existing[0]);
-          if (screenRef.current === 'driver_home') setScreen('ride_notification');
-        }
+        if (cancelled || existing.length === 0) return;
+        setPendingRequest((cur) => cur ?? existing[0]);
+        if (screenRef.current === 'driver_home') setScreen('ride_notification');
       } catch { /* not verified / offline */ }
-    }, 12000);
-    return () => clearInterval(iv);
+    };
+    pull(); // immediate check (covers rides created while backgrounded)
+    const iv = setInterval(pull, 7000);
+    return () => { cancelled = true; clearInterval(iv); };
   }, [online, activeRide?.id, pendingRequest?.id]);
 
   // If the pending ride is accepted by another driver or cancelled, dismiss it.
@@ -365,8 +373,17 @@ const DriverFlow: React.FC = () => {
     return unsub;
   }, [pendingRequest?.id]);
 
+  // Register for push (ride alerts even with the app closed) and restore the
+  // online state if the server still has us online — e.g. reopened from a push.
+  useEffect(() => {
+    registerForPushNotifications();
+    getMyDriver().then((d) => { if (d?.status === 'online') setOnline(true); }).catch(() => {});
+  }, []);
+
   // Stop the GPS watch when leaving the driver area.
   useEffect(() => () => { watchRef.current?.remove(); }, []);
+
+  const handleLogout = async () => { await clearPushToken(); await signOut(); };
 
   // Load the active ride's points (lat/lng) so the map can draw the route.
   useEffect(() => {
@@ -419,6 +436,8 @@ const DriverFlow: React.FC = () => {
     if (!pendingRequest) return;
     try {
       const accepted = await acceptRide(pendingRequest.id);
+      stopSound('request');
+      playSound('accept');
       setActiveRide(accepted);
       setPendingRequest(null);
       setScreen('driver_active_ride');
@@ -430,6 +449,7 @@ const DriverFlow: React.FC = () => {
   };
 
   const completeRide = () => {
+    playSound('complete');
     // The ride was already marked 'completed' inside DriverActiveRideScreen (goNext).
     // Re-calling updateRideStatus here would fail and show a false error — instead,
     // move to the passenger-rating step.
@@ -529,7 +549,7 @@ const DriverFlow: React.FC = () => {
           onDocuments={() => setScreen('driver_documents')}
           onSubscription={() => setScreen('driver_subscription')}
           onSupport={() => setScreen('driver_support')}
-          onLogout={signOut}
+          onLogout={handleLogout}
         />
       );
     case 'driver_rides':
