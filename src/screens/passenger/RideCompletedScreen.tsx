@@ -14,7 +14,6 @@ import {
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
 import { Star, Share2, HelpCircle, ChevronRight, Home, User } from 'lucide-react-native';
 import { Button, Card, Avatar } from '../../components/ui';
-import MotoIcon from '../../components/icons/MotoIcon';
 import { Colors, Radius } from '../../constants';
 import { rateRide, getRideCounterpart, type RideCounterpart } from '../../services/rides';
 import type { RideRow, RideTypeDb } from '../../types/db';
@@ -25,10 +24,11 @@ const fmtMoney = (v?: number | null) =>
 const imgEconomico = require('../../../assets/icons/icone_economico.png');
 const imgConforto  = require('../../../assets/icons/icone_conforto.png');
 const imgPremium   = require('../../../assets/icons/icone_premium.png');
+const imgMoto      = require('../../../assets/icons/icone_moto.png');
 
 // ── Trip Completed Illustration ──────────────────────────────
 const IllustrationRideComplete = ({ rideType = 'economy' }: { rideType?: RideTypeDb }) => {
-  const carImg = rideType === 'premium' ? imgPremium : rideType === 'comfort' ? imgConforto : imgEconomico;
+  const carImg = rideType === 'moto' ? imgMoto : rideType === 'premium' ? imgPremium : rideType === 'comfort' ? imgConforto : imgEconomico;
   return (
     <View style={{ alignItems: 'center' }}>
       <Svg width="220" height="165" viewBox="0 0 220 165">
@@ -52,11 +52,7 @@ const IllustrationRideComplete = ({ rideType = 'economy' }: { rideType?: RideTyp
         <Path d="M193 48 L196 39 L199 48 L208 48 L202 53 L204 62 L196 57 L188 62 L190 53 L184 48 Z" fill="#F59E0B" opacity={0.65} />
       </Svg>
       {/* Real vehicle art from chosen ride type */}
-      {rideType === 'moto' ? (
-        <View style={{ marginTop: -4 }}><MotoIcon size={84} /></View>
-      ) : (
-        <Image source={carImg} style={{ width: 160, height: 84, marginTop: -8 }} resizeMode="contain" />
-      )}
+      <Image source={carImg} style={{ width: 160, height: 84, marginTop: -8 }} resizeMode="contain" />
     </View>
   );
 };

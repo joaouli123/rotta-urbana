@@ -67,17 +67,26 @@ const DriverDocumentsScreen: React.FC<DriverDocumentsScreenProps> = ({ onBack })
       }
 
       const result = useCamera
-        ? await ImagePicker.launchCameraAsync({ quality: 0.6, base64: true, cameraType: ImagePicker.CameraType.front })
-        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.6, base64: true });
+        ? await ImagePicker.launchCameraAsync({ quality: 0.5, base64: true, cameraType: ImagePicker.CameraType.front })
+        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.5, base64: true });
 
-      if (result.canceled || !result.assets?.[0]?.base64) return;
+      if (result.canceled) return;
+      const base64 = result.assets?.[0]?.base64;
+      if (!base64) {
+        Alert.alert('Imagem inválida', 'Não foi possível ler a imagem. Tente novamente ou escolha outra foto.');
+        return;
+      }
 
       setUploading(docType);
-      await uploadDocument(docType, result.assets[0].base64);
+      await uploadDocument(docType, base64);
       await load();
       Alert.alert('Enviado!', 'Documento enviado. Nossa equipe vai analisar em até 24h.');
     } catch (e: any) {
-      Alert.alert('Erro ao enviar', e?.message ?? 'Não foi possível enviar o documento. Tente novamente.');
+      const msg = String(e?.message ?? '');
+      const friendly = /abort|timeout|network|failed to fetch/i.test(msg)
+        ? 'Falha de conexão ao enviar a foto. Verifique sua internet e tente novamente (de preferência no Wi-Fi).'
+        : (msg || 'Não foi possível enviar o documento. Tente novamente.');
+      Alert.alert('Erro ao enviar', friendly);
     } finally {
       setUploading(null);
     }

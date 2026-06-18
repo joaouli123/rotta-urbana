@@ -28,12 +28,12 @@ import { Button } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
 import RouteMap from '../../components/RouteMap';
 import PixIcon from '../../components/icons/PixIcon';
-import MotoIcon from '../../components/icons/MotoIcon';
 import { geocode, getRoute } from '../../services/geo';
 import { estimateFares, getRideHistory } from '../../services/rides';
 const imgEconomico = require('../../../assets/icons/icone_economico.png');
 const imgConforto  = require('../../../assets/icons/icone_conforto.png');
 const imgPremium   = require('../../../assets/icons/icone_premium.png');
+const imgMoto      = require('../../../assets/icons/icone_moto.png');
 
 // ── Vehicle Icons ─────────────────────────────────────────
 const EconomyCar = ({ size = 44 }: { size?: number }) => (
@@ -48,7 +48,9 @@ const PremiumCar = ({ size = 44 }: { size?: number }) => (
   <Image source={imgPremium} style={{ width: size * 1.9, height: size }} resizeMode="contain" />
 );
 
-const MotoVehicle = ({ size = 44 }: { size?: number }) => <MotoIcon size={size} />;
+const MotoVehicle = ({ size = 44 }: { size?: number }) => (
+  <Image source={imgMoto} style={{ width: size * 1.9, height: size }} resizeMode="contain" />
+);
 
 const SUGGESTIONS = [
   { id: '1', name: 'Shopping Sinop', address: 'Av. Cel. Joao Ponce de Arruda, 1065', distance: '2.1 km' },
@@ -294,7 +296,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
         </View>
 
         {step === 'search' ? (
-          <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <ScrollView style={styles.chooseScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
             <Text style={styles.sectionLabel}>
               {query.trim().length >= 2 ? 'RESULTADOS' : 'DESTINOS RECENTES'}
             </Text>
@@ -325,7 +327,12 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
             )}
           </ScrollView>
         ) : (
-          <>
+          <ScrollView
+            style={styles.chooseScroll}
+            contentContainerStyle={styles.chooseContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
             <Text style={styles.sectionLabel}>TIPO DE CORRIDA</Text>
             {RIDE_TYPES.map((type) => {
               const isSelected = selectedType === type.id;
@@ -442,7 +449,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
               loading={resolving}
               style={{ marginTop: 16 }}
             />
-          </>
+          </ScrollView>
         )}
       </View>
     </View>
@@ -485,11 +492,15 @@ const styles = StyleSheet.create({
   panel: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingHorizontal: 20, paddingTop: 8, paddingBottom: 40,
-    maxHeight: '68%',
+    paddingHorizontal: 20, paddingTop: 8, paddingBottom: 32,
+    maxHeight: '82%',
     shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.08, shadowRadius: 16, elevation: 16,
   },
+  // Lets the ride-type + payment list scroll within the (clamped) panel so the
+  // payment section and confirm button are always reachable.
+  chooseScroll: { flexShrink: 1 },
+  chooseContent: { paddingBottom: 8 },
   handleBar: {
     width: 40, height: 4, backgroundColor: Colors.border,
     borderRadius: 2, alignSelf: 'center', marginBottom: 16,
