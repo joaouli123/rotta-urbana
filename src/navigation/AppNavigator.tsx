@@ -47,6 +47,13 @@ import AdminDriversScreen from '../screens/admin/AdminDriversScreen';
 import AdminPaymentsScreen from '../screens/admin/AdminPaymentsScreen';
 import AdminMonitoringScreen from '../screens/admin/AdminMonitoringScreen';
 import AdminSupportScreen from '../screens/admin/AdminSupportScreen';
+import AdminReportsScreen from '../screens/admin/AdminReportsScreen';
+import AdminManagersScreen from '../screens/admin/AdminManagersScreen';
+
+// Manager
+import ManagerDashboardScreen from '../screens/manager/ManagerDashboardScreen';
+import ManagerDriversScreen from '../screens/manager/ManagerDriversScreen';
+import ManagerSupportScreen from '../screens/manager/ManagerSupportScreen';
 
 // Sinop, MT center — fallback when GPS is unavailable. [lng, lat]
 const SINOP: [number, number] = [-55.5024, -11.8642];
@@ -605,11 +612,13 @@ const DriverFlow: React.FC = () => {
 };
 
 // ─── Admin flow ──────────────────────────────────────────────────────────────
-type AScreen = 'admin_dashboard' | 'admin_drivers' | 'admin_payments' | 'admin_monitoring' | 'admin_support';
+type AScreen =
+  | 'admin_dashboard' | 'admin_drivers' | 'admin_payments'
+  | 'admin_monitoring' | 'admin_support' | 'admin_reports' | 'admin_managers';
 
 const AdminFlow: React.FC = () => {
-  const { signOut } = useAuth();
   const [screen, setScreen] = useState<AScreen>('admin_dashboard');
+  const dash = () => setScreen('admin_dashboard');
   switch (screen) {
     case 'admin_dashboard':
       return (
@@ -617,18 +626,52 @@ const AdminFlow: React.FC = () => {
           onDrivers={() => setScreen('admin_drivers')}
           onPayments={() => setScreen('admin_payments')}
           onMonitoring={() => setScreen('admin_monitoring')}
-          onReports={() => Alert.alert('Conta', undefined, [{ text: 'Sair', style: 'destructive', onPress: signOut }, { text: 'Fechar', style: 'cancel' }])}
+          onReports={() => setScreen('admin_reports')}
+          onManagers={() => setScreen('admin_managers')}
           onSupport={() => setScreen('admin_support')}
         />
       );
     case 'admin_drivers':
-      return <AdminDriversScreen onBack={() => setScreen('admin_dashboard')} onDriverDetail={() => {}} />;
+      return <AdminDriversScreen onBack={dash} onDriverDetail={() => {}} />;
     case 'admin_payments':
-      return <AdminPaymentsScreen onBack={() => setScreen('admin_dashboard')} />;
+      return <AdminPaymentsScreen onBack={dash} />;
     case 'admin_monitoring':
-      return <AdminMonitoringScreen onBack={() => setScreen('admin_dashboard')} />;
+      return <AdminMonitoringScreen onBack={dash} />;
     case 'admin_support':
-      return <AdminSupportScreen onBack={() => setScreen('admin_dashboard')} />;
+      return <AdminSupportScreen onBack={dash} />;
+    case 'admin_reports':
+      return <AdminReportsScreen onBack={dash} />;
+    case 'admin_managers':
+      return <AdminManagersScreen onBack={dash} />;
+    default:
+      return null;
+  }
+};
+
+// ─── Manager flow ─────────────────────────────────────────────────────────────
+type MScreen = 'manager_dashboard' | 'manager_drivers' | 'manager_support';
+
+const ManagerFlow: React.FC = () => {
+  const { profile, signOut } = useAuth();
+  const [screen, setScreen] = useState<MScreen>('manager_dashboard');
+  const dash = () => setScreen('manager_dashboard');
+
+  // city comes from the managers table via manager_kpis RPC — pass profile name as fallback
+  switch (screen) {
+    case 'manager_dashboard':
+      return (
+        <ManagerDashboardScreen
+          onDrivers={() => setScreen('manager_drivers')}
+          onRides={() => { /* TODO: ManagerRidesScreen */ }}
+          onSupport={() => setScreen('manager_support')}
+          onSignOut={signOut}
+          cityName="Minha Cidade"
+        />
+      );
+    case 'manager_drivers':
+      return <ManagerDriversScreen onBack={dash} />;
+    case 'manager_support':
+      return <ManagerSupportScreen onBack={dash} />;
     default:
       return null;
   }
@@ -645,6 +688,7 @@ const AppNavigator: React.FC = () => {
   if (!profile) return <Loading />;    // signed in but profile still fetching — never flash AuthFlow
   if (profile.role === 'driver') return <DriverFlow />;
   if (profile.role === 'admin') return <AdminFlow />;
+  if (profile.role === 'manager') return <ManagerFlow />;
   return <PassengerFlow />;
 };
 

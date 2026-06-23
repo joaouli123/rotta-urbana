@@ -1,5 +1,5 @@
 // Row shapes returned by Supabase (snake_case, matching the SQL schema).
-export type Role = 'passenger' | 'driver' | 'admin';
+export type Role = 'passenger' | 'driver' | 'admin' | 'manager';
 export type DriverStatus = 'online' | 'offline' | 'on_ride';
 export type RideStatusDb =
   | 'searching' | 'driver_found' | 'driver_on_way' | 'driver_arrived'

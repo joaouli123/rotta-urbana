@@ -156,3 +156,120 @@ export async function approveAllPending(): Promise<number> {
   if (error) throw error;
   return (data as number) ?? 0;
 }
+
+// ── Managers ──────────────────────────────────────────────────────────────────
+export interface Manager {
+  profile_id: string;
+  full_name: string;
+  email: string | null;
+  phone: string | null;
+  city: string | null;
+  is_active: boolean;
+}
+
+export interface UserSearchResult {
+  id: string;
+  full_name: string;
+  email: string;
+  role: string | null;
+}
+
+export async function listManagers(): Promise<Manager[]> {
+  const { data, error } = await supabase.rpc('admin_list_managers');
+  if (error) throw error;
+  return (data as Manager[]) ?? [];
+}
+
+export async function upsertManager(profileId: string, city: string): Promise<void> {
+  const { error } = await supabase.rpc('admin_upsert_manager', {
+    p_profile_id: profileId,
+    p_city: city,
+  });
+  if (error) throw error;
+}
+
+export async function removeManager(profileId: string): Promise<void> {
+  const { error } = await supabase.rpc('admin_remove_manager', {
+    p_profile_id: profileId,
+  });
+  if (error) throw error;
+}
+
+export async function findUserByEmail(email: string): Promise<UserSearchResult | null> {
+  const { data, error } = await supabase.rpc('admin_find_user_by_email', {
+    p_email: email,
+  });
+  if (error) throw error;
+  if (!data) return null;
+  const row = Array.isArray(data) ? data[0] ?? null : data;
+  return row as UserSearchResult | null;
+}
+
+// ── Full report ───────────────────────────────────────────────────────────────
+export interface FullReport {
+  passengers: {
+    total: number;
+    female: number;
+    male: number;
+    other: number;
+    active_30d: number;
+  };
+  drivers: {
+    total: number;
+    verified: number;
+    pending: number;
+    rejected: number;
+    avg_rating: number;
+    total_rides: number;
+  };
+  rides: {
+    total: number;
+    completed: number;
+    cancelled: number;
+    in_progress: number;
+    this_month: number;
+    last_month: number;
+    avg_price: number;
+    avg_duration_min: number;
+    avg_distance_km: number;
+    gross_total: number;
+    by_month: { month: string; count: number; gross: number }[];
+  };
+  revenue: {
+    subscriptions_total: number;
+    subscriptions_pending: number;
+  };
+  complaints: {
+    total: number;
+    open: number;
+    in_progress: number;
+    closed: number;
+  };
+}
+
+export async function getFullReport(): Promise<FullReport> {
+  const { data, error } = await supabase.rpc('admin_full_report');
+  if (error) throw error;
+  return data as FullReport;
+}
+
+// ── Driver ranking ────────────────────────────────────────────────────────────
+export interface DriverRankingEntry {
+  driver_id: string;
+  full_name: string;
+  phone: string | null;
+  rating: number;
+  total_ratings: number;
+  total_rides: number;
+  is_verified: boolean;
+  vehicle_model: string | null;
+  vehicle_plate: string | null;
+  rank_by_rating: number;
+  rank_by_rides: number;
+}
+
+export async function getDriverRanking(limit = 30): Promise<DriverRankingEntry[]> {
+  const { data, error } = await supabase.rpc('admin_driver_ranking', { p_limit: limit });
+  if (error) throw error;
+  return (data as DriverRankingEntry[]) ?? [];
+}

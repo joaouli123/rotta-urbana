@@ -32,6 +32,7 @@ interface AdminDashboardProps {
   onPayments: () => void;
   onMonitoring: () => void;
   onReports: () => void;
+  onManagers: () => void;
   onSupport?: () => void;
 }
 
@@ -49,6 +50,7 @@ const AdminDashboardScreen: React.FC<AdminDashboardProps> = ({
   onPayments,
   onMonitoring,
   onReports,
+  onManagers,
   onSupport,
 }) => {
   const [kpis, setKpis] = useState<AdminKpis | null>(null);
@@ -138,6 +140,8 @@ const AdminDashboardScreen: React.FC<AdminDashboardProps> = ({
             { label: 'Pagamentos', icon: DollarSign, color: Colors.success, onPress: onPayments },
             { label: 'Monitoramento', icon: Activity, color: Colors.info, onPress: onMonitoring },
             { label: 'Relatórios', icon: TrendingUp, color: Colors.warning, onPress: onReports },
+            { label: 'Gerentes', icon: Users, color: '#7C3AED', onPress: onManagers },
+            { label: 'Suporte', icon: Bell, color: Colors.danger, onPress: onSupport },
           ].map((a) => (
             <TouchableOpacity key={a.label} style={styles.actionCard} onPress={a.onPress}>
               <View style={[styles.actionIcon, { backgroundColor: a.color + '22' }]}>
@@ -146,6 +150,67 @@ const AdminDashboardScreen: React.FC<AdminDashboardProps> = ({
               <Text style={styles.actionLabel}>{a.label}</Text>
             </TouchableOpacity>
           ))}
+        </View>
+
+        {/* Extended KPIs */}
+        <Text style={styles.sectionTitle}>Motoristas</Text>
+        <View style={styles.kpiRow}>
+          <View style={styles.kpiSmall}>
+            <Text style={styles.kpiSmallVal}>{kpis?.drivers_total ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Total</Text>
+          </View>
+          <View style={styles.kpiSmall}>
+            <Text style={[styles.kpiSmallVal, { color: Colors.success }]}>{kpis?.drivers_verified ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Verificados</Text>
+          </View>
+          <View style={styles.kpiSmall}>
+            <Text style={[styles.kpiSmallVal, { color: Colors.warning }]}>{kpis?.drivers_pending ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Pendentes</Text>
+          </View>
+          <View style={styles.kpiSmall}>
+            <Text style={[styles.kpiSmallVal, { color: Colors.info }]}>{kpis?.drivers_on_ride ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Em corrida</Text>
+          </View>
+        </View>
+
+        <Text style={styles.sectionTitle}>Corridas</Text>
+        <View style={styles.kpiRow}>
+          <View style={styles.kpiSmall}>
+            <Text style={styles.kpiSmallVal}>{kpis?.rides_total ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Total</Text>
+          </View>
+          <View style={styles.kpiSmall}>
+            <Text style={[styles.kpiSmallVal, { color: Colors.success }]}>{kpis?.rides_completed ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Concluídas</Text>
+          </View>
+          <View style={styles.kpiSmall}>
+            <Text style={[styles.kpiSmallVal, { color: Colors.danger }]}>{kpis?.rides_cancelled ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Canceladas</Text>
+          </View>
+          <View style={styles.kpiSmall}>
+            <Text style={[styles.kpiSmallVal, { color: Colors.primary }]}>{kpis?.rides_month ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Esse mês</Text>
+          </View>
+        </View>
+
+        <Text style={styles.sectionTitle}>Assinaturas</Text>
+        <View style={styles.kpiRow}>
+          <View style={styles.kpiSmall}>
+            <Text style={[styles.kpiSmallVal, { color: Colors.success }]}>{kpis?.subs_active ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Ativas</Text>
+          </View>
+          <View style={styles.kpiSmall}>
+            <Text style={[styles.kpiSmallVal, { color: Colors.danger }]}>{kpis?.subs_expired ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Vencidas</Text>
+          </View>
+          <View style={styles.kpiSmall}>
+            <Text style={styles.kpiSmallVal}>{fmtK(kpis?.revenue_subscriptions ?? 0)}</Text>
+            <Text style={styles.kpiSmallLabel}>Receita</Text>
+          </View>
+          <View style={styles.kpiSmall}>
+            <Text style={[styles.kpiSmallVal, { color: Colors.warning }]}>{kpis?.support_open ?? 0}</Text>
+            <Text style={styles.kpiSmallLabel}>Suporte</Text>
+          </View>
         </View>
 
         {/* Platform Status */}
@@ -296,6 +361,15 @@ const styles = StyleSheet.create({
   eventIcon: { width: 36, height: 36, borderRadius: Radius.sm, alignItems: 'center', justifyContent: 'center' },
   eventText: { ...Typography.small, color: Colors.textPrimary, flex: 1 },
   eventTime: { ...Typography.caption, color: Colors.textMuted, marginTop: 2 },
+  kpiRow: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    backgroundColor: Colors.card, borderRadius: Radius.lg,
+    borderWidth: 1, borderColor: Colors.border,
+    paddingVertical: 14, paddingHorizontal: 8, marginBottom: 16,
+  },
+  kpiSmall: { flex: 1, alignItems: 'center' },
+  kpiSmallVal: { fontSize: 20, fontWeight: '800', color: Colors.textPrimary },
+  kpiSmallLabel: { ...Typography.caption, color: Colors.textMuted, marginTop: 3, textAlign: 'center' },
 });
 
 export default AdminDashboardScreen;
