@@ -7,7 +7,7 @@ import {
   ChevronLeft, FileText, Car, Camera, CheckCircle, Clock,
   AlertCircle, Upload,
 } from 'lucide-react-native';
-import * as ImagePicker from 'expo-image-picker';
+import { pickFromCamera, chooseAndPickDocument } from '../../lib/filePick';
 import { Card, Badge } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
 import { getMyDocuments, uploadDocument, type DriverDocument, type DocType } from '../../services/documents';
@@ -54,31 +54,12 @@ const DriverDocumentsScreen: React.FC<DriverDocumentsScreenProps> = ({ onBack })
   const pickAndUpload = async (docType: DocType) => {
     if (uploading) return;
     try {
-      // Selfie → camera; documents → gallery.
-      const useCamera = docType === 'selfie';
-      const perm = useCamera
-        ? await ImagePicker.requestCameraPermissionsAsync()
-        : await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!perm.granted) {
-        Alert.alert('Permissão necessária', useCamera
-          ? 'Permita o acesso à câmera para enviar a selfie.'
-          : 'Permita o acesso à galeria para enviar o documento.');
-        return;
-      }
-
-      const result = useCamera
-        ? await ImagePicker.launchCameraAsync({ quality: 0.5, base64: true, cameraType: ImagePicker.CameraType.front })
-        : await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.5, base64: true });
-
-      if (result.canceled) return;
-      const base64 = result.assets?.[0]?.base64;
-      if (!base64) {
-        Alert.alert('Imagem inválida', 'Não foi possível ler a imagem. Tente novamente ou escolha outra foto.');
-        return;
-      }
+      // Selfie → camera only. Documents → camera / gallery / files (PDF).
+      const picked = docType === 'selfie' ? await pickFromCamera(true) : await chooseAndPickDocument();
+      if (!picked) return;
 
       setUploading(docType);
-      await uploadDocument(docType, base64);
+      await uploadDocument(docType, picked.base64, { contentType: picked.contentType, ext: picked.ext });
       await load();
       Alert.alert('Enviado!', 'Documento enviado. Nossa equipe vai analisar em até 24h.');
     } catch (e: any) {
@@ -151,7 +132,7 @@ const DriverDocumentsScreen: React.FC<DriverDocumentsScreenProps> = ({ onBack })
             return (
               <Card key={slot.type} style={styles.docCard}>
                 <View style={styles.docHeader}>
-                  {doc?.previewUrl ? (
+                  {doc?.previewUrl && !doc.file_path?.toLowerCase().endsWith('.pdf') ? (
                     <Image source={{ uri: doc.previewUrl }} style={styles.docThumb} />
                   ) : (
                     <View style={styles.docIconWrap}><SlotIcon size={20} color={Colors.primary} /></View>

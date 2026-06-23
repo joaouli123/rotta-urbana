@@ -9,7 +9,9 @@ import {
   TouchableOpacity,
   StatusBar,
   Alert,
+  Image,
 } from 'react-native';
+import { pickFromCamera, chooseAndPickDocument, type PickedFile } from '../../lib/filePick';
 import {
   User,
   Mail,
@@ -30,6 +32,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { friendlyError } from '../../lib/errors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { addVehicle, updateDriverPix } from '../../services/drivers';
+import { uploadDocument, type DocType } from '../../services/documents';
 import FipePicker from '../../components/FipePicker';
 import type { Gender } from '../../types/db';
 
@@ -81,10 +84,26 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
   const [fipeValue, setFipeValue] = useState<number | undefined>(undefined);
   const [fipeCode, setFipeCode] = useState('');
   const [pixKey, setPixKey] = useState('');
+  // Documents picked during signup. Uploaded right after the account is created,
+  // since Storage needs an authenticated session.
+  const [docImages, setDocImages] = useState<Partial<Record<DocType, PickedFile>>>({});
+
+  // Selfie → camera only. Documents → choose camera / gallery / files (PDF).
+  const pickDoc = async (type: DocType) => {
+    try {
+      const picked = type === 'selfie' ? await pickFromCamera(true) : await chooseAndPickDocument();
+      if (!picked) return;
+      setDocImages((cur) => ({ ...cur, [type]: picked }));
+    } catch (e: any) {
+      Alert.alert('Erro', e?.message || 'Não foi possível selecionar o arquivo. Tente novamente.');
+    }
+  };
 
   const submit = async () => {
+    if (!docImages.cnh) { Alert.alert('Atenção', 'Envie ao menos a foto da CNH para concluir.'); setStep(2); return; }
+    if (!docImages.selfie) { Alert.alert('Atenção', 'Tire a selfie de verificação para concluir.'); return; }
     setLoading(true);
-    const { error } = await signUp({ fullName: name, email, phone, password, role: 'driver', gender: gender ?? undefined });
+    const { error } = await signUp({ fullName: name, email, phone, password, role: 'driver', gender: gender ?? undefined, cpf });
     if (error) {
       setLoading(false);
       Alert.alert('Erro no cadastro', friendlyError(error));
@@ -108,6 +127,15 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
     } catch {
       // non-fatal: the driver can add/edit the vehicle/PIX later
     }
+    // Upload the documents now that the session exists (best-effort; anything
+    // that fails can be redone in Perfil > Documentos). Detached so it doesn't
+    // block the navigation that the new session triggers.
+    (async () => {
+      for (const t of ['cnh', 'rg', 'vehicle_doc', 'selfie'] as DocType[]) {
+        const f = docImages[t];
+        if (f) { try { await uploadDocument(t, f.base64, { contentType: f.contentType, ext: f.ext }); } catch { /* retry later in Documentos */ } }
+      }
+    })();
     setLoading(false);
     // Session created -> navigator routes to the driver home (pending verification).
   };
@@ -116,6 +144,14 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
     if (step === 0) {
       if (!name.trim() || !email.trim() || !phone.trim() || !password) {
         Alert.alert('Atenção', 'Preencha todos os dados pessoais.');
+        return;
+      }
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+        Alert.alert('Atenção', 'Informe um e-mail válido.');
+        return;
+      }
+      if (cpf.replace(/\D/g, '').length !== 11) {
+        Alert.alert('Atenção', 'Informe um CPF válido (11 dígitos).');
         return;
       }
       if (password.length < 8) {
@@ -129,6 +165,10 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
     }
     if (step === 1 && (!vehicleModel.trim() || !vehiclePlate.trim())) {
       Alert.alert('Atenção', 'Informe modelo e placa do veículo.');
+      return;
+    }
+    if (step === 2 && !docImages.cnh) {
+      Alert.alert('Atenção', 'Envie ao menos a foto da CNH para continuar.');
       return;
     }
     if (step < steps.length - 1) setStep(step + 1);
@@ -253,25 +293,35 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
         return (
           <>
             <Text style={styles.stepTitle}>Documentacao</Text>
-            <Text style={styles.stepDesc}>Envie os documentos para verificacao. Todos os dados sao criptografados.</Text>
-            {[
-              { label: 'CNH (frente e verso)', Icon: FileText, hint: 'JPG, PNG ou PDF - max. 10MB' },
-              { label: 'RG ou identidade', Icon: FileText, hint: 'JPG, PNG ou PDF - max. 10MB' },
-              { label: 'CRLV do veiculo', Icon: Car, hint: 'JPG, PNG ou PDF - max. 10MB' },
-            ].map((doc, i) => (
-              <TouchableOpacity key={i} style={styles.docCard} activeOpacity={0.8}>
-                <View style={styles.docIconWrap}>
-                  <doc.Icon size={20} color={Colors.textPrimary} strokeWidth={2} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.docLabel}>{doc.label}</Text>
-                  <Text style={styles.docHint}>{doc.hint}</Text>
-                </View>
-                <View style={styles.docAction}>
-                  <Text style={styles.docActionText}>Enviar</Text>
-                </View>
-              </TouchableOpacity>
-            ))}
+            <Text style={styles.stepDesc}>Toque em cada item para enviar — foto, galeria ou arquivo (PDF). Todos os dados sao criptografados.</Text>
+            {([
+              { type: 'cnh' as DocType, label: 'CNH (frente e verso)', Icon: FileText },
+              { type: 'rg' as DocType, label: 'RG ou identidade', Icon: FileText },
+              { type: 'vehicle_doc' as DocType, label: 'CRLV do veiculo', Icon: Car },
+            ]).map((doc) => {
+              const picked = docImages[doc.type];
+              const isImg = !!picked?.contentType.startsWith('image');
+              return (
+                <TouchableOpacity key={doc.type} style={styles.docCard} activeOpacity={0.8} onPress={() => pickDoc(doc.type)}>
+                  {picked && isImg ? (
+                    <Image source={{ uri: `data:${picked.contentType};base64,${picked.base64}` }} style={styles.docThumb} />
+                  ) : (
+                    <View style={styles.docIconWrap}>
+                      <doc.Icon size={20} color={Colors.textPrimary} strokeWidth={2} />
+                    </View>
+                  )}
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.docLabel}>{doc.label}</Text>
+                    <Text style={styles.docHint}>{picked ? 'Arquivo selecionado — toque para trocar' : 'Foto, galeria ou PDF'}</Text>
+                  </View>
+                  <View style={[styles.docAction, picked && styles.docActionDone]}>
+                    {picked
+                      ? <CheckCircle size={16} color={Colors.textInverse} strokeWidth={2.5} />
+                      : <Text style={styles.docActionText}>Enviar</Text>}
+                  </View>
+                </TouchableOpacity>
+              );
+            })}
             <View style={styles.infoCard}>
               <CheckCircle size={16} color={Colors.success} strokeWidth={2} style={{ marginTop: 1 }} />
               <Text style={styles.infoText}>
@@ -285,16 +335,20 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
           <>
             <Text style={styles.stepTitle}>Verificacao Facial</Text>
             <Text style={styles.stepDesc}>
-              Tire uma selfie para validar sua identidade. Isso garante seguranca para todos.
+              Tire uma selfie (só pela câmera) para validar sua identidade. Isso garante seguranca para todos.
             </Text>
-            <TouchableOpacity style={styles.selfieBox} activeOpacity={0.85}>
+            <TouchableOpacity style={styles.selfieBox} activeOpacity={0.85} onPress={() => pickDoc('selfie')}>
               <View style={styles.selfieInner}>
-                <View style={styles.selfieIconWrap}>
-                  <Camera size={40} color={Colors.textPrimary} strokeWidth={1.5} />
-                </View>
-                <Text style={styles.selfieLabel}>Tirar selfie agora</Text>
+                {docImages.selfie ? (
+                  <Image source={{ uri: `data:${docImages.selfie.contentType};base64,${docImages.selfie.base64}` }} style={styles.selfiePreview} />
+                ) : (
+                  <View style={styles.selfieIconWrap}>
+                    <Camera size={40} color={Colors.textPrimary} strokeWidth={1.5} />
+                  </View>
+                )}
+                <Text style={styles.selfieLabel}>{docImages.selfie ? 'Selfie capturada ✓' : 'Tirar selfie agora'}</Text>
                 <Text style={styles.selfieHint}>
-                  Certifique-se de estar em local bem iluminado
+                  {docImages.selfie ? 'Toque para refazer' : 'Certifique-se de estar em local bem iluminado'}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -459,6 +513,8 @@ const styles = StyleSheet.create({
     width: 42, height: 42, borderRadius: Radius.sm,
     backgroundColor: Colors.primary + '22', alignItems: 'center', justifyContent: 'center',
   },
+  docThumb: { width: 42, height: 42, borderRadius: Radius.sm, backgroundColor: Colors.border },
+  docActionDone: { backgroundColor: Colors.success },
   docLabel: {
     fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary, marginBottom: 2,
   },
@@ -499,6 +555,10 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary + '22',
     alignItems: 'center', justifyContent: 'center',
     borderWidth: 2, borderColor: Colors.primary + '44',
+  },
+  selfiePreview: {
+    width: 96, height: 96, borderRadius: 48,
+    borderWidth: 2, borderColor: Colors.primary,
   },
   selfieLabel: {
     fontSize: 17, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary,

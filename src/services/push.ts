@@ -29,13 +29,17 @@ function resolveProjectId(): string | undefined {
 export async function registerForPushNotifications(): Promise<void> {
   try {
     if (Platform.OS === 'android') {
-      // High-importance channel so ride alerts ring + pop over other apps.
-      await Notifications.setNotificationChannelAsync('rides', {
+      // MAX-importance channel with the bundled LOUD alert sound, so a new ride
+      // rings strongly even when the app is fully closed (only the system sound
+      // plays then). New channel id ('rides-v2') because Android caches a
+      // channel's sound after first creation — the old 'rides' kept 'default'.
+      await Notifications.setNotificationChannelAsync('rides-v2', {
         name: 'Corridas',
         importance: Notifications.AndroidImportance.MAX,
-        sound: 'default',
-        vibrationPattern: [0, 250, 250, 250],
+        sound: 'request.wav', // bundled via app.config.js → expo-notifications.sounds
+        vibrationPattern: [0, 300, 200, 300, 200, 300],
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        enableVibrate: true,
       });
     }
 

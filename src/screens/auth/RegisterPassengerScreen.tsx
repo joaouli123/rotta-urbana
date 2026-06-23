@@ -44,6 +44,10 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
       Alert.alert('Atenção', 'Preencha todos os campos.');
       return;
     }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      Alert.alert('Atenção', 'Informe um e-mail válido.');
+      return;
+    }
     if (!gender) {
       Alert.alert('Atenção', 'Selecione seu sexo (usamos para a preferência de segurança).');
       return;

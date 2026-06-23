@@ -54,23 +54,23 @@ export const Button: React.FC<ButtonProps> = ({
       <TouchableOpacity
         onPress={onPress}
         disabled={disabled || loading}
-        style={[fullWidth && { width: '100%' }, style]}
+        style={[
+          styles.button,
+          sizeStyles[size],
+          Shadows.primary,
+          { backgroundColor: disabled ? '#CCCCCC' : Colors.primary },
+          fullWidth && { width: '100%' },
+          style,
+        ]}
         activeOpacity={0.85}
       >
-        <LinearGradient
-          colors={disabled ? ['#CCCCCC', '#BBBBBB'] : [Colors.primary, Colors.primaryDark]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={[styles.button, sizeStyles[size], Shadows.primary]}
-        >
-          {icon && <>{icon}</>}
-          {loading ? (
-            <ActivityIndicator color={Colors.textInverse} size="small" />
-          ) : (
-            <Text style={[styles.textPrimary, textSizes[size], textStyle]}>{title}</Text>
-          )}
-          {iconRight && <>{iconRight}</>}
-        </LinearGradient>
+        {icon && <>{icon}</>}
+        {loading ? (
+          <ActivityIndicator color={Colors.textInverse} size="small" />
+        ) : (
+          <Text style={[styles.textPrimary, textSizes[size], textStyle]}>{title}</Text>
+        )}
+        {iconRight && <>{iconRight}</>}
       </TouchableOpacity>
     );
   }

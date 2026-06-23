@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   ScrollView,
   TouchableOpacity,
@@ -10,7 +11,6 @@ import {
   StatusBar,
   Alert,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Mail, Lock, Car, User, ArrowRight } from 'lucide-react-native';
 import { Button, Input, Divider } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
@@ -57,17 +57,11 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
       >
         {/* Logo */}
         <View style={styles.header}>
-          <View style={styles.logoWrap}>
-            <LinearGradient
-              colors={[Colors.primary, Colors.primaryDark]}
-              style={styles.logoBox}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-            >
-              <Text style={styles.logoLetter}>R</Text>
-            </LinearGradient>
-          </View>
-          <Text style={styles.brand}>Rotta Urbana</Text>
+          <Image
+            source={require('../../../assets/logo.png')}
+            style={styles.logo}
+            resizeMode="contain"
+          />
           <Text style={styles.tagline}>Bem-vindo de volta</Text>
         </View>
 
@@ -78,7 +72,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
             onPress={() => setActiveRole('passenger')}
             activeOpacity={0.8}
           >
-            <User size={15} color={activeRole === 'passenger' ? Colors.primary : Colors.textMuted} strokeWidth={2} />
+            <User size={15} color={activeRole === 'passenger' ? '#FFFFFF' : Colors.textMuted} strokeWidth={2} />
             <Text style={[styles.roleBtnText, activeRole === 'passenger' && styles.roleBtnTextActive]}>
               Passageiro
             </Text>
@@ -88,7 +82,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
             onPress={() => setActiveRole('driver')}
             activeOpacity={0.8}
           >
-            <Car size={15} color={activeRole === 'driver' ? Colors.primary : Colors.textMuted} strokeWidth={2} />
+            <Car size={15} color={activeRole === 'driver' ? '#FFFFFF' : Colors.textMuted} strokeWidth={2} />
             <Text style={[styles.roleBtnText, activeRole === 'driver' && styles.roleBtnTextActive]}>
               Motorista
             </Text>
@@ -127,8 +121,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
         <View style={styles.registerSection}>
           <Text style={styles.registerLabel}>Primeira vez aqui?</Text>
           <TouchableOpacity style={styles.registerCard} onPress={onRegister} activeOpacity={0.85}>
-            <View style={styles.registerIconWrap}>
-              <User size={20} color={Colors.textPrimary} strokeWidth={2} />
+            <View style={[styles.registerIconWrap, { backgroundColor: '#1A1A1A' }]}>
+              <User size={20} color="#FFFFFF" strokeWidth={2} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.registerCardTitle}>Criar conta de Passageiro</Text>
@@ -137,8 +131,8 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
             <ArrowRight size={18} color={Colors.textMuted} strokeWidth={2} />
           </TouchableOpacity>
           <TouchableOpacity style={styles.registerCard} onPress={onRegisterDriver} activeOpacity={0.85}>
-            <View style={[styles.registerIconWrap, { backgroundColor: Colors.primary }]}>
-              <Car size={20} color={Colors.textInverse} strokeWidth={2} />
+            <View style={[styles.registerIconWrap, { backgroundColor: '#1A1A1A' }]}>
+              <Car size={20} color="#FFFFFF" strokeWidth={2} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.registerCardTitle}>Quero ser Motorista</Text>
@@ -163,25 +157,10 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   content: { paddingHorizontal: 28, paddingTop: 64, paddingBottom: 48 },
   header: { alignItems: 'center', marginBottom: 36 },
-  logoWrap: {
-    marginBottom: 18,
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
-    shadowRadius: 14,
-    elevation: 10,
-  },
-  logoBox: {
-    width: 68, height: 68, borderRadius: 20,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  logoLetter: {
-    fontSize: 34, fontFamily: 'Poppins_800ExtraBold',
-    color: Colors.textInverse, includeFontPadding: false, lineHeight: 40,
-  },
-  brand: {
-    fontSize: 24, fontFamily: 'Poppins_700Bold',
-    color: Colors.textPrimary, letterSpacing: 0.5, marginBottom: 6,
+  logo: {
+    width: 170,
+    height: 170,
+    marginBottom: 4,
   },
   tagline: {
     fontSize: 15, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary,
@@ -204,7 +183,7 @@ const styles = StyleSheet.create({
     fontSize: 14, fontFamily: 'Poppins_500Medium', color: Colors.textMuted,
   },
   roleBtnTextActive: {
-    fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.primary,
+    fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: '#FFFFFF',
   },
   form: { gap: 0 },
   forgotBtn: {

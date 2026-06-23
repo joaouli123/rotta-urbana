@@ -21,6 +21,8 @@ module.exports = ({ config }) => ({
         'O Rotta Urbana acessa suas fotos para enviar documentos do motorista e anexos de suporte.',
       // App uses only standard/exempt encryption (HTTPS) — skips the export-compliance prompt.
       ITSAppUsesNonExemptEncryption: false,
+      // Let iOS wake the app for incoming ride push notifications when backgrounded.
+      UIBackgroundModes: ['remote-notification'],
     },
   },
   plugins: [
@@ -45,6 +47,10 @@ module.exports = ({ config }) => ({
       'expo-notifications',
       {
         color: '#C1F11D',
+        // Bundle the loud alert as a custom notification sound so a new ride
+        // rings strongly even when the driver's app is fully closed (the
+        // 'rides-v2' Android channel + push payload reference 'request.wav').
+        sounds: ['./assets/sounds/request.wav'],
       },
     ],
   ],

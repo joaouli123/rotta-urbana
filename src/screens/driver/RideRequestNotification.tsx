@@ -86,8 +86,11 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
 
     // Loud alert loop while the request is on screen (driver must hear it).
     playSound('request', { loop: true });
+    // Safety cap: never let the loop ring forever if a dropped socket means the
+    // parent never unmounts us (the card stays, but the sound stops after 45s).
+    const soundCap = setTimeout(() => stopSound('request'), 45000);
 
-    return () => { clearInterval(interval); stopSound('request'); };
+    return () => { clearInterval(interval); clearTimeout(soundCap); stopSound('request'); };
   }, []);
 
   const progressWidth = progressAnim.interpolate({

@@ -4,10 +4,11 @@ import * as Location from 'expo-location';
 import { useAuth } from '../contexts/AuthContext';
 import { Colors } from '../constants';
 import type { RideRow, RideTypeDb } from '../types/db';
-import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide, relaxFemalePreference } from '../services/rides';
+import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide, relaxFemalePreference, getRideCounterpart } from '../services/rides';
 import { getSearchingRides, subscribeSearchingRides, setStatus, updateLocation, getMyDriver } from '../services/drivers';
 import { playSound, stopSound } from '../lib/sounds';
 import { registerForPushNotifications, clearPushToken } from '../services/push';
+import { showSearchingNotification, showDriverFoundNotification, clearRideNotification, ensureNotificationPermission } from '../services/localNotifications';
 import { setSubscriptionPlan, buildSubscriptionPix, buildRideFarePix } from '../services/payments';
 import { friendlyError } from '../lib/errors';
 
@@ -102,19 +103,46 @@ const PassengerFlow: React.FC = () => {
   const [originCoords, setOriginCoords] = useState<[number, number] | null>(null);
   const [destCoords, setDestCoords] = useState<[number, number] | null>(null);
 
+  // Ask for notification permission once, register a push token (so we can push
+  // "motorista a caminho" even with the app fully closed), and clear any leftover
+  // ride notification if the passenger flow unmounts (e.g. logout).
+  useEffect(() => {
+    ensureNotificationPermission();
+    registerForPushNotifications();
+    return () => { clearRideNotification(); };
+  }, []);
+
+  // Ongoing "Procurando motorista..." tray notification while searching, so the
+  // passenger sees it even after backgrounding the app.
+  useEffect(() => {
+    if (screen === 'ride_matching' && ride?.status === 'searching') {
+      const dest = ride?.destination_address ? `Destino: ${ride.destination_address.split(',')[0]}` : undefined;
+      showSearchingNotification(dest);
+    }
+  }, [screen, ride?.status, ride?.destination_address]);
+
   // Realtime: advance the UI as the ride's status changes server-side.
   useEffect(() => {
     if (!ride || (screen !== 'ride_matching' && screen !== 'ride_tracking')) return;
     const apply = (r: RideRow) => {
       setRide(r);
       if (['driver_on_way', 'driver_arrived', 'in_progress'].includes(r.status)) {
-        if (screen === 'ride_matching') { stopSound('searching'); playSound('found'); }
+        if (screen === 'ride_matching') {
+          stopSound('searching'); playSound('found');
+          // Replace the "searching" tray notification with a "driver found" one
+          // (shows even if the passenger backgrounded the app while waiting).
+          getRideCounterpart(r.id)
+            .then((c) => showDriverFoundNotification(c ? { name: c.name, vehicle: c.vehicleModel, plate: c.vehiclePlate } : undefined))
+            .catch(() => showDriverFoundNotification());
+        }
         setScreen((s) => (s === 'ride_matching' ? 'ride_tracking' : s));
       } else if (r.status === 'completed') {
         stopSound('searching');
+        clearRideNotification();
         setScreen('ride_completed');
       } else if (r.status === 'cancelled') {
         stopSound('searching');
+        clearRideNotification();
         Alert.alert('Corrida cancelada', r.cancel_reason || 'A corrida foi cancelada.');
         setRide(null);
         setScreen('passenger_home');
@@ -140,6 +168,10 @@ const PassengerFlow: React.FC = () => {
         Alert.alert('Pagamento no cartão', `Pague ${valor} na maquininha do motorista.`);
         return;
       }
+      if (ride.payment_method === 'boleto') {
+        Alert.alert('Pagamento via boleto', `Combine o boleto de ${valor} diretamente com o motorista.`);
+        return;
+      }
       // PIX → show the driver's copia-e-cola, with a share/copy action.
       if (ride.payment_method === 'pix') {
         try {
@@ -160,6 +192,8 @@ const PassengerFlow: React.FC = () => {
         } catch {
           Alert.alert('Pagamento via PIX', `Pague ${valor} ao motorista usando a chave PIX que ele informar.`);
         }
+      } else {
+        Alert.alert('Pagamento', `Combine o pagamento de ${valor} diretamente com o motorista.`);
       }
     })();
   }, [screen, ride?.id]);
@@ -236,6 +270,8 @@ const PassengerFlow: React.FC = () => {
   };
 
   const handleCancel = async () => {
+    clearRideNotification();
+    stopSound('searching');
     try { if (ride) await cancelRide(ride.id); } catch { /* ignore */ }
     setRide(null);
     setScreen('passenger_home');
@@ -396,6 +432,11 @@ const DriverFlow: React.FC = () => {
   }, [activeRide?.id]);
 
   const toggleOnline = async () => {
+    // Don't let the driver go offline mid-ride (kills GPS + ride tracking).
+    if (online && activeRide) {
+      Alert.alert('Você está em uma corrida', 'Conclua a corrida atual antes de ficar offline.');
+      return;
+    }
     if (!online) {
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
@@ -596,7 +637,9 @@ const AdminFlow: React.FC = () => {
 // ─── Root: route by auth + role ──────────────────────────────────────────────
 const AppNavigator: React.FC = () => {
   const { session, profile, loading } = useAuth();
+  const [splashDone, setSplashDone] = useState(false);
 
+  if (!splashDone) return <SplashScreen onFinish={() => setSplashDone(true)} />;
   if (loading) return <Loading />;
   if (!session) return <AuthFlow />;   // truly signed out
   if (!profile) return <Loading />;    // signed in but profile still fetching — never flash AuthFlow

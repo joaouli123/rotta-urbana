@@ -41,19 +41,31 @@ export async function getMyDocuments(): Promise<DriverDocument[]> {
 /**
  * Upload (or replace) a driver document.
  * @param docType which document slot
- * @param base64  the image content as a base64 string (from expo-image-picker `base64: true`)
+ * @param base64  the file content as a base64 string
+ * @param opts    content type + extension (defaults to JPEG for camera/gallery;
+ *                pass e.g. { contentType: 'application/pdf', ext: 'pdf' } for files)
  */
-export async function uploadDocument(docType: DocType, base64: string): Promise<void> {
+export async function uploadDocument(
+  docType: DocType,
+  base64: string,
+  opts?: { contentType?: string; ext?: string },
+): Promise<void> {
+  // Guard against empty/undersized base64 (incomplete read on slow mobile nets)
+  // that would otherwise upload a corrupt, unreadable file.
+  if (!base64 || base64.length < 100) throw new Error('Arquivo inválido ou incompleto. Tente novamente.');
+  const contentType = opts?.contentType || 'image/jpeg';
+  const ext = (opts?.ext || 'jpg').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'jpg';
+
   const { data: u } = await supabase.auth.getUser();
   if (!u?.user) throw new Error('not authenticated');
   const uid = u.user.id;
 
   // Storage RLS requires the first folder segment to equal the user's id.
-  const path = `${uid}/${docType}.jpg`;
+  const path = `${uid}/${docType}.${ext}`;
 
   const { error: upErr } = await supabase.storage
     .from(BUCKET)
-    .upload(path, decode(base64), { contentType: 'image/jpeg', upsert: true });
+    .upload(path, decode(base64), { contentType, upsert: true });
   if (upErr) throw upErr;
 
   // Upsert the DB row (re-uploading resets it to pending review).

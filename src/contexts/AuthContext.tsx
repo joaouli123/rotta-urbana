@@ -11,6 +11,7 @@ interface SignUpInput {
   password: string;
   role: Extract<Role, 'passenger' | 'driver'>;
   gender?: Gender;
+  cpf?: string;
 }
 
 interface AuthContextValue {
@@ -82,7 +83,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const signUp: AuthContextValue['signUp'] = async (input) => {
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email: input.email.trim().toLowerCase(),
       password: input.password,
       options: {
@@ -91,10 +92,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           phone: input.phone.trim(),
           role: input.role,
           ...(input.gender ? { gender: input.gender } : {}),
+          ...(input.cpf ? { cpf: input.cpf.replace(/\D/g, '') } : {}),
         },
       },
     });
-    return error ? { error: error.message } : {};
+    if (error) return { error: error.message };
+    // With e-mail auto-confirm on, signUp returns a session and the navigator
+    // routes automatically. As a safety net (e.g. confirmation briefly on), if
+    // no session came back, sign in right away so the user isn't left stranded.
+    if (!data.session) {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: input.email.trim().toLowerCase(),
+        password: input.password,
+      });
+      if (signInError) return { error: signInError.message };
+    }
+    return {};
   };
 
   const signOut = async () => {

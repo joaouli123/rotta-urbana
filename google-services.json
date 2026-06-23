@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "300383003313",
+    "firebase_url": "https://push-5ce18.firebaseio.com",
+    "project_id": "push-5ce18",
+    "storage_bucket": "push-5ce18.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:300383003313:android:10270106e3a33dfe20b890",
+        "android_client_info": {
+          "package_name": "com.rottaurbana.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCrdVz73-LFX7o5F__eGeGYPfCOJmztbQE"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

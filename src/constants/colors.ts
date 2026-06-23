@@ -1,8 +1,8 @@
 export const Colors = {
-  // Brand — #C1F11D lime accent
-  primary: '#C1F11D',
-  primaryDark: '#9EC410',
-  primaryLight: '#D4F558',
+  // Brand — green from logo border
+  primary: '#6DC228',
+  primaryDark: '#57A01E',
+  primaryLight: '#84D83A',
 
   // Backgrounds — white
   background: '#FFFFFF',

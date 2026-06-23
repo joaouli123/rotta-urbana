@@ -47,6 +47,7 @@ export interface RideRow {
   duration_min: number | null;
   payment_method: PaymentMethodDb;
   requires_female_driver: boolean;
+  fare_paid: boolean;
   cancel_reason: string | null;
   cancelled_by: Role | null;
   requested_at: string;
@@ -56,6 +57,7 @@ export interface RideRow {
   completed_at: string | null;
   cancelled_at: string | null;
   created_at: string;
+  updated_at: string | null;
 }
 
 export interface NearbyDriver {
