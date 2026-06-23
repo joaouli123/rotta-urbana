@@ -124,3 +124,35 @@ export async function setTicketStatus(ticketId: string, status: TicketStatus, re
   });
   if (error) throw error;
 }
+
+// ── Configurações de aprovação ────────────────────────────────────────────────
+export interface AppSettings {
+  driver_approval_mode: 'manual' | 'auto';
+  min_vehicle_year: number;
+  platform_name: string | null;
+  platform_pix_key: string | null;
+  platform_pix_name: string | null;
+  platform_pix_city: string | null;
+}
+
+export async function getAppSettings(): Promise<AppSettings> {
+  const { data, error } = await supabase.rpc('admin_get_settings');
+  if (error) throw error;
+  return data as AppSettings;
+}
+
+export async function setApprovalMode(mode: 'manual' | 'auto'): Promise<void> {
+  const { error } = await supabase.rpc('admin_set_approval_mode', { p_mode: mode });
+  if (error) throw error;
+}
+
+export async function setMinVehicleYear(year: number): Promise<void> {
+  const { error } = await supabase.rpc('admin_set_min_vehicle_year', { p_year: year });
+  if (error) throw error;
+}
+
+export async function approveAllPending(): Promise<number> {
+  const { data, error } = await supabase.rpc('admin_approve_all_pending');
+  if (error) throw error;
+  return (data as number) ?? 0;
+}

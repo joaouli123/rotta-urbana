@@ -25,7 +25,6 @@ import {
   CheckCircle,
   IdCard,
 } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Button, Input, Card, Badge } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
 import { useAuth } from '../../contexts/AuthContext';
@@ -163,8 +162,8 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
         return;
       }
     }
-    if (step === 1 && (!vehicleModel.trim() || !vehiclePlate.trim())) {
-      Alert.alert('Atenção', 'Informe modelo e placa do veículo.');
+    if (step === 1 && !vehiclePlate.trim()) {
+      Alert.alert('Atenção', 'Informe a placa do veículo.');
       return;
     }
     if (step === 2 && !docImages.cnh) {
@@ -266,9 +265,6 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
                 setFipeCode(r.code);
               }}
             />
-            <Input label={vehicleType === 'moto' ? 'Modelo da moto' : 'Modelo do veiculo'} value={vehicleModel} onChangeText={setVehicleModel}
-              placeholder={vehicleType === 'moto' ? 'Ex: Honda CG 160 2022' : 'Ex: Toyota Corolla 2022'}
-              leftIcon={vehicleType === 'moto' ? <Bike size={18} color={Colors.textMuted} /> : <Car size={18} color={Colors.textMuted} />} />
             <Input label="Placa" value={vehiclePlate} onChangeText={setVehiclePlate}
               placeholder="ABC-1234" autoCapitalize="characters"
               leftIcon={<FileText size={18} color={Colors.textMuted} />} />
