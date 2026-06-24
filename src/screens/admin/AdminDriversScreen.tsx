@@ -11,7 +11,8 @@ import { Card, Badge, Avatar } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
 import {
   getAdminDrivers, verifyDriver, getAppSettings, setApprovalMode,
-  setMinVehicleYear, approveAllPending, type AdminDriver, type AppSettings,
+  setMinVehicleYear, approveAllPending, setCommissionPct, setPlanWeeklyPrice,
+  type AdminDriver, type AppSettings,
 } from '../../services/admin';
 
 const STATUS_FILTERS = ['Todos', 'Verificados', 'Pendentes', 'Inadimplentes', 'Online'] as const;
@@ -50,6 +51,10 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
   const [settingsLoading, setSettingsLoading] = useState(false);
   const [togglingMode, setTogglingMode] = useState(false);
   const [approvingAll, setApprovingAll] = useState(false);
+  const [commissionInput, setCommissionInput] = useState('');
+  const [weeklyInput, setWeeklyInput] = useState('');
+  const [savingCommission, setSavingCommission] = useState(false);
+  const [savingWeekly, setSavingWeekly] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -63,12 +68,53 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
 
   const loadSettings = useCallback(async () => {
     setSettingsLoading(true);
-    try { setSettings(await getAppSettings()); }
+    try {
+      const s = await getAppSettings();
+      setSettings(s);
+      setCommissionInput(s.commission_pct != null ? String(s.commission_pct) : '15');
+      setWeeklyInput(s.plan_weekly_price != null ? String(s.plan_weekly_price) : '50');
+    }
     catch { /* ignore */ }
     finally { setSettingsLoading(false); }
   }, []);
 
   const openSettings = () => { setShowSettings(true); loadSettings(); };
+
+  const saveCommissionPct = async () => {
+    const val = parseFloat(commissionInput.replace(',', '.'));
+    if (isNaN(val) || val < 0 || val > 100) {
+      Alert.alert('Valor inválido', 'Informe um percentual entre 0 e 100.');
+      return;
+    }
+    setSavingCommission(true);
+    try {
+      await setCommissionPct(val);
+      setSettings((s) => s ? { ...s, commission_pct: val } : s);
+      Alert.alert('Salvo', `Comissão definida para ${val}%.`);
+    } catch (e: any) {
+      Alert.alert('Erro', e?.message ?? 'Não foi possível salvar.');
+    } finally {
+      setSavingCommission(false);
+    }
+  };
+
+  const saveWeeklyPrice = async () => {
+    const val = parseFloat(weeklyInput.replace(',', '.'));
+    if (isNaN(val) || val < 0) {
+      Alert.alert('Valor inválido', 'Informe um valor positivo.');
+      return;
+    }
+    setSavingWeekly(true);
+    try {
+      await setPlanWeeklyPrice(val);
+      setSettings((s) => s ? { ...s, plan_weekly_price: val } : s);
+      Alert.alert('Salvo', `Preço semanal definido para R$ ${val.toFixed(2)}.`);
+    } catch (e: any) {
+      Alert.alert('Erro', e?.message ?? 'Não foi possível salvar.');
+    } finally {
+      setSavingWeekly(false);
+    }
+  };
 
   const toggleMode = async () => {
     if (!settings || togglingMode) return;
@@ -445,6 +491,72 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
                   </TouchableOpacity>
                 </View>
 
+                {/* Commission % */}
+                <View style={styles.settingSection}>
+                  <Text style={styles.settingLabel}>Comissão por corrida (%)</Text>
+                  <Text style={styles.settingDesc}>
+                    Percentual cobrado do motorista por corrida concluída no plano comissão.{'\n'}
+                    Atual: <Text style={{ fontFamily: 'Poppins_700Bold', color: Colors.textPrimary }}>
+                      {settings.commission_pct ?? 15}%
+                    </Text>
+                  </Text>
+                  <View style={styles.numericRow}>
+                    <TextInput
+                      style={styles.numericInput}
+                      value={commissionInput}
+                      onChangeText={setCommissionInput}
+                      keyboardType="decimal-pad"
+                      placeholder="15"
+                      placeholderTextColor={Colors.textMuted}
+                      maxLength={5}
+                    />
+                    <Text style={styles.numericUnit}>%</Text>
+                    <TouchableOpacity
+                      style={[styles.saveBtn, savingCommission && { opacity: 0.6 }]}
+                      onPress={saveCommissionPct}
+                      disabled={savingCommission}
+                      activeOpacity={0.85}
+                    >
+                      {savingCommission
+                        ? <ActivityIndicator size="small" color="#fff" />
+                        : <Text style={styles.saveBtnTxt}>Salvar</Text>}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
+                {/* Weekly plan price */}
+                <View style={styles.settingSection}>
+                  <Text style={styles.settingLabel}>Preço plano semanal (R$)</Text>
+                  <Text style={styles.settingDesc}>
+                    Valor cobrado dos motoristas que escolhem o plano semanal.{'\n'}
+                    Atual: <Text style={{ fontFamily: 'Poppins_700Bold', color: Colors.textPrimary }}>
+                      R$ {(settings.plan_weekly_price ?? 50).toFixed(2)}
+                    </Text>
+                  </Text>
+                  <View style={styles.numericRow}>
+                    <Text style={styles.numericUnit}>R$</Text>
+                    <TextInput
+                      style={[styles.numericInput, { flex: 1 }]}
+                      value={weeklyInput}
+                      onChangeText={setWeeklyInput}
+                      keyboardType="decimal-pad"
+                      placeholder="50,00"
+                      placeholderTextColor={Colors.textMuted}
+                      maxLength={8}
+                    />
+                    <TouchableOpacity
+                      style={[styles.saveBtn, savingWeekly && { opacity: 0.6 }]}
+                      onPress={saveWeeklyPrice}
+                      disabled={savingWeekly}
+                      activeOpacity={0.85}
+                    >
+                      {savingWeekly
+                        ? <ActivityIndicator size="small" color="#fff" />
+                        : <Text style={styles.saveBtnTxt}>Salvar</Text>}
+                    </TouchableOpacity>
+                  </View>
+                </View>
+
               </ScrollView>
             ) : (
               <Text style={[styles.emptyTxt, { paddingVertical: 24 }]}>Erro ao carregar configurações.</Text>
@@ -545,6 +657,16 @@ const styles = StyleSheet.create({
   yearChipTxtActive: { color: '#fff' },
   bulkBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 12, paddingVertical: 14, borderRadius: Radius.md, backgroundColor: Colors.success },
   bulkBtnTxt: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: '#fff' },
+  numericRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  numericInput: {
+    width: 90, height: 44, borderRadius: Radius.md, borderWidth: 1,
+    borderColor: Colors.border, backgroundColor: Colors.surface,
+    paddingHorizontal: 12, fontFamily: 'Poppins_400Regular', fontSize: 15,
+    color: Colors.textPrimary,
+  },
+  numericUnit: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textMuted },
+  saveBtn: { paddingHorizontal: 18, paddingVertical: 11, borderRadius: Radius.md, backgroundColor: Colors.primary },
+  saveBtnTxt: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: '#fff' },
 });
 
 export default AdminDriversScreen;

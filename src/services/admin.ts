@@ -133,6 +133,10 @@ export interface AppSettings {
   platform_pix_key: string | null;
   platform_pix_name: string | null;
   platform_pix_city: string | null;
+  commission_pct: number | null;
+  plan_weekly_price: number | null;
+  subscription_daily_amount: number | null;
+  subscription_monthly_amount: number | null;
 }
 
 export async function getAppSettings(): Promise<AppSettings> {
@@ -155,6 +159,16 @@ export async function approveAllPending(): Promise<number> {
   const { data, error } = await supabase.rpc('admin_approve_all_pending');
   if (error) throw error;
   return (data as number) ?? 0;
+}
+
+export async function setCommissionPct(pct: number): Promise<void> {
+  const { error } = await supabase.rpc('admin_set_commission_pct', { p_pct: pct });
+  if (error) throw error;
+}
+
+export async function setPlanWeeklyPrice(price: number): Promise<void> {
+  const { error } = await supabase.rpc('admin_set_plan_weekly_price', { p_price: price });
+  if (error) throw error;
 }
 
 // ── Managers ──────────────────────────────────────────────────────────────────
