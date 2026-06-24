@@ -1,123 +1,287 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  ActivityIndicator,
-  Alert,
-  Clipboard,
-  StatusBar,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity,
+  ActivityIndicator, Alert, StatusBar, Dimensions,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { Clipboard } from 'react-native';
+import { Check, Copy } from 'lucide-react-native';
+import { Colors } from '../../constants';
 import {
-  CheckCircle,
-  Zap,
-  Calendar,
-  Clock,
-  TrendingUp,
-  Copy,
-  ChevronRight,
-} from 'lucide-react-native';
-import { Colors, Radius, Typography } from '../../constants';
-import {
-  getAppSettings,
-  selectPlan,
-  buildPlanPix,
-  type PlanType,
+  getAppSettings, selectPlan, buildPlanPix, type PlanType,
 } from '../../services/payments';
 import type { AppSettings } from '../../types/db';
 
-// ---------------------------------------------------------------------------
-// Props
-// ---------------------------------------------------------------------------
+const { width: W } = Dimensions.get('window');
 
-interface PlanSelectionScreenProps {
-  onDone: () => void;
-}
-
-// ---------------------------------------------------------------------------
-// Helper
-// ---------------------------------------------------------------------------
-
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtBRL(val: number): string {
   return val.toFixed(2).replace('.', ',');
 }
 
-// ---------------------------------------------------------------------------
-// Plan definitions (built once we have settings)
-// ---------------------------------------------------------------------------
-
+// ── Plan definitions ──────────────────────────────────────────────────────────
 interface PlanDef {
   id: PlanType;
   title: string;
-  subtitle: string;
-  price: string;
-  priceLabel: string;
   description: string;
-  highlight: string;
-  icon: React.ElementType;
-  color: string;
+  priceMain: string;    // e.g. "15%"  or  "R$ 10,00"
+  priceUnit: string;    // e.g. "de cada corrida"
+  priceStrike?: string; // optional strikethrough value
+  badge?: string;
+  badgeColor: string;
+  accentColor: string;
   immediate: boolean;
 }
 
 function buildPlans(settings: AppSettings | null): PlanDef[] {
+  const daily   = settings?.plan_daily_price   ?? settings?.subscription_daily_amount   ?? 10;
+  const weekly  = settings?.plan_weekly_price  ?? (settings?.subscription_monthly_amount ?? 120) / 4;
+  const monthly = settings?.subscription_monthly_amount ?? 120;
+  const pct     = settings?.commission_pct ?? 15;
+
   return [
     {
       id: 'commission',
       title: 'Por Corrida',
-      subtitle: 'Comissão %',
-      price: `${settings?.commission_pct ?? 15}%`,
-      priceLabel: 'de cada corrida',
-      description: 'Sem mensalidade. Pague apenas quando trabalhar.',
-      highlight: 'Acesso imediato',
-      icon: TrendingUp,
-      color: Colors.primary,
+      description: 'Sem mensalidade fixa. Pague uma comissão só quando trabalhar.',
+      priceMain: `${pct}%`,
+      priceUnit: 'de comissão por corrida',
+      badge: 'ACESSO IMEDIATO',
+      badgeColor: '#6DC228',
+      accentColor: '#6DC228',
       immediate: true,
     },
     {
       id: 'daily',
       title: 'Diário',
-      subtitle: 'Plano diário',
-      price: `R$ ${fmtBRL(settings?.plan_daily_price ?? settings?.subscription_daily_amount ?? 10)}`,
-      priceLabel: 'por dia',
-      description: 'Pague hoje e trabalhe o dia todo.',
-      highlight: 'Pague via PIX',
-      icon: Zap,
-      color: Colors.info,
+      description: 'Pague hoje e trabalhe o dia todo sem limites.',
+      priceMain: `R$ ${fmtBRL(daily)}`,
+      priceUnit: 'por dia',
+      badgeColor: '#3B82F6',
+      accentColor: '#3B82F6',
       immediate: false,
     },
     {
       id: 'weekly',
       title: 'Semanal',
-      subtitle: 'Plano semanal',
-      price: `R$ ${fmtBRL(settings?.plan_weekly_price ?? (settings?.subscription_monthly_amount ?? 120) / 4)}`,
-      priceLabel: 'por semana',
-      description: 'A melhor relação custo-benefício para trabalhar toda semana.',
-      highlight: 'Pague via PIX',
-      icon: Clock,
-      color: Colors.warning,
+      description: 'Melhor custo-benefício para quem trabalha toda semana.',
+      priceMain: `R$ ${fmtBRL(weekly)}`,
+      priceUnit: 'por semana',
+      priceStrike: `R$ ${fmtBRL(daily * 7)}/semana`,
+      badge: 'MAIS POPULAR',
+      badgeColor: '#7C3AED',
+      accentColor: '#7C3AED',
       immediate: false,
     },
     {
       id: 'monthly',
       title: 'Mensal',
-      subtitle: 'Plano mensal',
-      price: `R$ ${fmtBRL(settings?.subscription_monthly_amount ?? 120)}`,
-      priceLabel: 'por mês',
-      description: 'Para motoristas dedicados. Maior economia no longo prazo.',
-      highlight: 'Pague via PIX',
-      icon: Calendar,
-      color: '#7C3AED',
+      description: 'Para motoristas dedicados. Maior economia no mês.',
+      priceMain: `R$ ${fmtBRL(monthly)}`,
+      priceUnit: 'por mês',
+      priceStrike: `R$ ${fmtBRL(weekly * 4)}/mês`,
+      badge: 'MAIOR ECONOMIA',
+      badgeColor: '#F59E0B',
+      accentColor: '#F59E0B',
       immediate: false,
     },
   ];
 }
 
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
+// ── PlanCard ──────────────────────────────────────────────────────────────────
+interface PlanCardProps {
+  plan: PlanDef;
+  selected: boolean;
+  onPress: () => void;
+  disabled?: boolean;
+}
+
+const PlanCard: React.FC<PlanCardProps> = ({ plan, selected, onPress, disabled }) => (
+  <TouchableOpacity
+    style={[
+      pc.card,
+      selected && { borderColor: plan.accentColor, borderWidth: 2 },
+    ]}
+    onPress={onPress}
+    activeOpacity={0.82}
+    disabled={disabled}
+  >
+    {/* Radio circle */}
+    <View style={[pc.radio, selected && { backgroundColor: plan.accentColor, borderColor: plan.accentColor }]}>
+      {selected && <Check size={12} color="#fff" strokeWidth={3} />}
+    </View>
+
+    {/* Content */}
+    <View style={pc.body}>
+      {/* Title row + badge */}
+      <View style={pc.titleRow}>
+        <Text style={pc.title}>{plan.title}</Text>
+        {plan.badge && (
+          <View style={[pc.badge, { backgroundColor: plan.badgeColor }]}>
+            <Text style={pc.badgeTxt}>{plan.badge}</Text>
+          </View>
+        )}
+      </View>
+
+      {/* Description */}
+      <Text style={pc.desc}>{plan.description}</Text>
+
+      {/* Price */}
+      <View style={pc.priceRow}>
+        <Text style={[pc.priceMain, selected && { color: plan.accentColor }]}>
+          {plan.priceMain}
+        </Text>
+        <Text style={pc.priceUnit}> / {plan.priceUnit}</Text>
+      </View>
+
+      {/* Strike-through original price */}
+      {plan.priceStrike && (
+        <Text style={pc.priceStrike}>{plan.priceStrike}</Text>
+      )}
+    </View>
+  </TouchableOpacity>
+);
+
+const pc = StyleSheet.create({
+  card: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1.5,
+    borderColor: '#E8E8E8',
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
+    elevation: 2,
+    gap: 14,
+  },
+  radio: {
+    width: 22, height: 22, borderRadius: 11,
+    borderWidth: 2, borderColor: '#CCCCCC',
+    alignItems: 'center', justifyContent: 'center',
+    marginTop: 2,
+  },
+  body: { flex: 1 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  title: { fontSize: 16, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
+  badge: {
+    borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2,
+  },
+  badgeTxt: { fontSize: 9, fontFamily: 'Poppins_700Bold', color: '#ffffff', letterSpacing: 0.4 },
+  desc: {
+    fontSize: 12, fontFamily: 'Poppins_400Regular', color: '#888',
+    marginBottom: 8, lineHeight: 17,
+  },
+  priceRow: { flexDirection: 'row', alignItems: 'baseline' },
+  priceMain: { fontSize: 20, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
+  priceUnit: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: '#999' },
+  priceStrike: {
+    fontSize: 11, fontFamily: 'Poppins_400Regular', color: '#BBBBBB',
+    textDecorationLine: 'line-through', marginTop: 2,
+  },
+});
+
+// ── PIX panel ─────────────────────────────────────────────────────────────────
+interface PixPanelProps {
+  code: string;
+  amount: number;
+  onDone: () => void;
+}
+
+const PixPanel: React.FC<PixPanelProps> = ({ code, amount, onDone }) => {
+  const copy = () => {
+    Clipboard.setString(code);
+    Alert.alert('Copiado!', 'Código PIX copiado para a área de transferência.');
+  };
+
+  return (
+    <View style={px.panel}>
+      <Text style={px.title}>Quase lá!</Text>
+      <Text style={px.sub}>Faça o pagamento via PIX para ativar seu plano.</Text>
+
+      <View style={px.amountBox}>
+        <Text style={px.amountLabel}>Valor a pagar</Text>
+        <Text style={px.amount}>R$ {fmtBRL(amount)}</Text>
+      </View>
+
+      <View style={px.codeBox}>
+        <Text style={px.codeLabel}>PIX Copia e Cola</Text>
+        <Text style={px.code} selectable numberOfLines={5}>{code}</Text>
+        <TouchableOpacity style={px.copyBtn} onPress={copy} activeOpacity={0.85}>
+          <Copy size={15} color="#fff" />
+          <Text style={px.copyBtnTxt}>Copiar código PIX</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={px.note}>
+        <Text style={px.noteTxt}>
+          Seu acesso será liberado após confirmação do pagamento pelo administrador.
+        </Text>
+      </View>
+
+      <TouchableOpacity style={px.doneBtn} onPress={onDone} activeOpacity={0.85}>
+        <Check size={16} color="#1A1A1A" strokeWidth={2.5} />
+        <Text style={px.doneBtnTxt}>Já paguei — Continuar</Text>
+      </TouchableOpacity>
+    </View>
+  );
+};
+
+const px = StyleSheet.create({
+  panel: {
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: '#E8E8E8',
+    padding: 20,
+    marginBottom: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  title: { fontSize: 18, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 4 },
+  sub: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: '#888', marginBottom: 20 },
+  amountBox: {
+    backgroundColor: '#F7F8FA', borderRadius: 12, padding: 14,
+    alignItems: 'center', marginBottom: 16,
+  },
+  amountLabel: { fontSize: 11, fontFamily: 'Poppins_500Medium', color: '#999', marginBottom: 4 },
+  amount: { fontSize: 28, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
+  codeBox: { backgroundColor: '#F7F8FA', borderRadius: 12, padding: 14, marginBottom: 14 },
+  codeLabel: {
+    fontSize: 10, fontFamily: 'Poppins_600SemiBold', color: '#AAA',
+    letterSpacing: 0.8, textTransform: 'uppercase', marginBottom: 8,
+  },
+  code: {
+    fontSize: 11, fontFamily: 'Poppins_400Regular', color: '#444',
+    lineHeight: 17, marginBottom: 12,
+  },
+  copyBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, backgroundColor: '#1A1A1A', borderRadius: 10, paddingVertical: 12,
+  },
+  copyBtnTxt: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: '#fff' },
+  note: {
+    backgroundColor: '#FFF9EC', borderRadius: 10, padding: 12,
+    borderWidth: 1, borderColor: '#F59E0B40', marginBottom: 16,
+  },
+  noteTxt: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#92400E', lineHeight: 18 },
+  doneBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 8, backgroundColor: Colors.primary, borderRadius: 12, paddingVertical: 14,
+  },
+  doneBtnTxt: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
+});
+
+// ── Main screen ───────────────────────────────────────────────────────────────
+interface PlanSelectionScreenProps {
+  onDone: () => void;
+}
 
 const PlanSelectionScreen: React.FC<PlanSelectionScreenProps> = ({ onDone }) => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -127,555 +291,118 @@ const PlanSelectionScreen: React.FC<PlanSelectionScreenProps> = ({ onDone }) => 
   const [pixCode, setPixCode] = useState<string | null>(null);
   const [pixAmount, setPixAmount] = useState(0);
 
-  // Load app settings on mount
   useEffect(() => {
-    (async () => {
-      try {
-        const cfg = await getAppSettings();
-        setSettings(cfg);
-      } catch {
-        // non-fatal — defaults will be used
-      } finally {
-        setLoading(false);
-      }
-    })();
+    getAppSettings()
+      .then(setSettings)
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   const plans = buildPlans(settings);
-  const selectedPlan = plans.find((p) => p.id === selected) ?? null;
-
-  // -------------------------------------------------------------------------
-  // Confirm handler
-  // -------------------------------------------------------------------------
 
   const handleConfirm = async () => {
-    if (!selected) {
-      Alert.alert('Escolha um plano', 'Por favor, selecione um plano antes de continuar.');
-      return;
-    }
-
+    if (!selected) { Alert.alert('Escolha um plano', 'Selecione uma opção antes de continuar.'); return; }
     setSubmitting(true);
     try {
       await selectPlan(selected);
-
-      if (selected === 'commission') {
-        onDone();
-        return;
-      }
-
-      // Fixed plan — generate PIX
+      if (selected === 'commission') { onDone(); return; }
       const result = await buildPlanPix(selected);
       setPixCode(result.code);
       setPixAmount(result.amount);
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : 'Ocorreu um erro. Tente novamente.';
-      Alert.alert('Erro', message);
+      Alert.alert('Erro', err instanceof Error ? err.message : 'Tente novamente.');
     } finally {
       setSubmitting(false);
     }
   };
 
-  // -------------------------------------------------------------------------
-  // Copy PIX code to clipboard
-  // -------------------------------------------------------------------------
-
-  const handleCopyPix = () => {
-    if (!pixCode) return;
-    Clipboard.setString(pixCode);
-    Alert.alert('Copiado!', 'Código PIX copiado para a área de transferência.');
-  };
-
-  // -------------------------------------------------------------------------
-  // Loading state
-  // -------------------------------------------------------------------------
-
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
-        <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
+      <View style={s.center}>
+        <StatusBar barStyle="dark-content" backgroundColor="#F7F8FA" />
         <ActivityIndicator color={Colors.primary} size="large" />
-        <Text style={styles.loadingText}>Carregando planos...</Text>
+        <Text style={s.loadingTxt}>Carregando planos...</Text>
       </View>
     );
   }
 
-  // -------------------------------------------------------------------------
-  // Render
-  // -------------------------------------------------------------------------
-
   return (
-    <View style={styles.root}>
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-
+    <View style={s.root}>
+      <StatusBar barStyle="dark-content" backgroundColor="#F7F8FA" />
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={s.scroll}
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* ---------------------------------------------------------------- */}
-        {/* Header                                                            */}
-        {/* ---------------------------------------------------------------- */}
-        <View style={styles.header}>
-          <Text style={styles.headerEyebrow}>Bem-vindo à</Text>
-          <Text style={styles.headerTitle}>ROTTA URBANA</Text>
-          <Text style={styles.headerSubtitle}>Escolha como quer trabalhar</Text>
-          <View style={styles.divider} />
+        {/* Header */}
+        <View style={s.header}>
+          <Text style={s.eyebrow}>Rotta Urbana</Text>
+          <Text style={s.title}>Escolha seu plano</Text>
+          <Text style={s.subtitle}>
+            Selecione como quer trabalhar. Você pode trocar depois.
+          </Text>
         </View>
 
-        {/* ---------------------------------------------------------------- */}
-        {/* Plan cards                                                        */}
-        {/* ---------------------------------------------------------------- */}
-        <View style={styles.cardsSection}>
-          {plans.map((plan) => {
-            const isSelected = selected === plan.id;
-            const IconComp = plan.icon;
+        {/* Plan cards */}
+        {plans.map((plan) => (
+          <PlanCard
+            key={plan.id}
+            plan={plan}
+            selected={selected === plan.id}
+            onPress={() => { setSelected(plan.id); setPixCode(null); }}
+            disabled={submitting}
+          />
+        ))}
 
-            return (
-              <TouchableOpacity
-                key={plan.id}
-                style={[
-                  styles.card,
-                  isSelected && { borderColor: plan.color, borderWidth: 2 },
-                ]}
-                onPress={() => setSelected(plan.id)}
-                activeOpacity={0.85}
-                disabled={submitting}
-              >
-                {/* Selection check */}
-                {isSelected && (
-                  <View style={styles.cardCheckIcon}>
-                    <CheckCircle size={22} color={plan.color} />
-                  </View>
-                )}
-
-                {/* Left accent bar */}
-                <View style={[styles.accentBar, { backgroundColor: plan.color }]} />
-
-                {/* Card body */}
-                <View style={styles.cardBody}>
-                  {/* Icon + title row */}
-                  <View style={styles.cardTitleRow}>
-                    <View
-                      style={[
-                        styles.iconCircle,
-                        { backgroundColor: plan.color + '1A' },
-                      ]}
-                    >
-                      <IconComp size={20} color={plan.color} />
-                    </View>
-                    <View style={styles.cardTitleTexts}>
-                      <Text style={styles.cardTitle}>{plan.title}</Text>
-                      <Text style={styles.cardSubtitle}>{plan.subtitle}</Text>
-                    </View>
-                  </View>
-
-                  {/* Price */}
-                  <View style={styles.priceRow}>
-                    <Text style={[styles.priceText, { color: plan.color }]}>
-                      {plan.price}
-                    </Text>
-                    <Text style={styles.priceLabel}> / {plan.priceLabel}</Text>
-                  </View>
-
-                  {/* Description */}
-                  <Text style={styles.cardDescription}>{plan.description}</Text>
-
-                  {/* Highlight badge */}
-                  <View
-                    style={[
-                      styles.highlightBadge,
-                      { backgroundColor: plan.color + '1A' },
-                    ]}
-                  >
-                    <Text style={[styles.highlightText, { color: plan.color }]}>
-                      {plan.highlight}
-                    </Text>
-                  </View>
-                </View>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* ---------------------------------------------------------------- */}
-        {/* Confirm button                                                    */}
-        {/* ---------------------------------------------------------------- */}
-        <TouchableOpacity
-          style={[
-            styles.confirmButton,
-            (!selected || submitting) && styles.confirmButtonDisabled,
-          ]}
-          onPress={handleConfirm}
-          disabled={!selected || submitting}
-          activeOpacity={0.85}
-        >
-          {submitting ? (
-            <ActivityIndicator color="#000000" size="small" />
-          ) : (
-            <>
-              <Text style={styles.confirmButtonText}>
-                {selectedPlan
-                  ? `Confirmar — ${selectedPlan.title}`
-                  : 'Selecione um plano'}
-              </Text>
-              {selected && <ChevronRight size={18} color="#000000" />}
-            </>
-          )}
-        </TouchableOpacity>
-
-        {/* ---------------------------------------------------------------- */}
-        {/* PIX section (shown only after a fixed plan is confirmed)          */}
-        {/* ---------------------------------------------------------------- */}
+        {/* PIX panel (only shown after confirming a fixed plan) */}
         {pixCode !== null && (
-          <View style={styles.pixSection}>
-            {/* Header */}
-            <View style={styles.pixHeader}>
-              <CheckCircle size={22} color={Colors.primary} />
-              <Text style={styles.pixHeaderText}>PIX gerado com sucesso!</Text>
-            </View>
-
-            {/* Amount */}
-            <Text style={styles.pixAmount}>
-              R$ {fmtBRL(pixAmount)}
-            </Text>
-
-            {/* Code box */}
-            <View style={styles.pixCodeBox}>
-              <Text style={styles.pixCodeLabel}>Código PIX — copia e cola</Text>
-              <Text style={styles.pixCode} selectable numberOfLines={4}>
-                {pixCode}
-              </Text>
-              <TouchableOpacity
-                style={styles.copyButton}
-                onPress={handleCopyPix}
-                activeOpacity={0.8}
-              >
-                <Copy size={15} color="#000000" />
-                <Text style={styles.copyButtonText}>Copiar código PIX</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Instructions */}
-            <View style={styles.pixInstructions}>
-              <Text style={styles.pixInstructionsTitle}>Como pagar:</Text>
-              <Text style={styles.pixInstructionsText}>
-                {'1. Copie o código PIX\n2. Abra seu banco e pague\n3. Aguarde a confirmação (pode levar alguns minutos)'}
-              </Text>
-            </View>
-
-            {/* Warning note */}
-            <View style={styles.pixNote}>
-              <Text style={styles.pixNoteText}>
-                Seu acesso será liberado após confirmação do pagamento pelo administrador.
-              </Text>
-            </View>
-
-            {/* Continue button */}
-            <TouchableOpacity
-              style={styles.continueButton}
-              onPress={onDone}
-              activeOpacity={0.85}
-            >
-              <CheckCircle size={18} color="#000000" />
-              <Text style={styles.continueButtonText}>Já paguei — Continuar</Text>
-            </TouchableOpacity>
-          </View>
+          <PixPanel code={pixCode} amount={pixAmount} onDone={onDone} />
         )}
 
-        <View style={styles.bottomSpacer} />
+        {/* CTA button */}
+        {pixCode === null && (
+          <TouchableOpacity
+            style={[s.btn, (!selected || submitting) && s.btnDisabled]}
+            onPress={handleConfirm}
+            disabled={!selected || submitting}
+            activeOpacity={0.85}
+          >
+            {submitting
+              ? <ActivityIndicator color="#fff" size="small" />
+              : <Text style={s.btnTxt}>
+                  {selected
+                    ? `Continuar com ${plans.find(p => p.id === selected)?.title}`
+                    : 'Selecione um plano'}
+                </Text>
+            }
+          </TouchableOpacity>
+        )}
+
+        <View style={{ height: 40 }} />
       </ScrollView>
     </View>
   );
 };
 
-// ---------------------------------------------------------------------------
-// Styles
-// ---------------------------------------------------------------------------
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#F7F8FA' },
+  center: { flex: 1, backgroundColor: '#F7F8FA', alignItems: 'center', justifyContent: 'center', gap: 14 },
+  loadingTxt: { fontSize: 14, fontFamily: 'Poppins_400Regular', color: '#999' },
+  scroll: { paddingHorizontal: 20, paddingTop: 64, paddingBottom: 24 },
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: '#F8F9FA',
-  },
-  loadingContainer: {
-    flex: 1,
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 16,
-  },
-  loadingText: {
-    ...Typography.body,
-    color: Colors.textMuted,
-  },
-  scrollContent: {
-    paddingHorizontal: 20,
-    paddingTop: 60,
+  header: { marginBottom: 32 },
+  eyebrow: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: '#999', marginBottom: 4 },
+  title: { fontSize: 26, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 8 },
+  subtitle: {
+    fontSize: 13, fontFamily: 'Poppins_400Regular', color: '#888', lineHeight: 20,
   },
 
-  // ---------- Header ----------
-  header: {
-    marginBottom: 28,
+  btn: {
+    backgroundColor: '#1A1A1A', borderRadius: 14,
+    paddingVertical: 17, alignItems: 'center', marginBottom: 14, marginTop: 6,
   },
-  headerEyebrow: {
-    fontSize: 14,
-    fontFamily: 'Poppins_400Regular',
-    color: Colors.textMuted,
-    marginBottom: 2,
-  },
-  headerTitle: {
-    fontSize: 28,
-    fontFamily: 'Poppins_700Bold',
-    color: Colors.textPrimary,
-    letterSpacing: 1,
-    marginBottom: 6,
-  },
-  headerSubtitle: {
-    fontSize: 15,
-    fontFamily: 'Poppins_400Regular',
-    color: Colors.textSecondary,
-    marginBottom: 20,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#E5E7EB',
-  },
-
-  // ---------- Cards ----------
-  cardsSection: {
-    marginBottom: 20,
-  },
-  card: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    flexDirection: 'row',
-    overflow: 'hidden',
-    // Shadow
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  accentBar: {
-    width: 4,
-    alignSelf: 'stretch',
-  },
-  cardBody: {
-    flex: 1,
-    padding: 16,
-  },
-  cardCheckIcon: {
-    position: 'absolute',
-    top: 12,
-    right: 12,
-    zIndex: 1,
-  },
-  cardTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  iconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 12,
-  },
-  cardTitleTexts: {
-    flex: 1,
-  },
-  cardTitle: {
-    fontSize: 18,
-    fontFamily: 'Poppins_700Bold',
-    color: Colors.textPrimary,
-    lineHeight: 22,
-  },
-  cardSubtitle: {
-    fontSize: 12,
-    fontFamily: 'Poppins_400Regular',
-    color: Colors.textMuted,
-  },
-  priceRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-    marginBottom: 8,
-  },
-  priceText: {
-    fontSize: 24,
-    fontFamily: 'Poppins_700Bold',
-  },
-  priceLabel: {
-    fontSize: 12,
-    fontFamily: 'Poppins_400Regular',
-    color: Colors.textMuted,
-  },
-  cardDescription: {
-    fontSize: 12,
-    fontFamily: 'Poppins_400Regular',
-    color: Colors.textMuted,
-    lineHeight: 18,
-    marginBottom: 10,
-  },
-  highlightBadge: {
-    alignSelf: 'flex-start',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-  },
-  highlightText: {
-    fontSize: 11,
-    fontFamily: 'Poppins_600SemiBold',
-  },
-
-  // ---------- Confirm button ----------
-  confirmButton: {
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.md,
-    paddingVertical: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    marginBottom: 24,
-  },
-  confirmButtonDisabled: {
-    backgroundColor: '#D1D5DB',
-  },
-  confirmButtonText: {
-    fontSize: 15,
-    fontFamily: 'Poppins_700Bold',
-    color: '#000000',
-  },
-
-  // ---------- PIX section ----------
-  pixSection: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: Colors.primary,
-    padding: 20,
-    marginBottom: 24,
-    // Shadow
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.07,
-    shadowRadius: 8,
-    elevation: 3,
-  },
-  pixHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginBottom: 8,
-  },
-  pixHeaderText: {
-    fontSize: 16,
-    fontFamily: 'Poppins_700Bold',
-    color: Colors.primary,
-  },
-  pixAmount: {
-    fontSize: 28,
-    fontFamily: 'Poppins_700Bold',
-    color: Colors.textPrimary,
-    marginBottom: 16,
-  },
-  pixCodeBox: {
-    backgroundColor: '#F8F9FA',
-    borderRadius: Radius.md,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    marginBottom: 16,
-  },
-  pixCodeLabel: {
-    fontSize: 11,
-    fontFamily: 'Poppins_600SemiBold',
-    color: Colors.textMuted,
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  pixCode: {
-    fontSize: 11,
-    fontFamily: 'monospace',
-    color: Colors.textPrimary,
-    backgroundColor: '#FFFFFF',
-    borderRadius: Radius.sm,
-    padding: 10,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E5E7EB',
-    lineHeight: 16,
-  },
-  copyButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.md,
-    paddingVertical: 12,
-  },
-  copyButtonText: {
-    fontSize: 14,
-    fontFamily: 'Poppins_700Bold',
-    color: '#000000',
-  },
-  pixInstructions: {
-    marginBottom: 14,
-  },
-  pixInstructionsTitle: {
-    fontSize: 13,
-    fontFamily: 'Poppins_700Bold',
-    color: Colors.textPrimary,
-    marginBottom: 6,
-  },
-  pixInstructionsText: {
-    fontSize: 13,
-    fontFamily: 'Poppins_400Regular',
-    color: Colors.textSecondary,
-    lineHeight: 22,
-  },
-  pixNote: {
-    backgroundColor: Colors.warning + '1A',
-    borderRadius: Radius.sm,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: Colors.warning + '40',
-    marginBottom: 16,
-  },
-  pixNoteText: {
-    fontSize: 12,
-    fontFamily: 'Poppins_500Medium',
-    color: '#92400E',
-    lineHeight: 18,
-  },
-  continueButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: Colors.primary,
-    borderRadius: Radius.md,
-    paddingVertical: 14,
-  },
-  continueButtonText: {
-    fontSize: 15,
-    fontFamily: 'Poppins_700Bold',
-    color: '#000000',
-  },
-
-  // ---------- Bottom spacer ----------
-  bottomSpacer: {
-    height: 40,
-  },
+  btnDisabled: { backgroundColor: '#D1D5DB' },
+  btnTxt: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: '#ffffff' },
 });
 
 export default PlanSelectionScreen;
