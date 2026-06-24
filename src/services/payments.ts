@@ -2,6 +2,8 @@ import { supabase } from '../lib/supabase';
 import { buildPixPayload } from '../lib/pix';
 import type { PaymentRow, SubscriptionRow, AppSettings } from '../types/db';
 
+export type PlanType = 'commission' | 'daily' | 'weekly' | 'monthly';
+
 export async function getSubscription(): Promise<SubscriptionRow | null> {
   const { data: u } = await supabase.auth.getUser();
   if (!u?.user) return null;
@@ -39,6 +41,57 @@ export async function buildSubscriptionPix(): Promise<{ code: string; amount: nu
     city: settings.platform_pix_city, amount: Number(sub.amount), txid: 'ASSINATURA',
   });
   return code ? { code, amount: Number(sub.amount) } : null;
+}
+
+/**
+ * Driver chooses their billing model. Commission = access imediato.
+ * Fixed plans (daily/weekly/monthly) = aguarda pagamento via PIX.
+ */
+export async function selectPlan(plan: PlanType): Promise<void> {
+  const { error } = await supabase.rpc('driver_select_plan', { p_plan: plan });
+  if (error) throw error;
+}
+
+/** Returns null if plan not yet chosen (driver needs PlanSelectionScreen). */
+export async function getDriverPlanType(): Promise<PlanType | null> {
+  const { data: u } = await supabase.auth.getUser();
+  if (!u?.user) return null;
+  const { data } = await supabase.from('drivers').select('plan_type').eq('id', u.user.id).single();
+  return (data?.plan_type as PlanType) ?? null;
+}
+
+/**
+ * Builds a PIX copia-e-cola code for the driver to pay their chosen fixed plan
+ * into the platform's PIX key.
+ */
+export async function buildPlanPix(plan: PlanType): Promise<{ code: string; amount: number }> {
+  const settings = await getAppSettings();
+  if (!settings?.platform_pix_key) throw new Error('Chave PIX não configurada');
+
+  let amount: number;
+  switch (plan) {
+    case 'daily':
+      amount = settings.plan_daily_price ?? settings.subscription_daily_amount;
+      break;
+    case 'weekly':
+      amount = settings.plan_weekly_price ?? settings.subscription_monthly_amount / 4;
+      break;
+    case 'monthly':
+      amount = settings.subscription_monthly_amount;
+      break;
+    default:
+      throw new Error('Plano inválido para geração de PIX');
+  }
+
+  const code = buildPixPayload({
+    key: settings.platform_pix_key,
+    name: settings.platform_pix_name,
+    city: settings.platform_pix_city,
+    amount,
+    txid: `PLANO${plan.toUpperCase().slice(0, 4)}`,
+  });
+  if (!code) throw new Error('Erro ao gerar código PIX');
+  return { code, amount };
 }
 
 /** PIX copia-e-cola for a passenger to pay the ride fare DIRECTLY to the driver. */

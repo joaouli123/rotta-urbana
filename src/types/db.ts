@@ -91,6 +91,10 @@ export interface AppSettings {
   platform_pix_name: string;
   platform_pix_city: string;
   subscription_portal_url: string | null;
+  // Extended plan fields (nullable — may not exist in older DB rows)
+  commission_pct: number | null;
+  plan_daily_price: number | null;
+  plan_weekly_price: number | null;
 }
 
 export interface PaymentRow {

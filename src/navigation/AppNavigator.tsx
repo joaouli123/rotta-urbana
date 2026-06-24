@@ -55,6 +55,10 @@ import ManagerDashboardScreen from '../screens/manager/ManagerDashboardScreen';
 import ManagerDriversScreen from '../screens/manager/ManagerDriversScreen';
 import ManagerSupportScreen from '../screens/manager/ManagerSupportScreen';
 
+// Plan selection (shown once after driver registration)
+import PlanSelectionScreen from '../screens/driver/PlanSelectionScreen';
+import { getDriverPlanType, type PlanType } from '../services/payments';
+
 // Sinop, MT center — fallback when GPS is unavailable. [lng, lat]
 const SINOP: [number, number] = [-55.5024, -11.8642];
 
@@ -364,6 +368,13 @@ type DScreen = 'driver_home' | 'ride_notification' | 'driver_active_ride' | 'dri
 const DriverFlow: React.FC = () => {
   const { signOut } = useAuth();
   const [screen, setScreen] = useState<DScreen>('driver_home');
+  const [planType, setPlanType] = useState<PlanType | null | 'loading'>('loading');
+
+  useEffect(() => {
+    getDriverPlanType()
+      .then((pt) => setPlanType(pt))
+      .catch(() => setPlanType(null));
+  }, []);
   const [online, setOnline] = useState(false);
   const [driverCoords, setDriverCoords] = useState<[number, number] | null>(null);
   const [pendingRequest, setPendingRequest] = useState<RideRow | null>(null);
@@ -533,6 +544,17 @@ const DriverFlow: React.FC = () => {
   };
 
   const openMenu = () => setScreen('driver_profile');
+
+  if (planType === 'loading') return <ActivityIndicator style={{ flex: 1 }} color={Colors.primary} />;
+  if (planType === null) {
+    return (
+      <PlanSelectionScreen
+        onDone={() => {
+          getDriverPlanType().then((pt) => setPlanType(pt ?? 'commission'));
+        }}
+      />
+    );
+  }
 
   switch (screen) {
     case 'driver_home':
