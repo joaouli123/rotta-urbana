@@ -16,7 +16,7 @@ import {
 import type { SubscriptionRow, AppSettings } from '../../types/db';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-function fmtBRL(v: number) { return `R$ ${Number(v).toFixed(2).replace('.', ',')}`; }
+function fmtBRL(v: number) { return 'R$ ' + Number(v).toFixed(2).replace('.', ','); }
 function fmtDate(iso?: string | null) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -50,7 +50,7 @@ function buildPlans(settings: AppSettings | null): PlanDef[] {
     {
       id: 'commission', title: 'Por Corrida', immediate: true,
       description: 'Sem mensalidade. Pague comissão só quando trabalhar.',
-      priceMain: `${pct}%`, priceUnit: 'por corrida',
+      priceMain: pct + '%', priceUnit: 'por corrida',
       badge: 'IMEDIATO', badgeColor: '#6DC228', accentColor: '#6DC228',
     },
     {
@@ -63,14 +63,14 @@ function buildPlans(settings: AppSettings | null): PlanDef[] {
       id: 'weekly', title: 'Semanal', immediate: false,
       description: 'Melhor custo-benefício para quem trabalha toda semana.',
       priceMain: fmtBRL(weekly), priceUnit: 'por semana',
-      priceStrike: `${fmtBRL(daily * 7)}/sem`,
+      priceStrike: fmtBRL(daily * 7) + '/sem',
       badge: 'POPULAR', badgeColor: '#7C3AED', accentColor: '#7C3AED',
     },
     {
       id: 'monthly', title: 'Mensal', immediate: false,
       description: 'Para motoristas dedicados. Maior economia no mês.',
       priceMain: fmtBRL(monthly), priceUnit: 'por mês',
-      priceStrike: `${fmtBRL(weekly * 4)}/mês`,
+      priceStrike: fmtBRL(weekly * 4) + '/mes',
       badge: 'ECONOMIA', badgeColor: '#F59E0B', accentColor: '#F59E0B',
     },
   ];
@@ -130,10 +130,10 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   const handleSelectPlan = (plan: PlanType) => {
     if (plan === currentPlan) { Alert.alert('Plano atual', 'Você já está neste plano.'); return; }
     Alert.alert(
-      `Trocar para ${PLAN_LABELS[plan]}`,
+      'Trocar para ' + PLAN_LABELS[plan],
       plan === 'commission'
         ? 'Você passará a pagar comissão por corrida, sem mensalidade fixa. Acesso imediato.'
-        : `Será gerado um código PIX para você pagar o plano ${PLAN_LABELS[plan]}. Continuar?`,
+        : 'Será gerado um código PIX para você pagar o plano ' + PLAN_LABELS[plan] + '. Continuar?',
       [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Confirmar', onPress: () => doSwitch(plan) },
@@ -240,7 +240,7 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
                 <Calendar size={13} color="#999" />
                 <Text style={s.dueTxt}>
                   Vencimento: {fmtDate(sub.due_date)}
-                  {!isOverdue && days !== null && days <= 7 ? `  ·  ${days}d` : ''}
+                  {!isOverdue && days !== null && days <= 7 ? ('  ·  ' + days + 'd') : ''}
                   {isOverdue ? '  ·  VENCIDO' : ''}
                 </Text>
               </View>
@@ -262,7 +262,7 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
             <Text style={[s.bannerTxt, { color: isOverdue ? Colors.danger : '#92400E' }]}>
               {isOverdue
                 ? 'Mensalidade vencida. Regularize para continuar usando o app.'
-                : `Mensalidade vence em ${days} dia${days !== 1 ? 's' : ''}.`}
+                : ('Mensalidade vence em ' + days + (days !== 1 ? ' dias.' : ' dia.'))}
             </Text>
           </View>
         )}

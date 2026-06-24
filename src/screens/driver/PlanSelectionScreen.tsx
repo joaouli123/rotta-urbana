@@ -43,8 +43,8 @@ function buildPlans(settings: AppSettings | null): PlanDef[] {
       id: 'commission',
       title: 'Por Corrida',
       description: 'Sem mensalidade fixa. Pague uma comissão só quando trabalhar.',
-      priceMain: `${pct}%`,
-      priceUnit: 'de comissão por corrida',
+      priceMain: pct + '%',
+      priceUnit: 'de comissao por corrida',
       badge: 'ACESSO IMEDIATO',
       badgeColor: '#6DC228',
       accentColor: '#6DC228',
@@ -54,7 +54,7 @@ function buildPlans(settings: AppSettings | null): PlanDef[] {
       id: 'daily',
       title: 'Diário',
       description: 'Pague hoje e trabalhe o dia todo sem limites.',
-      priceMain: `R$ ${fmtBRL(daily)}`,
+      priceMain: 'R$ ' + fmtBRL(daily),
       priceUnit: 'por dia',
       badgeColor: '#3B82F6',
       accentColor: '#3B82F6',
@@ -64,9 +64,9 @@ function buildPlans(settings: AppSettings | null): PlanDef[] {
       id: 'weekly',
       title: 'Semanal',
       description: 'Melhor custo-benefício para quem trabalha toda semana.',
-      priceMain: `R$ ${fmtBRL(weekly)}`,
+      priceMain: 'R$ ' + fmtBRL(weekly),
       priceUnit: 'por semana',
-      priceStrike: `R$ ${fmtBRL(daily * 7)}/semana`,
+      priceStrike: 'R$ ' + fmtBRL(daily * 7) + '/semana',
       badge: 'MAIS POPULAR',
       badgeColor: '#7C3AED',
       accentColor: '#7C3AED',
@@ -76,9 +76,9 @@ function buildPlans(settings: AppSettings | null): PlanDef[] {
       id: 'monthly',
       title: 'Mensal',
       description: 'Para motoristas dedicados. Maior economia no mês.',
-      priceMain: `R$ ${fmtBRL(monthly)}`,
-      priceUnit: 'por mês',
-      priceStrike: `R$ ${fmtBRL(weekly * 4)}/mês`,
+      priceMain: 'R$ ' + fmtBRL(monthly),
+      priceUnit: 'por mes',
+      priceStrike: 'R$ ' + fmtBRL(weekly * 4) + '/mes',
       badge: 'MAIOR ECONOMIA',
       badgeColor: '#F59E0B',
       accentColor: '#F59E0B',
@@ -371,7 +371,7 @@ const PlanSelectionScreen: React.FC<PlanSelectionScreenProps> = ({ onDone }) => 
               ? <ActivityIndicator color="#fff" size="small" />
               : <Text style={s.btnTxt}>
                   {selected
-                    ? `Continuar com ${plans.find(p => p.id === selected)?.title}`
+                    ? ('Continuar com ' + (plans.find(p => p.id === selected)?.title ?? ''))
                     : 'Selecione um plano'}
                 </Text>
             }
