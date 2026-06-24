@@ -3,8 +3,8 @@ import {
   View, Text, StyleSheet, ScrollView, KeyboardAvoidingView, Platform,
   TouchableOpacity, StatusBar, Alert, TextInput, Dimensions,
 } from 'react-native';
-import Svg, { Path, Polygon, Circle, G } from 'react-native-svg';
-import { ChevronLeft, Eye, EyeOff, ShieldCheck } from 'lucide-react-native';
+import Svg, { Path } from 'react-native-svg';
+import { ChevronLeft, Eye, EyeOff, ShieldCheck, User, Mail, Phone, Lock } from 'lucide-react-native';
 import { Colors } from '../../constants';
 import { useAuth } from '../../contexts/AuthContext';
 import { friendlyError } from '../../lib/errors';
@@ -15,47 +15,22 @@ const { width: W } = Dimensions.get('window');
 const RU_GREEN = '#76C442';
 const DARK = '#131313';
 
-// ── Fundo geométrico ──────────────────────────────────────────────────────────
-const GeometricBg: React.FC<{ height: number }> = ({ height }) => (
-  <Svg width={W} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
-    <G opacity={0.18}>
-      {[0, 56, 112, 168, 224, 280, 336].map((x) =>
-        [0, 52, 104, 156].map((y) => (
-          <Polygon key={`u${x}${y}`} points={`${x + 20},${y} ${x},${y + 34} ${x + 40},${y + 34}`} fill="#ffffff" />
-        ))
-      )}
-      {[28, 84, 140, 196, 252, 308].map((x) =>
-        [26, 78, 130].map((y) => (
-          <Polygon key={`d${x}${y}`} points={`${x},${y} ${x + 40},${y} ${x + 20},${y + 34}`} fill="#ffffff" />
-        ))
-      )}
-      {[14, 70, 126, 182, 238, 294, 350].map((x) =>
-        [13, 65, 117, 169].map((y) => (
-          <Circle key={`c${x}${y}`} cx={x} cy={y} r={5} fill="#ffffff" />
-        ))
-      )}
-      {[42, 98, 154, 210, 266, 322].map((x) =>
-        [39, 91, 143].map((y) => (
-          <Polygon key={`l${x}${y}`} points={`${x + 10},${y} ${x + 20},${y + 10} ${x + 10},${y + 20} ${x},${y + 10}`} fill="#ffffff" />
-        ))
-      )}
-    </G>
-  </Svg>
-);
-
-// ── Onda com borda verde ──────────────────────────────────────────────────────
-const WAVE_H = 54;
-const WAVE_PATH = `M0,${WAVE_H} Q${W / 2},0 ${W},${WAVE_H} L${W},${WAVE_H} L0,${WAVE_H} Z`;
-const BORDER_PATH = `M0,${WAVE_H} Q${W / 2},0 ${W},${WAVE_H}`;
+// ── Onda branca com borda verde ───────────────────────────────────────────────
+const WAVE_H = 56;
+const _HW    = W / 2;
+const _FILL   = 'M0,' + WAVE_H + ' Q' + _HW + ',0 ' + W + ',' + WAVE_H + ' L' + W + ',' + WAVE_H + ' L0,' + WAVE_H + ' Z';
+const _BORDER = 'M0,' + WAVE_H + ' Q' + _HW + ',0 ' + W + ',' + WAVE_H;
 
 const WaveDivider: React.FC = () => (
   <View style={{ marginTop: -1 }}>
     <Svg width={W} height={WAVE_H}>
-      <Path d={WAVE_PATH} fill="#ffffff" />
-      <Path d={BORDER_PATH} fill="none" stroke={RU_GREEN} strokeWidth={3} />
+      <Path d={_FILL}   fill="#ffffff" />
+      <Path d={_BORDER} fill="none" stroke={RU_GREEN} strokeWidth={3.5} />
     </Svg>
   </View>
 );
+
+
 
 // ── Campo de input simples ────────────────────────────────────────────────────
 interface SimpleInputProps {
@@ -66,16 +41,18 @@ interface SimpleInputProps {
   keyboardType?: 'default' | 'email-address' | 'phone-pad';
   autoCapitalize?: 'none' | 'words' | 'sentences';
   secureTextEntry?: boolean;
+  leftIcon?: React.ReactNode;
   rightEl?: React.ReactNode;
 }
 
 const SimpleInput: React.FC<SimpleInputProps> = ({
   label, value, onChangeText, placeholder, keyboardType = 'default',
-  autoCapitalize = 'none', secureTextEntry, rightEl,
+  autoCapitalize = 'none', secureTextEntry, leftIcon, rightEl,
 }) => (
   <View style={fi.wrap}>
     <Text style={fi.label}>{label}</Text>
     <View style={fi.row}>
+      {leftIcon && <View style={fi.leftIcon}>{leftIcon}</View>}
       <TextInput
         style={fi.input}
         value={value}
@@ -97,6 +74,7 @@ const fi = StyleSheet.create({
   wrap: { marginBottom: 18 },
   label: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888', marginBottom: 4 },
   row: { flexDirection: 'row', alignItems: 'center' },
+  leftIcon: { marginRight: 8, justifyContent: 'center', alignItems: 'center' },
   input: { flex: 1, fontSize: 15, fontFamily: 'Poppins_400Regular', color: '#1A1A1A', paddingVertical: 8 },
   right: { paddingLeft: 8 },
   line: { height: 1, backgroundColor: '#E0E0E0', marginTop: 2 },
@@ -114,7 +92,7 @@ interface RegisterPassengerScreenProps {
   onBack: () => void;
 }
 
-const HEADER_H = 160;
+const HEADER_H = 120;
 
 const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBack }) => {
   const { signUp } = useAuth();
@@ -158,7 +136,6 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
 
         {/* ── Header escuro ── */}
         <View style={[s.header, { paddingTop: insets.top + 4 }]}>
-          <GeometricBg height={HEADER_H} />
           {/* Barra de topo */}
           <View style={s.topBar}>
             <TouchableOpacity onPress={onBack} style={s.backBtn} activeOpacity={0.8}>
@@ -185,6 +162,7 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
             onChangeText={setName}
             placeholder="Seu nome"
             autoCapitalize="words"
+            leftIcon={<User size={18} color="#999" />}
           />
           <SimpleInput
             label="E-mail"
@@ -192,6 +170,7 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
             onChangeText={setEmail}
             placeholder="seu@email.com"
             keyboardType="email-address"
+            leftIcon={<Mail size={18} color="#999" />}
           />
           <SimpleInput
             label="Telefone / WhatsApp"
@@ -199,6 +178,7 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
             onChangeText={setPhone}
             placeholder="(65) 9 9999-9999"
             keyboardType="phone-pad"
+            leftIcon={<Phone size={18} color="#999" />}
           />
           <SimpleInput
             label="Senha"
@@ -206,6 +186,7 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
             onChangeText={setPassword}
             placeholder="Mínimo 8 caracteres"
             secureTextEntry={!showPw}
+            leftIcon={<Lock size={18} color="#999" />}
             rightEl={
               <TouchableOpacity onPress={() => setShowPw((v) => !v)} activeOpacity={0.7}>
                 {showPw ? <EyeOff size={18} color="#999" /> : <Eye size={18} color="#999" />}
@@ -218,6 +199,7 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
             onChangeText={setConfirmPassword}
             placeholder="Repita sua senha"
             secureTextEntry={!showConfirm}
+            leftIcon={<Lock size={18} color="#999" />}
             rightEl={
               <TouchableOpacity onPress={() => setShowConfirm((v) => !v)} activeOpacity={0.7}>
                 {showConfirm ? <EyeOff size={18} color="#999" /> : <Eye size={18} color="#999" />}
@@ -291,7 +273,7 @@ const s = StyleSheet.create({
   },
   topTitle: { fontSize: 18, fontFamily: 'Poppins_700Bold', color: '#ffffff' },
   sheet: { flex: 1, backgroundColor: '#ffffff' },
-  sheetContent: { paddingHorizontal: 32, paddingTop: 16, paddingBottom: 48 },
+  sheetContent: { paddingHorizontal: 28, paddingTop: 24, paddingBottom: 48 },
   genderLabel: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888', marginBottom: 10 },
   genderRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
   genderChip: {

@@ -3,8 +3,8 @@ import {
   View, Text, Image, StyleSheet, ScrollView, TouchableOpacity,
   KeyboardAvoidingView, Platform, StatusBar, Alert, TextInput, Dimensions,
 } from 'react-native';
-import Svg, { Path, Polygon, Circle, G } from 'react-native-svg';
-import { Eye, EyeOff } from 'lucide-react-native';
+import Svg, { Path } from 'react-native-svg';
+import { Eye, EyeOff, User, Car, Mail, Lock, ChevronRight } from 'lucide-react-native';
 import { Colors } from '../../constants';
 import { useAuth } from '../../contexts/AuthContext';
 import { friendlyError } from '../../lib/errors';
@@ -14,66 +14,22 @@ const { width: W } = Dimensions.get('window');
 const RU_GREEN = '#76C442';
 const DARK = '#131313';
 
-// ── Fundo geométrico do header ────────────────────────────────────────────────
-const GeometricBg: React.FC<{ height: number }> = ({ height }) => (
-  <Svg width={W} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
-    {/* Grade de formas geométricas repetidas, tom sutil sobre o fundo escuro */}
-    <G opacity={0.18}>
-      {/* Triângulos apontando para cima */}
-      {[0, 56, 112, 168, 224, 280, 336].map((x) =>
-        [0, 52, 104, 156, 208].map((y) => (
-          <Polygon
-            key={`u${x}${y}`}
-            points={`${x + 20},${y} ${x},${y + 34} ${x + 40},${y + 34}`}
-            fill="#ffffff"
-          />
-        ))
-      )}
-      {/* Triângulos apontando para baixo (offset) */}
-      {[28, 84, 140, 196, 252, 308].map((x) =>
-        [26, 78, 130, 182].map((y) => (
-          <Polygon
-            key={`d${x}${y}`}
-            points={`${x},${y} ${x + 40},${y} ${x + 20},${y + 34}`}
-            fill="#ffffff"
-          />
-        ))
-      )}
-      {/* Círculos */}
-      {[14, 70, 126, 182, 238, 294, 350].map((x) =>
-        [13, 65, 117, 169, 221].map((y) => (
-          <Circle key={`c${x}${y}`} cx={x} cy={y} r={5} fill="#ffffff" />
-        ))
-      )}
-      {/* Losangos */}
-      {[42, 98, 154, 210, 266, 322].map((x) =>
-        [39, 91, 143, 195].map((y) => (
-          <Polygon
-            key={`l${x}${y}`}
-            points={`${x + 10},${y} ${x + 20},${y + 10} ${x + 10},${y + 20} ${x},${y + 10}`}
-            fill="#ffffff"
-          />
-        ))
-      )}
-    </G>
-  </Svg>
-);
-
 // ── Onda branca com borda verde ───────────────────────────────────────────────
-const WAVE_H = 54;
-const WAVE_PATH = `M0,${WAVE_H} Q${W / 2},0 ${W},${WAVE_H} L${W},${WAVE_H} L0,${WAVE_H} Z`;
-const BORDER_PATH = `M0,${WAVE_H} Q${W / 2},0 ${W},${WAVE_H}`;
+const WAVE_H = 56;
+const _HW = W / 2;
+const _FILL   = 'M0,' + WAVE_H + ' Q' + _HW + ',0 ' + W + ',' + WAVE_H + ' L' + W + ',' + WAVE_H + ' L0,' + WAVE_H + ' Z';
+const _BORDER = 'M0,' + WAVE_H + ' Q' + _HW + ',0 ' + W + ',' + WAVE_H;
 
 const WaveDivider: React.FC = () => (
   <View style={{ marginTop: -1 }}>
     <Svg width={W} height={WAVE_H}>
-      {/* Fill branco */}
-      <Path d={WAVE_PATH} fill="#ffffff" />
-      {/* Borda verde */}
-      <Path d={BORDER_PATH} fill="none" stroke={RU_GREEN} strokeWidth={3} />
+      <Path d={_FILL}   fill="#ffffff" />
+      <Path d={_BORDER} fill="none" stroke={RU_GREEN} strokeWidth={3.5} />
     </Svg>
   </View>
 );
+
+
 
 // ── Campo de input simples ────────────────────────────────────────────────────
 interface SimpleInputProps {
@@ -84,16 +40,18 @@ interface SimpleInputProps {
   keyboardType?: 'default' | 'email-address' | 'numeric';
   autoCapitalize?: 'none' | 'words' | 'sentences';
   secureTextEntry?: boolean;
+  leftIcon?: React.ReactNode;
   rightEl?: React.ReactNode;
 }
 
 const SimpleInput: React.FC<SimpleInputProps> = ({
   label, value, onChangeText, placeholder, keyboardType = 'default',
-  autoCapitalize = 'none', secureTextEntry, rightEl,
+  autoCapitalize = 'none', secureTextEntry, leftIcon, rightEl,
 }) => (
   <View style={fi.wrap}>
     <Text style={fi.label}>{label}</Text>
     <View style={fi.row}>
+      {leftIcon && <View style={fi.leftIcon}>{leftIcon}</View>}
       <TextInput
         style={fi.input}
         value={value}
@@ -115,6 +73,7 @@ const fi = StyleSheet.create({
   wrap: { marginBottom: 20 },
   label: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888', marginBottom: 4 },
   row: { flexDirection: 'row', alignItems: 'center' },
+  leftIcon: { marginRight: 8, justifyContent: 'center', alignItems: 'center' },
   input: { flex: 1, fontSize: 15, fontFamily: 'Poppins_400Regular', color: '#1A1A1A', paddingVertical: 8 },
   right: { paddingLeft: 8 },
   line: { height: 1, backgroundColor: '#E0E0E0', marginTop: 2 },
@@ -126,7 +85,7 @@ interface LoginScreenProps {
   onRegisterDriver: () => void;
 }
 
-const HEADER_H = 270;
+const HEADER_H = 200;
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver }) => {
   const { signIn } = useAuth();
@@ -150,8 +109,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
       <View style={{ flex: 1, backgroundColor: DARK }}>
 
         {/* ── Header escuro ── */}
-        <View style={[s.header, { paddingTop: insets.top + 20 }]}>
-          <GeometricBg height={HEADER_H} />
+        <View style={[s.header, { paddingTop: insets.top }]}>
           <Image
             source={require('../../../assets/logo.png')}
             style={s.logo}
@@ -169,6 +127,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          <Text style={s.sectionLabel}>Bem-vindo de volta</Text>
           <Text style={s.title}>Login</Text>
 
           <SimpleInput
@@ -177,6 +136,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
             onChangeText={setEmail}
             placeholder="seu@email.com"
             keyboardType="email-address"
+            leftIcon={<Mail size={18} color="#999" />}
           />
           <SimpleInput
             label="Senha"
@@ -184,6 +144,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
             onChangeText={setPassword}
             placeholder="••••••••"
             secureTextEntry={!showPw}
+            leftIcon={<Lock size={18} color="#999" />}
             rightEl={
               <TouchableOpacity onPress={() => setShowPw((v) => !v)} activeOpacity={0.7}>
                 {showPw
@@ -213,13 +174,19 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
           <Text style={s.registerLabel}>Primeira vez aqui?</Text>
 
           <TouchableOpacity style={s.registerCard} onPress={onRegister} activeOpacity={0.85}>
-            <View style={s.dot} />
-            <Text style={s.registerCardTxt}>Criar conta de Passageiro</Text>
+            <View style={s.cardLeft}>
+              <View style={s.cardIcon}><User size={17} color={RU_GREEN} strokeWidth={2} /></View>
+              <Text style={s.registerCardTxt}>Criar conta de Passageiro</Text>
+            </View>
+            <ChevronRight size={16} color="#C8C8C8" strokeWidth={2} />
           </TouchableOpacity>
 
           <TouchableOpacity style={s.registerCard} onPress={onRegisterDriver} activeOpacity={0.85}>
-            <View style={s.dot} />
-            <Text style={s.registerCardTxt}>Quero ser Motorista</Text>
+            <View style={s.cardLeft}>
+              <View style={s.cardIcon}><Car size={17} color={RU_GREEN} strokeWidth={2} /></View>
+              <Text style={s.registerCardTxt}>Quero ser Motorista</Text>
+            </View>
+            <ChevronRight size={16} color="#C8C8C8" strokeWidth={2} />
           </TouchableOpacity>
         </ScrollView>
 
@@ -236,13 +203,17 @@ const s = StyleSheet.create({
     justifyContent: 'center',
   },
   logo: {
-    width: W * 0.6,
-    height: 110,
+    width: W * 0.5,
+    height: 80,
   },
   sheet: { flex: 1, backgroundColor: '#ffffff' },
-  sheetContent: { paddingHorizontal: 32, paddingTop: 8, paddingBottom: 48 },
+  sheetContent: { paddingHorizontal: 28, paddingTop: 28, paddingBottom: 48 },
+  sectionLabel: {
+    fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#AAAAAA',
+    letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 6,
+  },
   title: {
-    fontSize: 26, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 28,
+    fontSize: 28, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 28,
   },
   forgotBtn: { alignSelf: 'flex-end', marginBottom: 24, marginTop: -8 },
   forgotTxt: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888' },
@@ -259,12 +230,16 @@ const s = StyleSheet.create({
     textAlign: 'center', marginBottom: 12,
   },
   registerCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    borderWidth: 1, borderColor: '#E8E8E8', borderRadius: 12,
-    paddingHorizontal: 18, paddingVertical: 14, marginBottom: 10,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderWidth: 1, borderColor: '#EEEEEE', borderRadius: 14,
+    paddingHorizontal: 16, paddingVertical: 14, marginBottom: 10,
     backgroundColor: '#FAFAFA',
   },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: RU_GREEN },
+  cardLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  cardIcon: {
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: '#F0FAE8', alignItems: 'center', justifyContent: 'center',
+  },
   registerCardTxt: { fontSize: 14, fontFamily: 'Poppins_500Medium', color: '#1A1A1A' },
 });
 
