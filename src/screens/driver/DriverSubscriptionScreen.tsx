@@ -1,375 +1,456 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  StatusBar, ActivityIndicator, Alert, Share, Linking,
+  StatusBar, ActivityIndicator, Alert, Clipboard,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  ChevronLeft, CreditCard, CheckCircle, AlertCircle, Clock,
-  Copy, RefreshCw, Calendar, DollarSign, ExternalLink, ShieldCheck,
+  ChevronLeft, CheckCircle, AlertCircle, Clock, RefreshCw,
+  Check, Copy, Calendar, Zap,
 } from 'lucide-react-native';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Colors, Radius, Typography } from '../../constants';
+import { Colors, Radius } from '../../constants';
 import {
-  getSubscription, getPayments, buildSubscriptionPix, getAppSettings, setSubscriptionPlan,
+  getSubscription, getAppSettings, selectPlan, buildPlanPix,
+  getDriverPlanType, type PlanType,
 } from '../../services/payments';
-import type { SubscriptionRow, PaymentRow, AppSettings } from '../../types/db';
+import type { SubscriptionRow, AppSettings } from '../../types/db';
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function fmtBRL(v: number) { return `R$ ${Number(v).toFixed(2).replace('.', ',')}`; }
+function fmtDate(iso?: string | null) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+function daysUntil(iso?: string | null): number | null {
+  if (!iso) return null;
+  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
+}
+
+// ── Plan definitions ──────────────────────────────────────────────────────────
+interface PlanDef {
+  id: PlanType;
+  title: string;
+  description: string;
+  priceMain: string;
+  priceUnit: string;
+  priceStrike?: string;
+  badge?: string;
+  badgeColor: string;
+  accentColor: string;
+  immediate: boolean;
+}
+
+function buildPlans(settings: AppSettings | null): PlanDef[] {
+  const daily   = settings?.plan_daily_price   ?? settings?.subscription_daily_amount   ?? 10;
+  const weekly  = settings?.plan_weekly_price  ?? (settings?.subscription_monthly_amount ?? 120) / 4;
+  const monthly = settings?.subscription_monthly_amount ?? 120;
+  const pct     = settings?.commission_pct ?? 15;
+
+  return [
+    {
+      id: 'commission', title: 'Por Corrida', immediate: true,
+      description: 'Sem mensalidade. Pague comissão só quando trabalhar.',
+      priceMain: `${pct}%`, priceUnit: 'por corrida',
+      badge: 'IMEDIATO', badgeColor: '#6DC228', accentColor: '#6DC228',
+    },
+    {
+      id: 'daily', title: 'Diário', immediate: false,
+      description: 'Pague hoje e trabalhe sem limites o dia todo.',
+      priceMain: fmtBRL(daily), priceUnit: 'por dia',
+      badgeColor: '#3B82F6', accentColor: '#3B82F6',
+    },
+    {
+      id: 'weekly', title: 'Semanal', immediate: false,
+      description: 'Melhor custo-benefício para quem trabalha toda semana.',
+      priceMain: fmtBRL(weekly), priceUnit: 'por semana',
+      priceStrike: `${fmtBRL(daily * 7)}/sem`,
+      badge: 'POPULAR', badgeColor: '#7C3AED', accentColor: '#7C3AED',
+    },
+    {
+      id: 'monthly', title: 'Mensal', immediate: false,
+      description: 'Para motoristas dedicados. Maior economia no mês.',
+      priceMain: fmtBRL(monthly), priceUnit: 'por mês',
+      priceStrike: `${fmtBRL(weekly * 4)}/mês`,
+      badge: 'ECONOMIA', badgeColor: '#F59E0B', accentColor: '#F59E0B',
+    },
+  ];
+}
+
+const PLAN_LABELS: Record<PlanType, string> = {
+  commission: 'Por Corrida', daily: 'Diário', weekly: 'Semanal', monthly: 'Mensal',
+};
+
+const STATUS_CONFIG: Record<string, { label: string; color: string; Icon: React.ElementType }> = {
+  active:    { label: 'Ativo',    color: Colors.success, Icon: CheckCircle },
+  expired:   { label: 'Vencido', color: Colors.danger,  Icon: AlertCircle },
+  suspended: { label: 'Suspenso',color: Colors.warning,  Icon: Clock },
+  inactive:  { label: 'Inativo', color: Colors.textMuted, Icon: AlertCircle },
+};
+
+// ── Props ─────────────────────────────────────────────────────────────────────
 interface DriverSubscriptionScreenProps {
   onBack: () => void;
 }
 
-function fmtDate(iso?: string | null): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
-}
-function fmtPrice(val?: number): string {
-  if (!val) return '—';
-  return `R$ ${Number(val).toFixed(2).replace('.', ',')}`;
-}
-function daysUntil(iso?: string | null): number | null {
-  if (!iso) return null;
-  const diff = new Date(iso).getTime() - Date.now();
-  return Math.ceil(diff / 86_400_000);
-}
-
-const STATUS_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  active:    { label: 'Ativa',    color: Colors.success,   icon: <CheckCircle size={16} color={Colors.success} /> },
-  expired:   { label: 'Vencida',  color: Colors.danger,    icon: <AlertCircle size={16} color={Colors.danger} /> },
-  suspended: { label: 'Suspensa', color: Colors.warning,   icon: <Clock size={16} color={Colors.warning} /> },
-  inactive:  { label: 'Inativa',  color: Colors.textMuted, icon: <AlertCircle size={16} color={Colors.textMuted} /> },
-};
-
-const PAY_STATUS_CONFIG: Record<string, { label: string; color: string }> = {
-  approved:  { label: 'Aprovado',  color: Colors.success },
-  pending:   { label: 'Pendente',  color: Colors.warning },
-  rejected:  { label: 'Rejeitado', color: Colors.danger },
-  refunded:  { label: 'Reembolso', color: Colors.info },
-  cancelled: { label: 'Cancelado', color: Colors.textMuted },
-};
-
+// ── Component ─────────────────────────────────────────────────────────────────
 const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onBack }) => {
   const insets = useSafeAreaInsets();
-  const [sub, setSub] = useState<SubscriptionRow | null>(null);
-  const [payments, setPayments] = useState<PaymentRow[]>([]);
+
+  const [sub, setSub]           = useState<SubscriptionRow | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [pixCode, setPixCode] = useState<string | null>(null);
-  const [pixAmount, setPixAmount] = useState(0);
-  const [generatingPix, setGeneratingPix] = useState(false);
-  const [changingPlan, setChangingPlan] = useState(false);
+  const [currentPlan, setCurrentPlan] = useState<PlanType | null>(null);
+  const [loading, setLoading]   = useState(true);
+
+  // Plan-change flow
+  const [pendingPlan, setPendingPlan]   = useState<PlanType | null>(null);
+  const [switching, setSwitching]       = useState(false);
+  const [pixCode, setPixCode]           = useState<string | null>(null);
+  const [pixAmount, setPixAmount]       = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, p, cfg] = await Promise.all([
+      const [s, cfg, pt] = await Promise.all([
         getSubscription(),
-        getPayments(20),
         getAppSettings(),
+        getDriverPlanType(),
       ]);
       setSub(s);
-      setPayments(p);
       setSettings(cfg);
+      setCurrentPlan(pt);
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  const handleGeneratePix = async () => {
-    setGeneratingPix(true);
-    try {
-      const res = await buildSubscriptionPix();
-      if (!res) { Alert.alert('Erro', 'Não foi possível gerar o PIX.'); return; }
-      setPixCode(res.code);
-      setPixAmount(res.amount);
-    } catch (e: any) {
-      Alert.alert('Erro', e?.message ?? 'Erro ao gerar PIX');
-    } finally {
-      setGeneratingPix(false);
-    }
-  };
+  const plans = buildPlans(settings);
 
-  const copyPix = async () => {
-    if (!pixCode) return;
-    try {
-      await Share.share({ message: pixCode });
-    } catch { /* user dismissed */ }
-  };
-
-  // Subscription is paid OUTSIDE the app (external web portal) to stay clear of
-  // the stores' in-app subscription rules.
-  const openPortal = () => {
-    const url = settings?.subscription_portal_url;
-    if (!url) { Alert.alert('Portal indisponível', 'O portal de pagamento ainda não foi configurado. Use o PIX abaixo ou fale com o suporte.'); return; }
-    Linking.openURL(url).catch(() => Alert.alert('Erro', 'Não foi possível abrir o portal de pagamento.'));
-  };
-
-  const handleChangePlan = (plan: 'daily' | 'monthly') => {
+  // ── Plan change ──────────────────────────────────────────────────────────────
+  const handleSelectPlan = (plan: PlanType) => {
+    if (plan === currentPlan) { Alert.alert('Plano atual', 'Você já está neste plano.'); return; }
     Alert.alert(
-      'Trocar plano',
-      `Deseja mudar para o plano ${plan === 'daily' ? 'diário' : 'mensal'}?`,
+      `Trocar para ${PLAN_LABELS[plan]}`,
+      plan === 'commission'
+        ? 'Você passará a pagar comissão por corrida, sem mensalidade fixa. Acesso imediato.'
+        : `Será gerado um código PIX para você pagar o plano ${PLAN_LABELS[plan]}. Continuar?`,
       [
         { text: 'Cancelar', style: 'cancel' },
-        { text: 'Confirmar', onPress: async () => {
-          setChangingPlan(true);
-          try {
-            const updated = await setSubscriptionPlan(plan);
-            setSub(updated);
-            Alert.alert('Plano atualizado!', `Agora você está no plano ${plan === 'daily' ? 'diário' : 'mensal'}.`);
-          } catch (e: any) {
-            Alert.alert('Erro', e?.message ?? 'Erro ao trocar plano');
-          } finally {
-            setChangingPlan(false);
-          }
-        }},
-      ]
+        { text: 'Confirmar', onPress: () => doSwitch(plan) },
+      ],
     );
   };
 
-  const stConfig = sub ? (STATUS_CONFIG[sub.status] ?? STATUS_CONFIG.inactive) : STATUS_CONFIG.inactive;
-  const days = daysUntil(sub?.due_date);
-  const isOverdue = days !== null && days < 0;
-  const isDueSoon = days !== null && days <= 3 && days >= 0;
+  const doSwitch = async (plan: PlanType) => {
+    setSwitching(true);
+    setPendingPlan(plan);
+    setPixCode(null);
+    try {
+      await selectPlan(plan);
+      setCurrentPlan(plan);
+      if (plan === 'commission') {
+        Alert.alert('Plano atualizado!', 'Você está no plano Por Corrida. Acesso imediato.');
+        setPendingPlan(null);
+        load();
+        return;
+      }
+      const result = await buildPlanPix(plan);
+      setPixCode(result.code);
+      setPixAmount(result.amount);
+    } catch (err: unknown) {
+      Alert.alert('Erro', err instanceof Error ? err.message : 'Tente novamente.');
+      setPendingPlan(null);
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  const copyPix = () => {
+    if (!pixCode) return;
+    Clipboard.setString(pixCode);
+    Alert.alert('Copiado!', 'Código PIX copiado para a área de transferência.');
+  };
+
+  const dismissPix = () => {
+    setPixCode(null);
+    setPendingPlan(null);
+    load();
+  };
+
+  // ── Status card helpers ──────────────────────────────────────────────────────
+  const stKey   = sub?.status ?? 'inactive';
+  const stConf  = STATUS_CONFIG[stKey] ?? STATUS_CONFIG.inactive;
+  const days    = daysUntil(sub?.due_date);
+  const isOverdue  = days !== null && days < 0;
+  const isDueSoon  = days !== null && days <= 3 && days >= 0;
+
+  // ── Loading ──────────────────────────────────────────────────────────────────
+  if (loading) {
+    return (
+      <View style={s.center}>
+        <StatusBar barStyle="dark-content" />
+        <ActivityIndicator color={Colors.primary} size="large" />
+      </View>
+    );
+  }
 
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="light-content" />
+    <View style={s.root}>
+      <StatusBar barStyle="dark-content" />
 
-      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn}>
-          <ChevronLeft size={24} color={Colors.textPrimary} />
+      {/* Top bar */}
+      <View style={[s.topBar, { paddingTop: insets.top + 8 }]}>
+        <TouchableOpacity onPress={onBack} style={s.iconBtn}>
+          <ChevronLeft size={24} color="#1A1A1A" />
         </TouchableOpacity>
-        <Text style={styles.topTitle}>Mensalidade</Text>
-        <TouchableOpacity onPress={load} style={styles.backBtn}>
-          <RefreshCw size={18} color={Colors.textSecondary} />
+        <Text style={s.topTitle}>Plano & Mensalidade</Text>
+        <TouchableOpacity onPress={load} style={s.iconBtn}>
+          <RefreshCw size={17} color="#999" />
         </TouchableOpacity>
       </View>
 
-      {loading ? (
-        <View style={styles.center}><ActivityIndicator color={Colors.primary} size="large" /></View>
-      ) : (
-        <ScrollView
-          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
-          showsVerticalScrollIndicator={false}
-        >
-          {/* Status card */}
-          <LinearGradient
-            colors={isOverdue ? [Colors.danger, Colors.dangerLight] : [Colors.darkElevated, Colors.dark]}
-            style={styles.statusCard}
-          >
-            <View style={styles.statusTop}>
-              <View style={styles.statusPill}>
-                {stConfig.icon}
-                <Text style={[styles.statusPillTxt, { color: stConfig.color }]}>{stConfig.label}</Text>
-              </View>
-              <Text style={styles.planTxt}>
-                Plano {sub?.status ? (settings?.default_plan === 'daily' ? 'diário' : 'mensal') : '—'}
+      <ScrollView
+        contentContainerStyle={[s.scroll, { paddingBottom: insets.bottom + 40 }]}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── Status card ── */}
+        <View style={[s.statusCard, isOverdue && { borderColor: Colors.danger + '60' }]}>
+          {/* Row: plan + status pill */}
+          <View style={s.statusTop}>
+            <View>
+              <Text style={s.statusLabel}>Plano atual</Text>
+              <Text style={s.planName}>
+                {currentPlan ? PLAN_LABELS[currentPlan] : '—'}
               </Text>
             </View>
-
-            <Text style={styles.amountLarge}>{fmtPrice(sub?.amount)}</Text>
-            <Text style={styles.amountSub}>valor da assinatura</Text>
-
-            <View style={styles.dueDateRow}>
-              <Calendar size={14} color="rgba(255,255,255,0.7)" />
-              <Text style={styles.dueDateTxt}>
-                Próximo vencimento: {fmtDate(sub?.due_date)}
-                {days !== null && !isOverdue && days <= 7 ? ` (em ${days} dia${days !== 1 ? 's' : ''})` : ''}
-                {isOverdue ? ' (VENCIDA)' : ''}
-              </Text>
+            <View style={[s.statusPill, { backgroundColor: stConf.color + '18', borderColor: stConf.color + '44' }]}>
+              <stConf.Icon size={13} color={stConf.color} />
+              <Text style={[s.statusPillTxt, { color: stConf.color }]}>{stConf.label}</Text>
             </View>
-
-            {sub?.paid_at && (
-              <Text style={styles.paidAtTxt}>Último pagamento: {fmtDate(sub.paid_at)}</Text>
-            )}
-          </LinearGradient>
-
-          {/* Warning banner */}
-          {(isOverdue || isDueSoon) && (
-            <View style={[styles.warningBanner, { backgroundColor: isOverdue ? Colors.danger + '15' : Colors.warning + '15', borderColor: isOverdue ? Colors.danger + '35' : Colors.warning + '35' }]}>
-              <AlertCircle size={16} color={isOverdue ? Colors.danger : Colors.warning} />
-              <Text style={[styles.warningTxt, { color: isOverdue ? Colors.danger : Colors.warning }]}>
-                {isOverdue ? 'Sua mensalidade está vencida. Regularize para continuar usando o app.' : `Mensalidade vence em ${days} dia${days !== 1 ? 's' : ''}.`}
-              </Text>
-            </View>
-          )}
-
-          {/* Plan options */}
-          {settings && (
-            <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Planos disponíveis</Text>
-              <View style={styles.plansRow}>
-                {([
-                  { plan: 'daily' as const, label: 'Diário', amount: settings.subscription_daily_amount, sub: 'Pague por dia trabalhado' },
-                  { plan: 'monthly' as const, label: 'Mensal', amount: settings.subscription_monthly_amount, sub: 'Economia de longo prazo' },
-                ] as const).map(p => (
-                  <TouchableOpacity
-                    key={p.plan}
-                    style={[styles.planCard, settings.default_plan === p.plan && styles.planCardActive]}
-                    onPress={() => handleChangePlan(p.plan)}
-                    disabled={changingPlan}
-                    activeOpacity={0.8}
-                  >
-                    {settings.default_plan === p.plan && (
-                      <View style={styles.activePlanBadge}><Text style={styles.activePlanTxt}>Atual</Text></View>
-                    )}
-                    <Text style={styles.planLabel}>{p.label}</Text>
-                    <Text style={styles.planAmount}>{fmtPrice(p.amount)}</Text>
-                    <Text style={styles.planSub}>{p.sub}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-          )}
-
-          {/* Pagar mensalidade */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Pagar mensalidade</Text>
-
-            {settings?.subscription_portal_url ? (
-              <>
-                <TouchableOpacity style={styles.pixBtn} onPress={openPortal} activeOpacity={0.85}>
-                  <ExternalLink size={18} color="#000" />
-                  <Text style={styles.pixBtnTxt}>Pagar no portal seguro</Text>
-                </TouchableOpacity>
-                <View style={styles.portalNote}>
-                  <ShieldCheck size={13} color={Colors.textMuted} />
-                  <Text style={styles.portalNoteTxt}>Você será levado ao ambiente de pagamento no navegador.</Text>
-                </View>
-              </>
-            ) : (
-              // Fallback enquanto o portal não está configurado: PIX copia-e-cola
-              !pixCode ? (
-                <TouchableOpacity style={styles.pixBtn} onPress={handleGeneratePix} disabled={generatingPix} activeOpacity={0.85}>
-                  {generatingPix
-                    ? <ActivityIndicator color="#000" size="small" />
-                    : <><DollarSign size={18} color="#000" /><Text style={styles.pixBtnTxt}>Gerar código PIX</Text></>
-                  }
-                </TouchableOpacity>
-              ) : (
-                <View style={styles.pixCodeBox}>
-                  <Text style={styles.pixCodeLabel}>Código PIX copia-e-cola — {fmtPrice(pixAmount)}</Text>
-                  <Text style={styles.pixCode} numberOfLines={3} selectable>{pixCode}</Text>
-                  <TouchableOpacity style={styles.copyBtn} onPress={copyPix} activeOpacity={0.8}>
-                    <Copy size={15} color="#000" />
-                    <Text style={styles.copyTxt}>Copiar / compartilhar</Text>
-                  </TouchableOpacity>
-                </View>
-              )
-            )}
           </View>
 
-          {/* Payment history */}
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Histórico de pagamentos</Text>
-            {payments.length === 0 ? (
-              <Text style={styles.emptyTxt}>Nenhum pagamento registrado</Text>
-            ) : (
-              payments.map(p => {
-                const pConf = PAY_STATUS_CONFIG[p.status] ?? PAY_STATUS_CONFIG.pending;
-                return (
-                  <View key={p.id} style={styles.payRow}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.payAmount}>{fmtPrice(p.amount)}</Text>
-                      <Text style={styles.payDate}>{fmtDate(p.created_at)}</Text>
-                    </View>
-                    <View style={[styles.payStatusPill, { backgroundColor: pConf.color + '18', borderColor: pConf.color + '40' }]}>
-                      <Text style={[styles.payStatusTxt, { color: pConf.color }]}>{pConf.label}</Text>
-                    </View>
+          {/* Amount + due date (hidden for commission plan) */}
+          {currentPlan !== 'commission' && sub && (
+            <>
+              <Text style={s.amount}>
+                {fmtBRL(sub.amount)}
+                <Text style={s.amountUnit}> / {currentPlan ? PLAN_LABELS[currentPlan].toLowerCase() : '—'}</Text>
+              </Text>
+              <View style={s.dueRow}>
+                <Calendar size={13} color="#999" />
+                <Text style={s.dueTxt}>
+                  Vencimento: {fmtDate(sub.due_date)}
+                  {!isOverdue && days !== null && days <= 7 ? `  ·  ${days}d` : ''}
+                  {isOverdue ? '  ·  VENCIDO' : ''}
+                </Text>
+              </View>
+            </>
+          )}
+
+          {currentPlan === 'commission' && (
+            <View style={s.commissionRow}>
+              <Zap size={14} color="#6DC228" />
+              <Text style={s.commissionTxt}>Sem mensalidade fixa — comissão descontada por corrida.</Text>
+            </View>
+          )}
+        </View>
+
+        {/* ── Warning banner ── */}
+        {(isOverdue || isDueSoon) && currentPlan !== 'commission' && (
+          <View style={[s.banner, { backgroundColor: isOverdue ? '#FEE2E2' : '#FEF3C7', borderColor: isOverdue ? Colors.danger + '40' : Colors.warning + '40' }]}>
+            <AlertCircle size={15} color={isOverdue ? Colors.danger : Colors.warning} />
+            <Text style={[s.bannerTxt, { color: isOverdue ? Colors.danger : '#92400E' }]}>
+              {isOverdue
+                ? 'Mensalidade vencida. Regularize para continuar usando o app.'
+                : `Mensalidade vence em ${days} dia${days !== 1 ? 's' : ''}.`}
+            </Text>
+          </View>
+        )}
+
+        {/* ── PIX panel (shown after switching to a fixed plan) ── */}
+        {pixCode !== null && pendingPlan && (
+          <View style={s.pixPanel}>
+            <Text style={s.pixPanelTitle}>Quase lá!</Text>
+            <Text style={s.pixPanelSub}>
+              Faça o pagamento via PIX para ativar o plano {PLAN_LABELS[pendingPlan]}.
+            </Text>
+
+            <View style={s.pixAmountBox}>
+              <Text style={s.pixAmountLabel}>Valor a pagar</Text>
+              <Text style={s.pixAmount}>{fmtBRL(pixAmount)}</Text>
+            </View>
+
+            <View style={s.pixCodeBox}>
+              <Text style={s.pixCodeLabel}>PIX COPIA E COLA</Text>
+              <Text style={s.pixCode} selectable numberOfLines={5}>{pixCode}</Text>
+              <TouchableOpacity style={s.copyBtn} onPress={copyPix} activeOpacity={0.85}>
+                <Copy size={14} color="#fff" />
+                <Text style={s.copyBtnTxt}>Copiar código PIX</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={s.pixNote}>
+              <Text style={s.pixNoteTxt}>
+                Seu acesso será liberado após confirmação do pagamento pelo administrador.
+              </Text>
+            </View>
+
+            <TouchableOpacity style={s.doneBtn} onPress={dismissPix} activeOpacity={0.85}>
+              <Check size={15} color="#1A1A1A" strokeWidth={2.5} />
+              <Text style={s.doneBtnTxt}>Já paguei — Continuar</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* ── Trocar plano ── */}
+        {pixCode === null && (
+          <>
+            <Text style={s.sectionTitle}>
+              {currentPlan ? 'Trocar plano' : 'Escolher plano'}
+            </Text>
+
+            {plans.map((plan) => {
+              const isCurrent = plan.id === currentPlan;
+              return (
+                <TouchableOpacity
+                  key={plan.id}
+                  style={[
+                    s.planCard,
+                    isCurrent && { borderColor: plan.accentColor, borderWidth: 2 },
+                  ]}
+                  onPress={() => handleSelectPlan(plan.id)}
+                  disabled={switching}
+                  activeOpacity={0.82}
+                >
+                  {/* Radio / check circle */}
+                  <View style={[
+                    s.radio,
+                    isCurrent && { backgroundColor: plan.accentColor, borderColor: plan.accentColor },
+                  ]}>
+                    {isCurrent && <Check size={11} color="#fff" strokeWidth={3} />}
                   </View>
-                );
-              })
-            )}
-          </View>
-        </ScrollView>
-      )}
+
+                  {/* Content */}
+                  <View style={s.planBody}>
+                    <View style={s.planTitleRow}>
+                      <Text style={s.planTitle}>{plan.title}</Text>
+                      {plan.badge && (
+                        <View style={[s.badge, { backgroundColor: plan.badgeColor }]}>
+                          <Text style={s.badgeTxt}>{plan.badge}</Text>
+                        </View>
+                      )}
+                      {isCurrent && (
+                        <View style={[s.badge, { backgroundColor: '#1A1A1A' }]}>
+                          <Text style={s.badgeTxt}>ATUAL</Text>
+                        </View>
+                      )}
+                    </View>
+                    <Text style={s.planDesc}>{plan.description}</Text>
+                    <View style={s.priceRow}>
+                      <Text style={[s.priceMain, isCurrent && { color: plan.accentColor }]}>
+                        {plan.priceMain}
+                      </Text>
+                      <Text style={s.priceUnit}> / {plan.priceUnit}</Text>
+                    </View>
+                    {plan.priceStrike && (
+                      <Text style={s.priceStrike}>{plan.priceStrike}</Text>
+                    )}
+                  </View>
+
+                  {/* Spinner while switching to this plan */}
+                  {switching && pendingPlan === plan.id && (
+                    <ActivityIndicator size="small" color={plan.accentColor} style={{ marginLeft: 8 }} />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </>
+        )}
+      </ScrollView>
     </View>
   );
 };
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+// ── Styles ────────────────────────────────────────────────────────────────────
+const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: '#F7F8FA' },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F7F8FA' },
   topBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingBottom: 10,
+    paddingHorizontal: 16, paddingBottom: 10, backgroundColor: '#F7F8FA',
   },
-  backBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' },
-  topTitle: { fontSize: 17, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
-  content: { paddingHorizontal: 16 },
+  iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
+  topTitle: { fontSize: 16, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
+  scroll: { paddingHorizontal: 16, paddingTop: 8 },
 
-  statusCard: { borderRadius: Radius.xl, padding: 24, marginBottom: 14 },
-  statusTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
+  // Status card
+  statusCard: {
+    backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 12,
+    borderWidth: 1.5, borderColor: '#E8E8E8',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
+  },
+  statusTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 },
+  statusLabel: { fontSize: 11, fontFamily: 'Poppins_500Medium', color: '#999', marginBottom: 2 },
+  planName: { fontSize: 20, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
   statusPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: Colors.card, borderRadius: Radius.full,
-    paddingHorizontal: 10, paddingVertical: 5,
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1,
   },
-  statusPillTxt: { fontSize: 12, fontFamily: 'Poppins_700Bold' },
-  planTxt: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: 'rgba(255,255,255,0.55)' },
-  amountLarge: { fontSize: 36, fontFamily: 'Poppins_700Bold', color: '#fff', marginBottom: 2 },
-  amountSub: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: 'rgba(255,255,255,0.5)', marginBottom: 14 },
-  dueDateRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dueDateTxt: { fontSize: 12, fontFamily: 'Poppins_600SemiBold', color: 'rgba(255,255,255,0.7)' },
-  paidAtTxt: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: 'rgba(255,255,255,0.45)', marginTop: 6 },
+  statusPillTxt: { fontSize: 11, fontFamily: 'Poppins_700Bold' },
+  amount: { fontSize: 26, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 8 },
+  amountUnit: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: '#999' },
+  dueRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  dueTxt: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888' },
+  commissionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  commissionTxt: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: '#555', flex: 1 },
 
-  warningBanner: {
+  // Banner
+  banner: {
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    borderRadius: Radius.md, padding: 14, borderWidth: 1, marginBottom: 14,
+    padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 12,
   },
-  warningTxt: { flex: 1, fontSize: 13, fontFamily: 'Poppins_600SemiBold' },
+  bannerTxt: { flex: 1, fontSize: 13, fontFamily: 'Poppins_600SemiBold', lineHeight: 18 },
 
-  section: { marginBottom: 20 },
-  sectionTitle: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: Colors.textMuted, letterSpacing: 0.8, marginBottom: 10, textTransform: 'uppercase' },
+  // PIX panel
+  pixPanel: {
+    backgroundColor: '#fff', borderRadius: 16, borderWidth: 1.5, borderColor: '#E8E8E8',
+    padding: 20, marginBottom: 20,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.06, shadowRadius: 8, elevation: 3,
+  },
+  pixPanelTitle: { fontSize: 18, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 4 },
+  pixPanelSub: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: '#888', marginBottom: 18 },
+  pixAmountBox: { backgroundColor: '#F7F8FA', borderRadius: 12, padding: 14, alignItems: 'center', marginBottom: 14 },
+  pixAmountLabel: { fontSize: 11, fontFamily: 'Poppins_500Medium', color: '#999', marginBottom: 4 },
+  pixAmount: { fontSize: 28, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
+  pixCodeBox: { backgroundColor: '#F7F8FA', borderRadius: 12, padding: 14, marginBottom: 14 },
+  pixCodeLabel: { fontSize: 10, fontFamily: 'Poppins_600SemiBold', color: '#AAA', letterSpacing: 0.8, marginBottom: 8 },
+  pixCode: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: '#444', lineHeight: 17, marginBottom: 12 },
+  copyBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#1A1A1A', borderRadius: 10, paddingVertical: 12 },
+  copyBtnTxt: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: '#fff' },
+  pixNote: { backgroundColor: '#FFF9EC', borderRadius: 10, padding: 12, borderWidth: 1, borderColor: '#F59E0B40', marginBottom: 16 },
+  pixNoteTxt: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#92400E', lineHeight: 18 },
+  doneBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: Colors.primary, borderRadius: 12, paddingVertical: 14 },
+  doneBtnTxt: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
 
-  plansRow: { flexDirection: 'row', gap: 10 },
+  // Plan cards (same style as PlanSelectionScreen)
+  sectionTitle: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: '#999', letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 14, marginTop: 4 },
   planCard: {
-    flex: 1, backgroundColor: Colors.card, borderRadius: Radius.md, padding: 16,
-    borderWidth: 1.5, borderColor: Colors.border, alignItems: 'center',
+    flexDirection: 'row', alignItems: 'flex-start',
+    backgroundColor: '#fff', borderRadius: 14, borderWidth: 1.5, borderColor: '#E8E8E8',
+    padding: 16, marginBottom: 12, gap: 14,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
   },
-  planCardActive: { borderColor: Colors.primary, backgroundColor: Colors.primary + '08' },
-  activePlanBadge: { backgroundColor: Colors.primary, borderRadius: Radius.full, paddingHorizontal: 8, paddingVertical: 2, marginBottom: 8 },
-  activePlanTxt: { fontSize: 9, fontFamily: 'Poppins_700Bold', color: '#000' },
-  planLabel: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary, marginBottom: 4 },
-  planAmount: { fontSize: 20, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary, marginBottom: 4 },
-  planSub: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, textAlign: 'center' },
-
-  pixBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
-    backgroundColor: Colors.primary, borderRadius: Radius.md, paddingVertical: 16,
-  },
-  pixBtnTxt: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: '#000' },
-  portalNote: { flexDirection: 'row', alignItems: 'center', gap: 6, justifyContent: 'center', marginTop: 10 },
-  portalNoteTxt: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted },
-  pixCodeBox: {
-    backgroundColor: Colors.card, borderRadius: Radius.md, padding: 16,
-    borderWidth: 1, borderColor: Colors.border,
-  },
-  pixCodeLabel: { fontSize: 12, fontFamily: 'Poppins_600SemiBold', color: Colors.textMuted, marginBottom: 10 },
-  pixCode: {
-    fontSize: 11, fontFamily: 'monospace', color: Colors.textPrimary,
-    backgroundColor: Colors.surface, borderRadius: Radius.sm, padding: 10,
-    marginBottom: 12,
-  },
-  copyBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    backgroundColor: Colors.primary, borderRadius: Radius.md, paddingVertical: 12,
-  },
-  copyTxt: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: '#000' },
-
-  payRow: {
-    flexDirection: 'row', alignItems: 'center', paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: Colors.borderLight,
-  },
-  payAmount: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
-  payDate: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 2 },
-  payStatusPill: {
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: Radius.full,
-    borderWidth: 1,
-  },
-  payStatusTxt: { fontSize: 11, fontFamily: 'Poppins_700Bold' },
-  emptyTxt: { ...Typography.bodyMedium, color: Colors.textMuted, textAlign: 'center', paddingVertical: 20 },
+  radio: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#CCC', alignItems: 'center', justifyContent: 'center', marginTop: 2 },
+  planBody: { flex: 1 },
+  planTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' },
+  planTitle: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
+  badge: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2 },
+  badgeTxt: { fontSize: 8, fontFamily: 'Poppins_700Bold', color: '#fff', letterSpacing: 0.4 },
+  planDesc: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: '#888', marginBottom: 8, lineHeight: 17 },
+  priceRow: { flexDirection: 'row', alignItems: 'baseline' },
+  priceMain: { fontSize: 18, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
+  priceUnit: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: '#999' },
+  priceStrike: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: '#BFBFBF', textDecorationLine: 'line-through', marginTop: 2 },
 });
 
 export default DriverSubscriptionScreen;
