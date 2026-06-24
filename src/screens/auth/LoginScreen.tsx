@@ -1,226 +1,271 @@
 import React, { useState } from 'react';
 import {
-  View,
-  Text,
-  Image,
-  StyleSheet,
-  ScrollView,
-  TouchableOpacity,
-  KeyboardAvoidingView,
-  Platform,
-  StatusBar,
-  Alert,
+  View, Text, Image, StyleSheet, ScrollView, TouchableOpacity,
+  KeyboardAvoidingView, Platform, StatusBar, Alert, TextInput, Dimensions,
 } from 'react-native';
-import { Mail, Lock, Car, User, ArrowRight } from 'lucide-react-native';
-import { Button, Input, Divider } from '../../components/ui';
-import { Colors, Radius } from '../../constants';
+import Svg, { Path, Polygon, Circle, G } from 'react-native-svg';
+import { Eye, EyeOff } from 'lucide-react-native';
+import { Colors } from '../../constants';
 import { useAuth } from '../../contexts/AuthContext';
 import { friendlyError } from '../../lib/errors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+const { width: W } = Dimensions.get('window');
+const RU_GREEN = '#76C442';
+const DARK = '#131313';
+
+// ── Fundo geométrico do header ────────────────────────────────────────────────
+const GeometricBg: React.FC<{ height: number }> = ({ height }) => (
+  <Svg width={W} height={height} style={StyleSheet.absoluteFill} pointerEvents="none">
+    {/* Grade de formas geométricas repetidas, tom sutil sobre o fundo escuro */}
+    <G opacity={0.18}>
+      {/* Triângulos apontando para cima */}
+      {[0, 56, 112, 168, 224, 280, 336].map((x) =>
+        [0, 52, 104, 156, 208].map((y) => (
+          <Polygon
+            key={`u${x}${y}`}
+            points={`${x + 20},${y} ${x},${y + 34} ${x + 40},${y + 34}`}
+            fill="#ffffff"
+          />
+        ))
+      )}
+      {/* Triângulos apontando para baixo (offset) */}
+      {[28, 84, 140, 196, 252, 308].map((x) =>
+        [26, 78, 130, 182].map((y) => (
+          <Polygon
+            key={`d${x}${y}`}
+            points={`${x},${y} ${x + 40},${y} ${x + 20},${y + 34}`}
+            fill="#ffffff"
+          />
+        ))
+      )}
+      {/* Círculos */}
+      {[14, 70, 126, 182, 238, 294, 350].map((x) =>
+        [13, 65, 117, 169, 221].map((y) => (
+          <Circle key={`c${x}${y}`} cx={x} cy={y} r={5} fill="#ffffff" />
+        ))
+      )}
+      {/* Losangos */}
+      {[42, 98, 154, 210, 266, 322].map((x) =>
+        [39, 91, 143, 195].map((y) => (
+          <Polygon
+            key={`l${x}${y}`}
+            points={`${x + 10},${y} ${x + 20},${y + 10} ${x + 10},${y + 20} ${x},${y + 10}`}
+            fill="#ffffff"
+          />
+        ))
+      )}
+    </G>
+  </Svg>
+);
+
+// ── Onda branca com borda verde ───────────────────────────────────────────────
+const WAVE_H = 54;
+const WAVE_PATH = `M0,${WAVE_H} Q${W / 2},0 ${W},${WAVE_H} L${W},${WAVE_H} L0,${WAVE_H} Z`;
+const BORDER_PATH = `M0,${WAVE_H} Q${W / 2},0 ${W},${WAVE_H}`;
+
+const WaveDivider: React.FC = () => (
+  <View style={{ marginTop: -1 }}>
+    <Svg width={W} height={WAVE_H}>
+      {/* Fill branco */}
+      <Path d={WAVE_PATH} fill="#ffffff" />
+      {/* Borda verde */}
+      <Path d={BORDER_PATH} fill="none" stroke={RU_GREEN} strokeWidth={3} />
+    </Svg>
+  </View>
+);
+
+// ── Campo de input simples ────────────────────────────────────────────────────
+interface SimpleInputProps {
+  label: string;
+  value: string;
+  onChangeText: (t: string) => void;
+  placeholder?: string;
+  keyboardType?: 'default' | 'email-address' | 'numeric';
+  autoCapitalize?: 'none' | 'words' | 'sentences';
+  secureTextEntry?: boolean;
+  rightEl?: React.ReactNode;
+}
+
+const SimpleInput: React.FC<SimpleInputProps> = ({
+  label, value, onChangeText, placeholder, keyboardType = 'default',
+  autoCapitalize = 'none', secureTextEntry, rightEl,
+}) => (
+  <View style={fi.wrap}>
+    <Text style={fi.label}>{label}</Text>
+    <View style={fi.row}>
+      <TextInput
+        style={fi.input}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor="#B0B0B0"
+        keyboardType={keyboardType}
+        autoCapitalize={autoCapitalize}
+        autoCorrect={false}
+        secureTextEntry={secureTextEntry}
+      />
+      {rightEl && <View style={fi.right}>{rightEl}</View>}
+    </View>
+    <View style={fi.line} />
+  </View>
+);
+
+const fi = StyleSheet.create({
+  wrap: { marginBottom: 20 },
+  label: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888', marginBottom: 4 },
+  row: { flexDirection: 'row', alignItems: 'center' },
+  input: { flex: 1, fontSize: 15, fontFamily: 'Poppins_400Regular', color: '#1A1A1A', paddingVertical: 8 },
+  right: { paddingLeft: 8 },
+  line: { height: 1, backgroundColor: '#E0E0E0', marginTop: 2 },
+});
+
+// ── LoginScreen ───────────────────────────────────────────────────────────────
 interface LoginScreenProps {
   onRegister: () => void;
   onRegisterDriver: () => void;
 }
+
+const HEADER_H = 270;
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver }) => {
   const { signIn } = useAuth();
   const insets = useSafeAreaInsets();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [activeRole, setActiveRole] = useState<'passenger' | 'driver'>('passenger');
 
   const handleLogin = async () => {
-    if (!email.trim() || !password) {
-      Alert.alert('Atenção', 'Preencha e-mail e senha.');
-      return;
-    }
+    if (!email.trim() || !password) { Alert.alert('Atenção', 'Preencha e-mail e senha.'); return; }
     setLoading(true);
     const { error } = await signIn(email, password);
     setLoading(false);
-    // On success the session changes and the navigator routes automatically.
     if (error) Alert.alert('Erro ao entrar', friendlyError(error));
   };
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-      <ScrollView
-        style={styles.container}
-        contentContainerStyle={[styles.content, { paddingTop: insets.top + 24 }]}
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-      >
-        {/* Logo */}
-        <View style={styles.header}>
+    <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <StatusBar barStyle="light-content" backgroundColor={DARK} />
+      <View style={{ flex: 1, backgroundColor: DARK }}>
+
+        {/* ── Header escuro ── */}
+        <View style={[s.header, { paddingTop: insets.top + 20 }]}>
+          <GeometricBg height={HEADER_H} />
           <Image
             source={require('../../../assets/logo.png')}
-            style={styles.logo}
+            style={s.logo}
             resizeMode="contain"
           />
-          <Text style={styles.tagline}>Bem-vindo de volta</Text>
         </View>
 
-        {/* Role Toggle */}
-        <View style={styles.roleToggle}>
-          <TouchableOpacity
-            style={[styles.roleBtn, activeRole === 'passenger' && styles.roleBtnActive]}
-            onPress={() => setActiveRole('passenger')}
-            activeOpacity={0.8}
-          >
-            <User size={15} color={activeRole === 'passenger' ? '#FFFFFF' : Colors.textMuted} strokeWidth={2} />
-            <Text style={[styles.roleBtnText, activeRole === 'passenger' && styles.roleBtnTextActive]}>
-              Passageiro
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.roleBtn, activeRole === 'driver' && styles.roleBtnActive]}
-            onPress={() => setActiveRole('driver')}
-            activeOpacity={0.8}
-          >
-            <Car size={15} color={activeRole === 'driver' ? '#FFFFFF' : Colors.textMuted} strokeWidth={2} />
-            <Text style={[styles.roleBtnText, activeRole === 'driver' && styles.roleBtnTextActive]}>
-              Motorista
-            </Text>
-          </TouchableOpacity>
-        </View>
+        {/* ── Onda ── */}
+        <WaveDivider />
 
-        {/* Form */}
-        <View style={styles.form}>
-          <Input
-            label="E-mail"
+        {/* ── Conteúdo branco ── */}
+        <ScrollView
+          style={s.sheet}
+          contentContainerStyle={s.sheetContent}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={s.title}>Login</Text>
+
+          <SimpleInput
+            label="Email"
             value={email}
             onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            autoCorrect={false}
             placeholder="seu@email.com"
-            leftIcon={<Mail size={18} color={Colors.textMuted} />}
+            keyboardType="email-address"
           />
-          <Input
+          <SimpleInput
             label="Senha"
             value={password}
             onChangeText={setPassword}
-            isPassword
             placeholder="••••••••"
-            leftIcon={<Lock size={18} color={Colors.textMuted} />}
+            secureTextEntry={!showPw}
+            rightEl={
+              <TouchableOpacity onPress={() => setShowPw((v) => !v)} activeOpacity={0.7}>
+                {showPw
+                  ? <EyeOff size={18} color="#999" />
+                  : <Eye size={18} color="#999" />}
+              </TouchableOpacity>
+            }
           />
-          <TouchableOpacity style={styles.forgotBtn} activeOpacity={0.7}>
-            <Text style={styles.forgotText}>Esqueci minha senha</Text>
-          </TouchableOpacity>
-          <Button title="Entrar" onPress={handleLogin} loading={loading} style={{ marginTop: 4 }} />
-        </View>
 
-        <Divider label="ou" style={{ marginVertical: 28 }} />
-
-        {/* Register Cards */}
-        <View style={styles.registerSection}>
-          <Text style={styles.registerLabel}>Primeira vez aqui?</Text>
-          <TouchableOpacity style={styles.registerCard} onPress={onRegister} activeOpacity={0.85}>
-            <View style={[styles.registerIconWrap, { backgroundColor: '#1A1A1A' }]}>
-              <User size={20} color="#FFFFFF" strokeWidth={2} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.registerCardTitle}>Criar conta de Passageiro</Text>
-              <Text style={styles.registerCardSub}>Peca corridas em Sinop agora</Text>
-            </View>
-            <ArrowRight size={18} color={Colors.textMuted} strokeWidth={2} />
+          <TouchableOpacity style={s.forgotBtn} activeOpacity={0.7}>
+            <Text style={s.forgotTxt}>Esqueci minha senha</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.registerCard} onPress={onRegisterDriver} activeOpacity={0.85}>
-            <View style={[styles.registerIconWrap, { backgroundColor: '#1A1A1A' }]}>
-              <Car size={20} color="#FFFFFF" strokeWidth={2} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.registerCardTitle}>Quero ser Motorista</Text>
-              <Text style={styles.registerCardSub}>Ganhe dinheiro dirigindo</Text>
-            </View>
-            <ArrowRight size={18} color={Colors.textMuted} strokeWidth={2} />
-          </TouchableOpacity>
-        </View>
 
-        <Text style={styles.terms}>
-          Ao entrar, voce concorda com os{' '}
-          <Text style={styles.termsLink}>Termos de Uso</Text>
-          {' '}e{' '}
-          <Text style={styles.termsLink}>Politica de Privacidade</Text>
-        </Text>
-      </ScrollView>
+          {/* Botão Login */}
+          <TouchableOpacity style={[s.btn, loading && { opacity: 0.7 }]} onPress={handleLogin} disabled={loading} activeOpacity={0.85}>
+            <Text style={s.btnTxt}>{loading ? 'Entrando...' : 'Login'}</Text>
+          </TouchableOpacity>
+
+          {/* Divisor */}
+          <View style={s.divider}>
+            <View style={s.dividerLine} />
+            <Text style={s.dividerTxt}>ou</Text>
+            <View style={s.dividerLine} />
+          </View>
+
+          {/* Registro */}
+          <Text style={s.registerLabel}>Primeira vez aqui?</Text>
+
+          <TouchableOpacity style={s.registerCard} onPress={onRegister} activeOpacity={0.85}>
+            <View style={s.dot} />
+            <Text style={s.registerCardTxt}>Criar conta de Passageiro</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={s.registerCard} onPress={onRegisterDriver} activeOpacity={0.85}>
+            <View style={s.dot} />
+            <Text style={s.registerCardTxt}>Quero ser Motorista</Text>
+          </TouchableOpacity>
+        </ScrollView>
+
+      </View>
     </KeyboardAvoidingView>
   );
 };
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  content: { paddingHorizontal: 28, paddingTop: 64, paddingBottom: 48 },
-  header: { alignItems: 'center', marginBottom: 36 },
+const s = StyleSheet.create({
+  header: {
+    height: HEADER_H,
+    backgroundColor: DARK,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   logo: {
-    width: 170,
-    height: 170,
-    marginBottom: 4,
+    width: W * 0.6,
+    height: 110,
   },
-  tagline: {
-    fontSize: 15, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary,
+  sheet: { flex: 1, backgroundColor: '#ffffff' },
+  sheetContent: { paddingHorizontal: 32, paddingTop: 8, paddingBottom: 48 },
+  title: {
+    fontSize: 26, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 28,
   },
-  roleToggle: {
-    flexDirection: 'row', backgroundColor: Colors.surface,
-    borderRadius: Radius.md, padding: 4, marginBottom: 28,
+  forgotBtn: { alignSelf: 'flex-end', marginBottom: 24, marginTop: -8 },
+  forgotTxt: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888' },
+  btn: {
+    backgroundColor: '#1A1A1A', borderRadius: 12,
+    paddingVertical: 16, alignItems: 'center', marginBottom: 28,
   },
-  roleBtn: {
-    flex: 1, flexDirection: 'row', alignItems: 'center',
-    justifyContent: 'center', paddingVertical: 11,
-    borderRadius: Radius.sm, gap: 7,
-  },
-  roleBtnActive: {
-    backgroundColor: Colors.textPrimary,
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15, shadowRadius: 6, elevation: 4,
-  },
-  roleBtnText: {
-    fontSize: 14, fontFamily: 'Poppins_500Medium', color: Colors.textMuted,
-  },
-  roleBtnTextActive: {
-    fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: '#FFFFFF',
-  },
-  form: { gap: 0 },
-  forgotBtn: {
-    alignSelf: 'flex-end', marginTop: -4, marginBottom: 20, paddingVertical: 4,
-  },
-  forgotText: {
-    fontSize: 13, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary,
-  },
-  registerSection: { gap: 10, marginBottom: 28 },
+  btnTxt: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: '#ffffff' },
+  divider: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 24 },
+  dividerLine: { flex: 1, height: 1, backgroundColor: '#E8E8E8' },
+  dividerTxt: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: '#AAA' },
   registerLabel: {
-    fontSize: 13, fontFamily: 'Poppins_500Medium',
-    color: Colors.textMuted, textAlign: 'center', marginBottom: 4,
+    fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888',
+    textAlign: 'center', marginBottom: 12,
   },
   registerCard: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: Colors.surface, borderRadius: Radius.md,
-    padding: 14, gap: 14, borderWidth: 1, borderColor: Colors.borderLight,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    borderWidth: 1, borderColor: '#E8E8E8', borderRadius: 12,
+    paddingHorizontal: 18, paddingVertical: 14, marginBottom: 10,
+    backgroundColor: '#FAFAFA',
   },
-  registerIconWrap: {
-    width: 44, height: 44, borderRadius: Radius.sm,
-    backgroundColor: Colors.cardElevated, alignItems: 'center', justifyContent: 'center',
-  },
-  registerCardTitle: {
-    fontSize: 14, fontFamily: 'Poppins_600SemiBold',
-    color: Colors.textPrimary, marginBottom: 2,
-  },
-  registerCardSub: {
-    fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted,
-  },
-  terms: {
-    fontSize: 12, fontFamily: 'Poppins_400Regular',
-    color: Colors.textMuted, textAlign: 'center', lineHeight: 18,
-  },
-  termsLink: {
-    fontSize: 12, fontFamily: 'Poppins_500Medium',
-    color: Colors.textSecondary, textDecorationLine: 'underline',
-  },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: RU_GREEN },
+  registerCardTxt: { fontSize: 14, fontFamily: 'Poppins_500Medium', color: '#1A1A1A' },
 });
 
 export default LoginScreen;
