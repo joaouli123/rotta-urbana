@@ -163,18 +163,18 @@ export function landingPage(opts = {}) {
           Mais economia para o passageiro, lucro de verdade para o motorista. Sem taxas abusivas, sem tarifas surpresa — com pagamento instantâneo via PIX.
         </p>
         <div class="hero-store-buttons" style="display:flex; flex-wrap:wrap; gap:12px; margin-top:2px;">
-          <a href="https://play.google.com/store/apps/details?id=com.rottaurbana.app&hl=pt_BR" target="_blank" class="hero-store-btn" style="display:flex; flex:1 1 240px; align-items:center; justify-content:center; gap:12px; text-decoration:none; padding:14px 22px; border-radius:12px; background:#0B0C0D; box-shadow:0 10px 26px rgba(11,12,13,0.18);" style-hover="background:#1A1C1F;">
-            <img src="https://api.iconify.design/simple-icons/googleplay.svg?color=%2363F21B&width=24" alt="" style="width:24px; height:24px; display:block;" />
+          <a href="https://play.google.com/store/apps/details?id=com.rottaurbana.app&hl=pt_BR" target="_blank" class="hero-store-btn" style="display:inline-flex; align-items:center; justify-content:center; gap:10px; text-decoration:none; padding:12px 20px; border-radius:12px; background:#0B0C0D; box-shadow:0 8px 20px rgba(11,12,13,0.15); width:fit-content;" style-hover="background:#1A1C1F;">
+            <img src="https://api.iconify.design/simple-icons/googleplay.svg?color=%2363F21B&width=20" alt="" style="width:20px; height:20px; display:block;" />
             <span style="display:flex; flex-direction:column; line-height:1.15;">
-              <span style="font-family:'Inter',sans-serif; font-size:11px; color:#C7CBC5;">Disponível no</span>
-              <span style="font-family:'Sora',sans-serif; font-weight:700; font-size:16px; color:#FFFFFF;">Google Play</span>
+              <span style="font-family:'Inter',sans-serif; font-size:10.5px; color:#C7CBC5;">Disponível no</span>
+              <span style="font-family:'Sora',sans-serif; font-weight:700; font-size:14.5px; color:#FFFFFF;">Google Play</span>
             </span>
           </a>
-          <a href="#baixar" class="hero-store-btn" style="display:flex; flex:1 1 240px; align-items:center; justify-content:center; gap:12px; text-decoration:none; padding:14px 22px; border-radius:12px; background:#0B0C0D; box-shadow:0 10px 26px rgba(11,12,13,0.18);" style-hover="background:#1A1C1F;" onclick="alert('Versão iOS disponível em breve!'); return false;">
-            <img src="https://api.iconify.design/simple-icons/apple.svg?color=%23FFFFFF&width=24" alt="" style="width:24px; height:24px; display:block;" />
+          <a href="#baixar" class="hero-store-btn" style="display:inline-flex; align-items:center; justify-content:center; gap:10px; text-decoration:none; padding:12px 20px; border-radius:12px; background:#0B0C0D; box-shadow:0 8px 20px rgba(11,12,13,0.15); width:fit-content;" style-hover="background:#1A1C1F;" onclick="alert('Versão iOS disponível em breve!'); return false;">
+            <img src="https://api.iconify.design/simple-icons/apple.svg?color=%23FFFFFF&width=20" alt="" style="width:20px; height:20px; display:block;" />
             <span style="display:flex; flex-direction:column; line-height:1.15;">
-              <span style="font-family:'Inter',sans-serif; font-size:11px; color:#C7CBC5;">Baixe na</span>
-              <span style="font-family:'Sora',sans-serif; font-weight:700; font-size:16px; color:#FFFFFF;">App Store</span>
+              <span style="font-family:'Inter',sans-serif; font-size:10.5px; color:#C7CBC5;">Baixe na</span>
+              <span style="font-family:'Sora',sans-serif; font-weight:700; font-size:14.5px; color:#FFFFFF;">App Store</span>
             </span>
           </a>
         </div>
