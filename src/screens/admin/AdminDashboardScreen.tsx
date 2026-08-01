@@ -29,6 +29,7 @@ import { getAdminKpis, type AdminKpis } from '../../services/admin';
 
 interface AdminDashboardProps {
   onDrivers: () => void;
+  onPassengers: () => void;
   onPayments: () => void;
   onMonitoring: () => void;
   onReports: () => void;
@@ -47,6 +48,7 @@ const CATEGORY_LABELS: { key: 'moto' | 'economy' | 'comfort' | 'premium'; label:
 
 const AdminDashboardScreen: React.FC<AdminDashboardProps> = ({
   onDrivers,
+  onPassengers,
   onPayments,
   onMonitoring,
   onReports,
@@ -137,6 +139,7 @@ const AdminDashboardScreen: React.FC<AdminDashboardProps> = ({
         <View style={styles.actionsGrid}>
           {[
             { label: 'Motoristas', icon: Users, color: Colors.primary, onPress: onDrivers },
+            { label: 'Passageiros', icon: Users, color: '#3B82F6', onPress: onPassengers },
             { label: 'Pagamentos', icon: DollarSign, color: Colors.success, onPress: onPayments },
             { label: 'Monitoramento', icon: Activity, color: Colors.info, onPress: onMonitoring },
             { label: 'Relatórios', icon: TrendingUp, color: Colors.warning, onPress: onReports },

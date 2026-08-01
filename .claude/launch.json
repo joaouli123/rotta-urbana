@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["--env-file=railway-admin/.env", "railway-admin/server.js"],
       "port": 4100
+    },
+    {
+      "name": "rotta-app-web",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["expo", "start", "--web", "--port", "8090"],
+      "port": 8090
     }
   ]
 }

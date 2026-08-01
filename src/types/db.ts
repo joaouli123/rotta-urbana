@@ -22,6 +22,16 @@ export interface ProfileRow {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+  cpf?: string | null;
+  address_cep?: string | null;
+  address_street?: string | null;
+  address_number?: string | null;
+  address_neighborhood?: string | null;
+  address_city?: string | null;
+  address_state?: string | null;
+  address_complement?: string | null;
+  doc_rg_path?: string | null;
+  doc_selfie_path?: string | null;
 }
 
 export interface DriverRow {

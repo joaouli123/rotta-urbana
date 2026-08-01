@@ -12,6 +12,7 @@ interface SignUpInput {
   role: Extract<Role, 'passenger' | 'driver'>;
   gender?: Gender;
   cpf?: string;
+  metadata?: Record<string, any>;
 }
 
 interface AuthContextValue {
@@ -93,6 +94,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           role: input.role,
           ...(input.gender ? { gender: input.gender } : {}),
           ...(input.cpf ? { cpf: input.cpf.replace(/\D/g, '') } : {}),
+          ...(input.metadata || {}),
         },
       },
     });

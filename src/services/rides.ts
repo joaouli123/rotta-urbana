@@ -69,7 +69,7 @@ export async function getActiveRide(): Promise<RideRow | null> {
 
 export async function getRideHistory(limit = 50): Promise<RideRow[]> {
   const { data, error } = await supabase
-    .from('rides').select('*').in('status', ['completed', 'cancelled'])
+    .from('rides').select('*')
     .order('requested_at', { ascending: false }).limit(limit);
   if (error) throw error;
   return (data as RideRow[]) ?? [];

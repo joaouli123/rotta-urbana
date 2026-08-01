@@ -11,32 +11,43 @@ import {
   Alert,
   Image,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { pickFromCamera, chooseAndPickDocument, type PickedFile } from '../../lib/filePick';
 import {
   User,
   Mail,
   Lock,
   Phone,
-  ChevronLeft,
   Car,
   Bike,
   FileText,
   Camera,
   CheckCircle,
   IdCard,
+  Eye,
+  EyeOff,
+  ChevronLeft,
 } from 'lucide-react-native';
-import { Button, Input, Card, Badge } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
 import { useAuth } from '../../contexts/AuthContext';
 import { friendlyError } from '../../lib/errors';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { addVehicle, updateDriverPix } from '../../services/drivers';
 import { uploadDocument, type DocType } from '../../services/documents';
 import FipePicker from '../../components/FipePicker';
 import type { Gender } from '../../types/db';
+import {
+  AUTH_DARK,
+  AUTH_GREEN,
+  AuthField,
+  AuthHeader,
+  AuthPrimaryButton,
+} from '../../components/auth/auth-form';
 
 type VehicleKind = 'sedan' | 'moto';
 
+
+// ── Campo de input simples (Idêntico ao passageiro) ──────────────────────────
+// ── Onda multi-camadas (Idêntico ao passageiro) ──────────────────────────────
 const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: 'female', label: 'Feminino' },
   { value: 'male', label: 'Masculino' },
@@ -47,7 +58,7 @@ interface RegisterDriverScreenProps {
   onBack: () => void;
 }
 
-const steps = ['Dados', 'Veiculo', 'Docs', 'Selfie'];
+const steps = ['Dados', 'Veículo', 'Documentos', 'Selfie'];
 
 function inferPixType(key: string): string {
   const k = key.trim();
@@ -61,8 +72,8 @@ function inferPixType(key: string): string {
 }
 
 const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) => {
-  const { signUp } = useAuth();
   const insets = useSafeAreaInsets();
+  const { signUp } = useAuth();
   const [step, setStep] = useState(0);
   const [loading, setLoading] = useState(false);
 
@@ -71,7 +82,10 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
   const [phone, setPhone] = useState('');
   const [cpf, setCpf] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [gender, setGender] = useState<Gender | null>(null);
+  const [showPw, setShowPw] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const [vehicleType, setVehicleType] = useState<VehicleKind>('sedan');
   const [vehicleModel, setVehicleModel] = useState('');
@@ -141,7 +155,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
 
   const goNext = () => {
     if (step === 0) {
-      if (!name.trim() || !email.trim() || !phone.trim() || !password) {
+      if (!name.trim() || !email.trim() || !phone.trim() || !password || !confirmPassword) {
         Alert.alert('Atenção', 'Preencha todos os dados pessoais.');
         return;
       }
@@ -157,8 +171,12 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
         Alert.alert('Atenção', 'A senha precisa de ao menos 8 caracteres.');
         return;
       }
+      if (password !== confirmPassword) {
+        Alert.alert('Atenção', 'As senhas não conferem.');
+        return;
+      }
       if (!gender) {
-        Alert.alert('Atenção', 'Selecione seu sexo (usado na preferência de segurança das passageiras).');
+        Alert.alert('Atenção', 'Selecione seu gênero.');
         return;
       }
     }
@@ -184,22 +202,22 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
       case 0:
         return (
           <>
-            <Text style={styles.stepTitle}>Dados Pessoais</Text>
-            <Text style={styles.stepDesc}>Preencha seus dados para criar seu perfil de motorista</Text>
-            <Input label="Nome completo" value={name} onChangeText={setName}
+            <Text style={styles.stepTitle}>Dados pessoais</Text>
+            <Text style={styles.stepDesc}>Preencha seus dados para criar seu perfil de motorista.</Text>
+            <AuthField label="Nome completo" value={name} onChangeText={setName}
               placeholder="Seu nome" autoCapitalize="words"
-              leftIcon={<User size={18} color={Colors.textMuted} />} />
-            <Input label="CPF" value={cpf} onChangeText={setCpf}
+              leftIcon={<User size={18} color="#999" />} />
+            <AuthField label="CPF" value={cpf} onChangeText={setCpf}
               placeholder="000.000.000-00" keyboardType="numeric"
-              leftIcon={<IdCard size={18} color={Colors.textMuted} />} />
-            <Input label="E-mail" value={email} onChangeText={setEmail}
+              leftIcon={<IdCard size={18} color="#999" />} />
+            <AuthField label="E-mail" value={email} onChangeText={setEmail}
               placeholder="seu@email.com" keyboardType="email-address" autoCapitalize="none"
-              leftIcon={<Mail size={18} color={Colors.textMuted} />} />
-            <Input label="Telefone" value={phone} onChangeText={setPhone}
-              placeholder="(65) 9 9999-9999" keyboardType="phone-pad"
-              leftIcon={<Phone size={18} color={Colors.textMuted} />} />
+              leftIcon={<Mail size={18} color="#999" />} />
+            <AuthField label="Telefone / WhatsApp" value={phone} onChangeText={setPhone}
+              placeholder="(00) 00000-0000" keyboardType="phone-pad"
+              leftIcon={<Phone size={18} color="#999" />} />
 
-            <Text style={styles.genderLabel}>Sexo</Text>
+            <Text style={styles.genderLabel}>Gênero</Text>
             <View style={styles.genderRow}>
               {GENDER_OPTIONS.map((g) => {
                 const active = gender === g.value;
@@ -215,17 +233,32 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
                 );
               })}
             </View>
+            <Text style={styles.genderHint}>Essa informação ajuda a oferecer preferências e recursos de segurança.</Text>
 
-            <Input label="Senha" value={password} onChangeText={setPassword}
-              isPassword placeholder="Minimo 8 caracteres"
-              leftIcon={<Lock size={18} color={Colors.textMuted} />} />
+            <AuthField label="Senha" value={password} onChangeText={setPassword}
+              placeholder="Mínimo 8 caracteres" secureTextEntry={!showPw}
+              leftIcon={<Lock size={18} color="#999" />}
+              rightElement={
+                <TouchableOpacity onPress={() => setShowPw(v => !v)} activeOpacity={0.7}>
+                  {showPw ? <EyeOff size={18} color="#999" /> : <Eye size={18} color="#999" />}
+                </TouchableOpacity>
+              } />
+
+            <AuthField label="Confirmar senha" value={confirmPassword} onChangeText={setConfirmPassword}
+              placeholder="Repita sua senha" secureTextEntry={!showConfirm}
+              leftIcon={<Lock size={18} color="#999" />}
+              rightElement={
+                <TouchableOpacity onPress={() => setShowConfirm(v => !v)} activeOpacity={0.7}>
+                  {showConfirm ? <EyeOff size={18} color="#999" /> : <Eye size={18} color="#999" />}
+                </TouchableOpacity>
+              } />
           </>
         );
       case 1:
         return (
           <>
-            <Text style={styles.stepTitle}>Dados do Veiculo</Text>
-            <Text style={styles.stepDesc}>Escolha o tipo de veiculo e busque na tabela FIPE (define as categorias que voce atende):</Text>
+            <Text style={styles.stepTitle}>Dados do veículo</Text>
+            <Text style={styles.stepDesc}>Escolha o tipo de veículo e consulte a tabela FIPE para definir as categorias atendidas.</Text>
 
             {/* Tipo de veículo — Carro vs Moto */}
             <View style={styles.typeRow}>
@@ -247,7 +280,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
                     }}
                     activeOpacity={0.85}
                   >
-                    <Icon size={22} color={active ? Colors.textInverse : Colors.textPrimary} strokeWidth={2} />
+                    <Icon size={22} color={active ? '#FFFFFF' : AUTH_GREEN} strokeWidth={2} />
                     <Text style={[styles.typeCardTxt, active && styles.typeCardTxtActive]}>{label}</Text>
                   </TouchableOpacity>
                 );
@@ -265,35 +298,35 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
                 setFipeCode(r.code);
               }}
             />
-            <Input label="Placa" value={vehiclePlate} onChangeText={setVehiclePlate}
+            <AuthField label="Placa" value={vehiclePlate} onChangeText={setVehiclePlate}
               placeholder="ABC-1234" autoCapitalize="characters"
-              leftIcon={<FileText size={18} color={Colors.textMuted} />} />
-            <Input label="Ano de fabricacao" value={vehicleYear} onChangeText={setVehicleYear}
+              leftIcon={<FileText size={18} color="#999" />} />
+            <AuthField label="Ano de fabricação" value={vehicleYear} onChangeText={setVehicleYear}
               placeholder="2020" keyboardType="numeric"
-              leftIcon={vehicleType === 'moto' ? <Bike size={18} color={Colors.textMuted} /> : <Car size={18} color={Colors.textMuted} />} />
-            <Input label={vehicleType === 'moto' ? 'Cor da moto' : 'Cor do veiculo'} value={vehicleColor} onChangeText={setVehicleColor}
+              leftIcon={vehicleType === 'moto' ? <Bike size={18} color="#999" /> : <Car size={18} color="#999" />} />
+            <AuthField label={vehicleType === 'moto' ? 'Cor da moto' : 'Cor do veículo'} value={vehicleColor} onChangeText={setVehicleColor}
               placeholder="Preto, Branco, Prata..."
-              leftIcon={vehicleType === 'moto' ? <Bike size={18} color={Colors.textMuted} /> : <Car size={18} color={Colors.textMuted} />} />
+              leftIcon={vehicleType === 'moto' ? <Bike size={18} color="#999" /> : <Car size={18} color="#999" />} />
             {vehicleType !== 'moto' && (
-              <Input label="Assentos (passageiros)" value={vehicleSeats} onChangeText={setVehicleSeats}
+              <AuthField label="Assentos para passageiros" value={vehicleSeats} onChangeText={setVehicleSeats}
                 placeholder="4" keyboardType="numeric"
-                leftIcon={<User size={18} color={Colors.textMuted} />} />
+                leftIcon={<User size={18} color="#999" />} />
             )}
-            <Input label="Chave PIX (para receber as corridas)" value={pixKey} onChangeText={setPixKey}
-              placeholder="CPF, e-mail, telefone ou chave aleatoria"
+            <AuthField label="Chave Pix para receber corridas" value={pixKey} onChangeText={setPixKey}
+              placeholder="CPF, e-mail, telefone ou chave aleatória"
               autoCapitalize="none"
-              leftIcon={<FileText size={18} color={Colors.textMuted} />} />
+              leftIcon={<FileText size={18} color="#999" />} />
           </>
         );
       case 2:
         return (
           <>
-            <Text style={styles.stepTitle}>Documentacao</Text>
-            <Text style={styles.stepDesc}>Toque em cada item para enviar — foto, galeria ou arquivo (PDF). Todos os dados sao criptografados.</Text>
+            <Text style={styles.stepTitle}>Documentação</Text>
+            <Text style={styles.stepDesc}>Envie fotos ou arquivos em PDF. Seus dados são protegidos durante todo o processo.</Text>
             {([
               { type: 'cnh' as DocType, label: 'CNH (frente e verso)', Icon: FileText },
               { type: 'rg' as DocType, label: 'RG ou identidade', Icon: FileText },
-              { type: 'vehicle_doc' as DocType, label: 'CRLV do veiculo', Icon: Car },
+              { type: 'vehicle_doc' as DocType, label: 'CRLV do veículo', Icon: Car },
             ]).map((doc) => {
               const picked = docImages[doc.type];
               const isImg = !!picked?.contentType.startsWith('image');
@@ -303,7 +336,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
                     <Image source={{ uri: `data:${picked.contentType};base64,${picked.base64}` }} style={styles.docThumb} />
                   ) : (
                     <View style={styles.docIconWrap}>
-                      <doc.Icon size={20} color={Colors.textPrimary} strokeWidth={2} />
+                      <doc.Icon size={20} color={AUTH_GREEN} strokeWidth={2} />
                     </View>
                   )}
                   <View style={{ flex: 1 }}>
@@ -312,7 +345,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
                   </View>
                   <View style={[styles.docAction, picked && styles.docActionDone]}>
                     {picked
-                      ? <CheckCircle size={16} color={Colors.textInverse} strokeWidth={2.5} />
+                      ? <CheckCircle size={16} color="#FFFFFF" strokeWidth={2.5} />
                       : <Text style={styles.docActionText}>Enviar</Text>}
                   </View>
                 </TouchableOpacity>
@@ -321,7 +354,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
             <View style={styles.infoCard}>
               <CheckCircle size={16} color={Colors.success} strokeWidth={2} style={{ marginTop: 1 }} />
               <Text style={styles.infoText}>
-                Documentos verificados manualmente em ate 24h. Voce sera notificado por e-mail.
+                A verificação pode levar até 24 horas. Você receberá uma notificação por e-mail.
               </Text>
             </View>
           </>
@@ -329,9 +362,9 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
       case 3:
         return (
           <>
-            <Text style={styles.stepTitle}>Verificacao Facial</Text>
+            <Text style={styles.stepTitle}>Verificação facial</Text>
             <Text style={styles.stepDesc}>
-              Tire uma selfie (só pela câmera) para validar sua identidade. Isso garante seguranca para todos.
+              Tire uma selfie pela câmera para confirmar sua identidade e aumentar a segurança da plataforma.
             </Text>
             <TouchableOpacity style={styles.selfieBox} activeOpacity={0.85} onPress={() => pickDoc('selfie')}>
               <View style={styles.selfieInner}>
@@ -339,7 +372,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
                   <Image source={{ uri: `data:${docImages.selfie.contentType};base64,${docImages.selfie.base64}` }} style={styles.selfiePreview} />
                 ) : (
                   <View style={styles.selfieIconWrap}>
-                    <Camera size={40} color={Colors.textPrimary} strokeWidth={1.5} />
+                    <Camera size={40} color={AUTH_GREEN} strokeWidth={1.5} />
                   </View>
                 )}
                 <Text style={styles.selfieLabel}>{docImages.selfie ? 'Selfie capturada ✓' : 'Tirar selfie agora'}</Text>
@@ -351,7 +384,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
             <View style={styles.infoCard}>
               <CheckCircle size={16} color={Colors.info} strokeWidth={2} style={{ marginTop: 1 }} />
               <Text style={styles.infoText}>
-                A selfie e comparada com a CNH enviada. Contas de terceiros sao proibidas.
+                A selfie é comparada com a CNH enviada. Não é permitido cadastrar contas de terceiros.
               </Text>
             </View>
           </>
@@ -366,49 +399,51 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <StatusBar barStyle="dark-content" backgroundColor="#FFFFFF" />
-      <View style={styles.container}>
-        {/* Top Bar */}
-        <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <View style={[styles.container, { backgroundColor: '#ffffff', paddingTop: insets.top }]}>
+        
+        {/* Simple Top Navigation with Back Button only */}
+        <View style={styles.topNavigation}>
           <TouchableOpacity onPress={goBack} style={styles.backBtn} activeOpacity={0.7}>
-            <ChevronLeft size={22} color={Colors.textPrimary} strokeWidth={2.5} />
+            <ChevronLeft size={24} color="#1A1A1A" strokeWidth={2.5} />
           </TouchableOpacity>
-          <Text style={styles.topTitle}>Cadastro Motorista</Text>
-          <View style={{ width: 40 }} />
-        </View>
-
-        {/* Step Indicator */}
-        <View style={styles.stepRow}>
-          {steps.map((s, i) => (
-            <View key={i} style={styles.stepItem}>
-              {i < steps.length - 1 && (
-                <View style={[styles.stepLine, i < step && styles.stepLineActive]} />
-              )}
-              <View style={[styles.stepCircle, i <= step && styles.stepCircleActive]}>
-                {i < step ? (
-                  <CheckCircle size={13} color="#FFFFFF" strokeWidth={2.5} />
-                ) : (
-                  <Text style={[styles.stepNum, i === step && styles.stepNumActive]}>
-                    {i + 1}
-                  </Text>
-                )}
-              </View>
-              <Text style={[styles.stepLabel, i === step && styles.stepLabelActive]}>{s}</Text>
-            </View>
-          ))}
         </View>
 
         <ScrollView
+          style={styles.sheet}
           contentContainerStyle={styles.content}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
+          <Text style={styles.sheetTitle}>Cadastro de motorista</Text>
+
+          {/* Step Indicator */}
+          <View style={styles.stepRow}>
+            {steps.map((s, i) => (
+              <View key={i} style={styles.stepItem}>
+                {i < steps.length - 1 && (
+                  <View style={[styles.stepLine, i < step && styles.stepLineActive]} />
+                )}
+                <View style={[styles.stepCircle, i <= step && styles.stepCircleActive]}>
+                  {i < step ? (
+                    <CheckCircle size={13} color="#FFFFFF" strokeWidth={2.5} />
+                  ) : (
+                    <Text style={[styles.stepNum, i === step && styles.stepNumActive]}>
+                      {i + 1}
+                    </Text>
+                  )}
+                </View>
+                <Text style={[styles.stepLabel, i === step && styles.stepLabelActive]}>{s}</Text>
+              </View>
+            ))}
+          </View>
+
           {renderStepContent()}
-          <Button
-            title={step < steps.length - 1 ? 'Proximo' : 'Concluir cadastro'}
+          <AuthPrimaryButton
+            title={step < steps.length - 1 ? 'Continuar' : 'Concluir cadastro'}
             onPress={goNext}
             loading={loading}
-            style={{ marginTop: 16, marginBottom: 40 }}
+            style={styles.primaryButton}
           />
         </ScrollView>
       </View>
@@ -417,31 +452,38 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: Colors.background },
-  topBar: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingTop: 52, paddingBottom: 8,
+  container: { flex: 1, backgroundColor: '#ffffff' },
+  topNavigation: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: '#ffffff',
   },
   backBtn: {
-    width: 40, height: 40, borderRadius: 20,
-    borderWidth: 1.5, borderColor: Colors.border,
-    alignItems: 'center', justifyContent: 'center',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#F5F5F5',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  topTitle: {
-    fontSize: 16, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary,
+  sheetTitle: {
+    fontSize: 28, fontFamily: 'Poppins_700Bold', color: '#1A1A1A',
+    marginBottom: 8,
   },
 
   // Step Indicator
   stepRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    paddingHorizontal: 28, paddingVertical: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1, borderBottomColor: '#F0F0F0',
+    marginBottom: 20,
   },
   stepItem: { alignItems: 'center', flex: 1, position: 'relative' },
   stepLine: {
     position: 'absolute', top: 14, left: '58%', right: '-58%',
     height: 2, backgroundColor: Colors.border,
   },
-  stepLineActive: { backgroundColor: Colors.primary },
+  stepLineActive: { backgroundColor: AUTH_GREEN },
   stepCircle: {
     width: 30, height: 30, borderRadius: 15,
     backgroundColor: Colors.surface, borderWidth: 2, borderColor: Colors.border,
@@ -449,15 +491,13 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   stepCircleActive: {
-    backgroundColor: Colors.primary, borderColor: Colors.primary,
-    shadowColor: Colors.primary, shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.4, shadowRadius: 6, elevation: 5,
+    backgroundColor: AUTH_DARK, borderColor: AUTH_DARK,
   },
   stepNum: {
     fontSize: 12, fontFamily: 'Poppins_600SemiBold', color: Colors.textMuted,
   },
   stepNumActive: {
-    fontSize: 12, fontFamily: 'Poppins_700Bold', color: Colors.textInverse,
+    fontSize: 12, fontFamily: 'Poppins_700Bold', color: '#FFFFFF',
   },
   stepLabel: {
     fontSize: 11, fontFamily: 'Poppins_400Regular', color: Colors.textMuted,
@@ -466,51 +506,57 @@ const styles = StyleSheet.create({
     fontSize: 11, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary,
   },
 
-  content: { paddingHorizontal: 28, paddingTop: 8, paddingBottom: 40 },
+  sheet: { flex: 1, backgroundColor: '#ffffff' },
+  content: { paddingHorizontal: 28, paddingTop: 6, paddingBottom: 40 },
   stepTitle: {
     fontSize: 26, fontFamily: 'Poppins_700Bold',
-    color: Colors.textPrimary, marginBottom: 8,
+    color: '#1A1A1A', marginBottom: 6,
   },
   stepDesc: {
-    fontSize: 14, fontFamily: 'Poppins_400Regular',
-    color: Colors.textSecondary, marginBottom: 24, lineHeight: 22,
+    fontSize: 13, fontFamily: 'Poppins_400Regular',
+    color: '#666666', marginBottom: 24, lineHeight: 20,
   },
 
   // Gender selector (Feminino / Masculino / Outro)
-  genderLabel: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary, marginTop: 6, marginBottom: 8 },
-  genderRow: { flexDirection: 'row', gap: 8, marginBottom: 4 },
+  genderLabel: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888', marginTop: 6, marginBottom: 10 },
+  genderRow: { flexDirection: 'row', gap: 8, marginBottom: 8 },
   genderChip: {
-    flex: 1, paddingVertical: 12, borderRadius: Radius.md, alignItems: 'center',
-    borderWidth: 1.5, borderColor: Colors.border, backgroundColor: Colors.surface,
+    flex: 1, paddingVertical: 10, borderRadius: 10,
+    borderWidth: 1, borderColor: '#E0E0E0',
+    alignItems: 'center', backgroundColor: '#FAFAFA',
   },
-  genderChipActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
-  genderChipTxt: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
-  genderChipTxtActive: { color: Colors.textInverse },
+  genderChipActive: { backgroundColor: AUTH_DARK, borderColor: AUTH_DARK },
+  genderChipTxt: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: '#888' },
+  genderChipTxtActive: { color: '#ffffff' },
+  genderHint: {
+    fontSize: 11, fontFamily: 'Poppins_400Regular', color: '#AAAAAA',
+    marginBottom: 20, lineHeight: 16,
+  },
 
   // Vehicle type selector (Carro / Moto)
   typeRow: { flexDirection: 'row', gap: 12, marginBottom: 16 },
   typeCard: {
     flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     paddingVertical: 14, borderRadius: Radius.md,
-    backgroundColor: Colors.surface, borderWidth: 1.5, borderColor: Colors.border,
+    backgroundColor: '#FAFAFA', borderWidth: 1, borderColor: '#E0E0E0',
   },
-  typeCardActive: { backgroundColor: Colors.primary, borderColor: Colors.primary },
+  typeCardActive: { backgroundColor: AUTH_DARK, borderColor: AUTH_DARK },
   typeCardTxt: { fontSize: 15, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
-  typeCardTxtActive: { color: Colors.textInverse },
+  typeCardTxtActive: { color: '#FFFFFF' },
 
   // Doc cards
   docCard: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: Colors.surface, borderRadius: Radius.md,
+    backgroundColor: '#FAFAFA', borderRadius: 14,
     padding: 14, marginBottom: 10, gap: 12,
     borderWidth: 1, borderColor: Colors.borderLight,
   },
   docIconWrap: {
     width: 42, height: 42, borderRadius: Radius.sm,
-    backgroundColor: Colors.primary + '22', alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#F0FAE8', alignItems: 'center', justifyContent: 'center',
   },
   docThumb: { width: 42, height: 42, borderRadius: Radius.sm, backgroundColor: Colors.border },
-  docActionDone: { backgroundColor: Colors.success },
+  docActionDone: { backgroundColor: AUTH_GREEN },
   docLabel: {
     fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary, marginBottom: 2,
   },
@@ -518,17 +564,17 @@ const styles = StyleSheet.create({
     fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted,
   },
   docAction: {
-    backgroundColor: Colors.primary, borderRadius: Radius.sm,
+    backgroundColor: AUTH_DARK, borderRadius: Radius.sm,
     paddingHorizontal: 12, paddingVertical: 6,
   },
   docActionText: {
-    fontSize: 12, fontFamily: 'Poppins_600SemiBold', color: Colors.textInverse,
+    fontSize: 12, fontFamily: 'Poppins_600SemiBold', color: '#FFFFFF',
   },
 
   // Info card
   infoCard: {
     flexDirection: 'row', gap: 10, alignItems: 'flex-start',
-    backgroundColor: Colors.surface, borderRadius: Radius.md,
+    backgroundColor: '#FAFAFA', borderRadius: Radius.md,
     padding: 14, marginTop: 8, borderWidth: 1, borderColor: Colors.borderLight,
   },
   infoText: {
@@ -539,22 +585,22 @@ const styles = StyleSheet.create({
   // Selfie
   selfieBox: {
     borderRadius: Radius.xl, overflow: 'hidden',
-    borderWidth: 2, borderColor: Colors.primary + '55',
+    borderWidth: 2, borderColor: AUTH_GREEN + '66',
     borderStyle: 'dashed', marginBottom: 16,
   },
   selfieInner: {
     padding: 44, alignItems: 'center', gap: 14,
-    backgroundColor: Colors.primary + '0D',
+    backgroundColor: '#F7FCEF',
   },
   selfieIconWrap: {
     width: 80, height: 80, borderRadius: 40,
-    backgroundColor: Colors.primary + '22',
+    backgroundColor: '#F0FAE8',
     alignItems: 'center', justifyContent: 'center',
-    borderWidth: 2, borderColor: Colors.primary + '44',
+    borderWidth: 2, borderColor: AUTH_GREEN + '55',
   },
   selfiePreview: {
     width: 96, height: 96, borderRadius: 48,
-    borderWidth: 2, borderColor: Colors.primary,
+    borderWidth: 2, borderColor: AUTH_GREEN,
   },
   selfieLabel: {
     fontSize: 17, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary,
@@ -563,6 +609,7 @@ const styles = StyleSheet.create({
     fontSize: 13, fontFamily: 'Poppins_400Regular',
     color: Colors.textSecondary, textAlign: 'center',
   },
+  primaryButton: { marginTop: 24, marginBottom: 40 },
 });
 
 export default RegisterDriverScreen;

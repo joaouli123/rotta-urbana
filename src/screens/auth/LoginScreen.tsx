@@ -1,33 +1,16 @@
 import React, { useState } from 'react';
 import {
-  View, Text, Image, StyleSheet, ScrollView, TouchableOpacity,
-  KeyboardAvoidingView, Platform, StatusBar, Alert, TextInput, Dimensions,
+  View, Text, Image, ImageBackground, StyleSheet, ScrollView, TouchableOpacity,
+  KeyboardAvoidingView, Platform, StatusBar, Alert, TextInput, useWindowDimensions,
 } from 'react-native';
-import Svg, { Path } from 'react-native-svg';
 import { Eye, EyeOff, User, Car, Mail, Lock, ChevronRight } from 'lucide-react-native';
-import { Colors } from '../../constants';
 import { useAuth } from '../../contexts/AuthContext';
 import { friendlyError } from '../../lib/errors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const { width: W } = Dimensions.get('window');
 const RU_GREEN = '#76C442';
 const DARK = '#131313';
 
-// ── Onda branca com borda verde ───────────────────────────────────────────────
-const WAVE_H = 56;
-const _HW = W / 2;
-const _FILL   = 'M0,' + WAVE_H + ' Q' + _HW + ',0 ' + W + ',' + WAVE_H + ' L' + W + ',' + WAVE_H + ' L0,' + WAVE_H + ' Z';
-const _BORDER = 'M0,' + WAVE_H + ' Q' + _HW + ',0 ' + W + ',' + WAVE_H;
-
-const WaveDivider: React.FC = () => (
-  <View style={{ marginTop: -1 }}>
-    <Svg width={W} height={WAVE_H}>
-      <Path d={_FILL}   fill="#ffffff" />
-      <Path d={_BORDER} fill="none" stroke={RU_GREEN} strokeWidth={3.5} />
-    </Svg>
-  </View>
-);
 
 
 
@@ -85,11 +68,12 @@ interface LoginScreenProps {
   onRegisterDriver: () => void;
 }
 
-const HEADER_H = 200;
+const HERO_HEIGHT_RATIO = 0.58;
 
 const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver }) => {
   const { signIn } = useAuth();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
@@ -108,17 +92,22 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
       <StatusBar barStyle="light-content" backgroundColor={DARK} />
       <View style={{ flex: 1, backgroundColor: DARK }}>
 
-        {/* ── Header escuro ── */}
-        <View style={[s.header, { paddingTop: insets.top }]}>
+        {/* ── Header com imagem de fundo do usuário ── */}
+        <ImageBackground
+          source={require('../../../assets/auth-city-curve-v3.png')}
+          resizeMode="cover"
+          imageStyle={s.heroImage}
+          style={[
+          s.header,
+          { height: width * HERO_HEIGHT_RATIO },
+        ]}
+        >
           <Image
             source={require('../../../assets/logo.png')}
-            style={s.logo}
+            style={[s.logo, { top: insets.top + 8, width: width * 0.5 }]}
             resizeMode="contain"
           />
-        </View>
-
-        {/* ── Onda ── */}
-        <WaveDivider />
+        </ImageBackground>
 
         {/* ── Conteúdo branco ── */}
         <ScrollView
@@ -127,7 +116,6 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
-          <Text style={s.sectionLabel}>Bem-vindo de volta</Text>
           <Text style={s.title}>Login</Text>
 
           <SimpleInput
@@ -197,23 +185,22 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
 
 const s = StyleSheet.create({
   header: {
-    height: HEADER_H,
-    backgroundColor: DARK,
+    backgroundColor: '#ffffff',
     alignItems: 'center',
-    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  heroImage: {
+    width: '100%',
+    height: '100%',
   },
   logo: {
-    width: W * 0.5,
+    position: 'absolute',
     height: 80,
   },
   sheet: { flex: 1, backgroundColor: '#ffffff' },
-  sheetContent: { paddingHorizontal: 28, paddingTop: 28, paddingBottom: 48 },
-  sectionLabel: {
-    fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#AAAAAA',
-    letterSpacing: 0.6, textTransform: 'uppercase', marginBottom: 6,
-  },
+  sheetContent: { paddingHorizontal: 28, paddingTop: 14, paddingBottom: 48 },
   title: {
-    fontSize: 28, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 28,
+    fontSize: 28, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 14,
   },
   forgotBtn: { alignSelf: 'flex-end', marginBottom: 24, marginTop: -8 },
   forgotTxt: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888' },

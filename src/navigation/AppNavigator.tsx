@@ -44,6 +44,7 @@ import DriverRatePassengerScreen from '../screens/driver/DriverRatePassengerScre
 // Admin
 import AdminDashboardScreen from '../screens/admin/AdminDashboardScreen';
 import AdminDriversScreen from '../screens/admin/AdminDriversScreen';
+import AdminPassengersScreen from '../screens/admin/AdminPassengersScreen';
 import AdminPaymentsScreen from '../screens/admin/AdminPaymentsScreen';
 import AdminMonitoringScreen from '../screens/admin/AdminMonitoringScreen';
 import AdminSupportScreen from '../screens/admin/AdminSupportScreen';
@@ -384,11 +385,14 @@ const DriverFlow: React.FC = () => {
   const watchRef = useRef<Location.LocationSubscription | null>(null);
   const screenRef = useRef(screen);
   screenRef.current = screen;
+  // Rides this driver has already declined — kept out of the poll/realtime
+  // feed so a decline doesn't keep resurfacing the same ride every few seconds.
+  const rejectedIdsRef = useRef<Set<string>>(new Set());
 
   // New ride requests push the driver to the notification screen (when free).
   useEffect(() => {
     const unsub = subscribeSearchingRides((r) => {
-      if (!online || activeRide) return;
+      if (!online || activeRide || rejectedIdsRef.current.has(r.id)) return;
       setPendingRequest((cur) => cur ?? r);
       if (screenRef.current === 'driver_home') setScreen('ride_notification');
     });
@@ -404,7 +408,7 @@ const DriverFlow: React.FC = () => {
     let cancelled = false;
     const pull = async () => {
       try {
-        const existing = await getSearchingRides();
+        const existing = (await getSearchingRides()).filter((r) => !rejectedIdsRef.current.has(r.id));
         if (cancelled || existing.length === 0) return;
         setPendingRequest((cur) => cur ?? existing[0]);
         if (screenRef.current === 'driver_home') setScreen('ride_notification');
@@ -467,7 +471,7 @@ const DriverFlow: React.FC = () => {
         setOnline(true);
         // Pull any ride requests that were already searching before we subscribed.
         try {
-          const existing = await getSearchingRides();
+          const existing = (await getSearchingRides()).filter((r) => !rejectedIdsRef.current.has(r.id));
           if (existing.length > 0) {
             setPendingRequest((cur) => cur ?? existing[0]);
             setScreen('ride_notification');
@@ -577,7 +581,11 @@ const DriverFlow: React.FC = () => {
               ride={pendingRequest}
               driverCoords={driverCoords ?? undefined}
               onAccept={handleAccept}
-              onReject={() => { setPendingRequest(null); setScreen('driver_home'); }}
+              onReject={() => {
+                if (pendingRequest) rejectedIdsRef.current.add(pendingRequest.id);
+                setPendingRequest(null);
+                setScreen('driver_home');
+              }}
             />
           )}
         </View>
@@ -635,7 +643,7 @@ const DriverFlow: React.FC = () => {
 
 // ─── Admin flow ──────────────────────────────────────────────────────────────
 type AScreen =
-  | 'admin_dashboard' | 'admin_drivers' | 'admin_payments'
+  | 'admin_dashboard' | 'admin_drivers' | 'admin_passengers' | 'admin_payments'
   | 'admin_monitoring' | 'admin_support' | 'admin_reports' | 'admin_managers';
 
 const AdminFlow: React.FC = () => {
@@ -646,6 +654,7 @@ const AdminFlow: React.FC = () => {
       return (
         <AdminDashboardScreen
           onDrivers={() => setScreen('admin_drivers')}
+          onPassengers={() => setScreen('admin_passengers')}
           onPayments={() => setScreen('admin_payments')}
           onMonitoring={() => setScreen('admin_monitoring')}
           onReports={() => setScreen('admin_reports')}
@@ -655,6 +664,8 @@ const AdminFlow: React.FC = () => {
       );
     case 'admin_drivers':
       return <AdminDriversScreen onBack={dash} onDriverDetail={() => {}} />;
+    case 'admin_passengers':
+      return <AdminPassengersScreen onBack={dash} />;
     case 'admin_payments':
       return <AdminPaymentsScreen onBack={dash} />;
     case 'admin_monitoring':

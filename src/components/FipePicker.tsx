@@ -70,8 +70,8 @@ export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
   );
 
   return (
-    <View style={{ gap: 10, marginBottom: 8 }}>
-      <Field lvl="brand" label="Marca (FIPE)" value={brand?.name} />
+    <View style={{ gap: 12, marginBottom: 12 }}>
+      <Field lvl="brand" label="Marca (tabela FIPE)" value={brand?.name} />
       <Field lvl="model" label="Modelo" value={model?.name} disabled={!brand} />
       <Field lvl="year" label="Ano" value={year?.name} disabled={!model} />
 
@@ -125,11 +125,11 @@ export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
 const styles = StyleSheet.create({
   field: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: Colors.surface, borderRadius: Radius.md,
-    paddingHorizontal: 14, paddingVertical: 12, borderWidth: 1, borderColor: Colors.border,
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#E0E0E0',
   },
-  fieldLabel: { fontSize: 11, fontFamily: 'Poppins_500Medium', color: Colors.textMuted },
-  fieldValue: { fontSize: 14, fontFamily: 'Poppins_500Medium', color: Colors.textPrimary, marginTop: 2 },
+  fieldLabel: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888888' },
+  fieldValue: { fontSize: 15, fontFamily: 'Poppins_400Regular', color: '#1A1A1A', marginTop: 4 },
   result: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 4 },
   resultText: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary, flex: 1 },
   modalWrap: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },

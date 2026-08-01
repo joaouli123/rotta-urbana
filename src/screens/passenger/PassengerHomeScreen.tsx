@@ -112,10 +112,7 @@ const PassengerHomeScreen: React.FC<PassengerHomeProps> = ({
         <TouchableOpacity onPress={onProfile} style={styles.avatarBtn}>
           <Avatar name={profile?.full_name ?? 'Passageiro'} size={40} />
         </TouchableOpacity>
-        <View style={styles.locationPill}>
-          <MapPin size={14} color={Colors.primary} />
-          <Text style={styles.locationText}>Sinop, MT</Text>
-        </View>
+        <View style={{ width: 40 }} />
         <TouchableOpacity onPress={onNotifications} style={styles.notifBtn}>
           <Bell size={22} color={Colors.textPrimary} />
           <View style={styles.notifBadge} />
@@ -192,21 +189,33 @@ const styles = StyleSheet.create({
     borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.border,
   },
   locationText: { ...Typography.smallMedium, color: Colors.textPrimary },
-  notifBtn: { position: 'relative' },
+  notifBtn: {
+    position: 'relative',
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: Colors.card + 'EE',
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: Colors.border,
+  },
   notifBadge: {
-    position: 'absolute', top: -2, right: -2,
+    position: 'absolute', top: 2, right: 2,
     width: 8, height: 8, borderRadius: 4, backgroundColor: Colors.danger,
   },
   bottomSheet: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: Colors.surface,
-    borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    paddingHorizontal: 20, paddingTop: 12, paddingBottom: 32,
+    borderTopLeftRadius: 65,
+    borderTopRightRadius: 0,
+    borderTopWidth: 3,
+    borderLeftWidth: 3,
+    borderRightWidth: 0,
+    borderBottomWidth: 0,
+    borderColor: '#76C442',
+    paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32,
     shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.5, shadowRadius: 16, elevation: 20,
     maxHeight: height * 0.58,
   },
   handle: { width: 40, height: 4, backgroundColor: Colors.border, borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
-  greeting: { ...Typography.h4, color: Colors.textPrimary, marginBottom: 14 },
+  greeting: { ...Typography.h4, color: Colors.textPrimary, marginBottom: 14, marginLeft: 12 },
   searchBar: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     backgroundColor: Colors.card, borderRadius: Radius.md,

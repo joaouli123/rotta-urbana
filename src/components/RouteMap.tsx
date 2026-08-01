@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, ViewStyle } from 'react-native';
 import { Colors } from '../constants';
+import { Flag } from 'lucide-react-native';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Safe Mapbox loader.
@@ -74,6 +75,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
   if (driverLocation && basePts.length > 0) basePts.push(driverLocation);
   const framePts: LngLat[] | null = basePts.length > 1 ? basePts : null;
   let bounds: any = null;
+  let boundsKey = 'static';
   if (framePts) {
     let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
     for (const [lng, lat] of framePts) {
@@ -87,20 +89,28 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
       paddingTop: (paddingTop ?? 0) + 24, paddingBottom: (paddingBottom ?? 0) + 24,
       paddingLeft: 40, paddingRight: 40,
     };
+    boundsKey = [
+      origin?.map((n) => n.toFixed(5)).join(',') ?? 'no-origin',
+      destination?.map((n) => n.toFixed(5)).join(',') ?? 'no-destination',
+      route?.coordinates.length ?? 0,
+      paddingTop ?? 0,
+      paddingBottom ?? 0,
+    ].join(':');
   }
 
   // Sinop, MT — used as initial camera position before GPS kicks in.
   const SINOP_COORD: LngLat = [-55.5024, -11.8642];
 
   return (
-    <Mapbox.MapView style={[{ flex: 1 }, style]} styleURL={Mapbox.StyleURL.Street} logoEnabled={false} compassEnabled>
+    <Mapbox.MapView style={[{ flex: 1 }, style]} styleURL={Mapbox.StyleURL.Street} logoEnabled={false} compassEnabled={false}>
       {bounds ? (
         // key is based on the destination only — it forces a re-mount (hard animation) when
         // the user picks a new destination, but NOT on every driver location poll.
         <Mapbox.Camera
-          key={destination ? `${destination[0].toFixed(4)},${destination[1].toFixed(4)}` : 'static'}
+          key={boundsKey}
           bounds={bounds}
-          animationDuration={400}
+          maxZoomLevel={15.5}
+          animationDuration={700}
         />
       ) : follow ? (
         <Mapbox.Camera
@@ -122,8 +132,10 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
         </Mapbox.PointAnnotation>
       )}
       {destination && (
-        <Mapbox.PointAnnotation id="destination" coordinate={destination}>
-          <View style={[styles.dot, { backgroundColor: Colors.textPrimary }]} />
+        <Mapbox.PointAnnotation id="destination" coordinate={destination} anchor={{ x: 0.5, y: 1 }}>
+          <View style={styles.flagPin}>
+            <Flag size={15} color="#000000" fill="#000000" strokeWidth={2.4} />
+          </View>
         </Mapbox.PointAnnotation>
       )}
 
@@ -176,6 +188,12 @@ const styles = StyleSheet.create({
   carPin: {
     width: 16, height: 16, borderRadius: 4, backgroundColor: Colors.primary,
     borderWidth: 2, borderColor: '#fff', transform: [{ rotate: '45deg' }],
+  },
+  flagPin: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: Colors.primary, borderWidth: 2.5, borderColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+    boxShadow: '0 3px 8px rgba(0,0,0,0.3)',
   },
 });
 
