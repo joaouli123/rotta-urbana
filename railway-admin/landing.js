@@ -381,6 +381,61 @@ export function landingPage(opts = {}) {
           </div>
         </sc-for>
       </div>
+
+      <!-- TABELA DE TARIFAS LOCAIS DE CORRIDA -->
+      <div style="margin-top:48px; background:#141618; border:1.5px solid #232628; border-radius:20px; padding:clamp(24px,3vw,36px);">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:20px; border-bottom:1px solid #232628; padding-bottom:16px;">
+          <div>
+            <h3 style="font-family:'Sora',sans-serif; font-weight:800; font-size:20px; color:#FFFFFF; margin:0;">Tarifas Locais de Corrida por Categoria</h3>
+            <p style="font-family:'Inter',sans-serif; font-size:13.5px; color:#8A9088; margin:4px 0 0 0;">Valores base, custo por KM / minuto e tarifa mínima cobrados nas viagens na cidade.</p>
+          </div>
+          <span style="display:inline-flex; align-items:center; gap:6px; padding:6px 12px; border-radius:100px; background:rgba(99,242,27,0.12); color:#63F21B; font-family:'Sora',sans-serif; font-weight:700; font-size:12px;">
+            <img src="https://api.iconify.design/lucide/check-circle.svg?color=%2363F21B&width=14" alt="" style="width:14px; height:14px; display:block;" /> 100% Transparente
+          </span>
+        </div>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px;">
+          <div style="background:#1C1F22; border:1px solid #2A2E32; border-radius:14px; padding:18px;">
+            <div style="font-family:'Sora',sans-serif; font-weight:700; font-size:16px; color:#48D10A; margin-bottom:12px;">Moto</div>
+            <div style="display:flex; flex-direction:column; gap:8px; font-family:'Inter',sans-serif; font-size:13px; color:#C7CBC5;">
+              <div style="display:flex; justify-content:space-between;"><span>Bandeirada (Base):</span><strong>R$ 3,50</strong></div>
+              <div style="display:flex; justify-content:space-between;"><span>Valor por KM:</span><strong>R$ 1,80</strong></div>
+              <div style="display:flex; justify-content:space-between;"><span>Valor por Minuto:</span><strong>R$ 0,30</strong></div>
+              <div style="display:flex; justify-content:space-between; border-top:1px solid #2E3338; padding-top:6px; margin-top:2px;"><span style="color:#FFFFFF; font-weight:600;">Tarifa Mínima:</span><strong style="color:#63F21B;">R$ 7,00</strong></div>
+            </div>
+          </div>
+
+          <div style="background:#1C1F22; border:1px solid #2A2E32; border-radius:14px; padding:18px;">
+            <div style="font-family:'Sora',sans-serif; font-weight:700; font-size:16px; color:#3B82F6; margin-bottom:12px;">Econômico (Smart)</div>
+            <div style="display:flex; flex-direction:column; gap:8px; font-family:'Inter',sans-serif; font-size:13px; color:#C7CBC5;">
+              <div style="display:flex; justify-content:space-between;"><span>Bandeirada (Base):</span><strong>R$ 4,50</strong></div>
+              <div style="display:flex; justify-content:space-between;"><span>Valor por KM:</span><strong>R$ 2,20</strong></div>
+              <div style="display:flex; justify-content:space-between;"><span>Valor por Minuto:</span><strong>R$ 0,35</strong></div>
+              <div style="display:flex; justify-content:space-between; border-top:1px solid #2E3338; padding-top:6px; margin-top:2px;"><span style="color:#FFFFFF; font-weight:600;">Tarifa Mínima:</span><strong style="color:#63F21B;">R$ 9,00</strong></div>
+            </div>
+          </div>
+
+          <div style="background:#1C1F22; border:1px solid #2A2E32; border-radius:14px; padding:18px;">
+            <div style="font-family:'Sora',sans-serif; font-weight:700; font-size:16px; color:#F59E0B; margin-bottom:12px;">Conforto</div>
+            <div style="display:flex; flex-direction:column; gap:8px; font-family:'Inter',sans-serif; font-size:13px; color:#C7CBC5;">
+              <div style="display:flex; justify-content:space-between;"><span>Bandeirada (Base):</span><strong>R$ 6,00</strong></div>
+              <div style="display:flex; justify-content:space-between;"><span>Valor por KM:</span><strong>R$ 2,80</strong></div>
+              <div style="display:flex; justify-content:space-between;"><span>Valor por Minuto:</span><strong>R$ 0,45</strong></div>
+              <div style="display:flex; justify-content:space-between; border-top:1px solid #2E3338; padding-top:6px; margin-top:2px;"><span style="color:#FFFFFF; font-weight:600;">Tarifa Mínima:</span><strong style="color:#63F21B;">R$ 12,00</strong></div>
+            </div>
+          </div>
+
+          <div style="background:#1C1F22; border:1px solid #2A2E32; border-radius:14px; padding:18px;">
+            <div style="font-family:'Sora',sans-serif; font-weight:700; font-size:16px; color:#8B5CF6; margin-bottom:12px;">Premium</div>
+            <div style="display:flex; flex-direction:column; gap:8px; font-family:'Inter',sans-serif; font-size:13px; color:#C7CBC5;">
+              <div style="display:flex; justify-content:space-between;"><span>Bandeirada (Base):</span><strong>R$ 9,00</strong></div>
+              <div style="display:flex; justify-content:space-between;"><span>Valor por KM:</span><strong>R$ 3,80</strong></div>
+              <div style="display:flex; justify-content:space-between;"><span>Valor por Minuto:</span><strong>R$ 0,60</strong></div>
+              <div style="display:flex; justify-content:space-between; border-top:1px solid #2E3338; padding-top:6px; margin-top:2px;"><span style="color:#FFFFFF; font-weight:600;">Tarifa Mínima:</span><strong style="color:#63F21B;">R$ 18,00</strong></div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
