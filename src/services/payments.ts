@@ -74,13 +74,34 @@ export async function buildPlanPix(plan: PlanType): Promise<{ code: string; amou
       amount = settings.plan_daily_price ?? settings.subscription_daily_amount;
       break;
     case 'weekly':
-      amount = settings.plan_weekly_price ?? settings.subscription_monthly_amount / 4;
+      amount = settings.plan_weekly_price ?? (settings.subscription_monthly_amount / 4);
       break;
     case 'monthly':
       amount = settings.subscription_monthly_amount;
       break;
     default:
       throw new Error('Plano inválido para geração de PIX');
+  }
+
+  // Tenta gerar via API do Mercado Pago no servidor de produção
+  try {
+    const { data: u } = await supabase.auth.getUser();
+    const res = await fetch('https://rottaurbana.com.br/api/payments/create-pix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        amount,
+        description: `Plano Rotta Urbana (${plan.toUpperCase()})`,
+        email: u?.user?.email || 'motorista@rottaurbana.com.br',
+        driver_id: u?.user?.id
+      })
+    });
+    const json = await res.json();
+    if (json?.qr_code) {
+      return { code: json.qr_code, amount };
+    }
+  } catch {
+    // Fallback gracioso para payload estático se offline
   }
 
   const code = buildPixPayload({
