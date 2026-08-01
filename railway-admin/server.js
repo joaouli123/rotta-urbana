@@ -497,22 +497,25 @@ app.get('/drivers', requireAuth, async (req, res) => {
   const planFilter = req.query.plan || '';
   const okMsg = req.query.ok ? `<div class="ok">✅ Operação realizada com sucesso!</div>` : '';
 
-  const [{ data: drivers }, { data: profiles }, { data: subs }, { data: vehicles }] = await Promise.all([
+  const [{ data: drivers }, { data: profiles }, { data: subs }, { data: vehicles }, { data: docs }] = await Promise.all([
     admin.from('drivers').select('*'),
     admin.from('profiles').select('id,full_name,email,phone,rating,is_active,cpf').eq('role', 'driver'),
     admin.from('subscriptions').select('driver_id,status,plan,amount,due_date'),
     admin.from('vehicles').select('driver_id,model,plate'),
+    admin.from('driver_documents').select('driver_id,id'),
   ]);
 
   const pMap = Object.fromEntries((profiles ?? []).map((p) => [p.id, p]));
   const sMap = Object.fromEntries((subs ?? []).map((s) => [s.driver_id, s]));
   const vMap = {}; (vehicles ?? []).forEach((v) => { (vMap[v.driver_id] ??= []).push(v); });
+  const docCountMap = {}; (docs ?? []).forEach((d) => { docCountMap[d.driver_id] = (docCountMap[d.driver_id] || 0) + 1; });
 
   let allDrivers = (drivers ?? []).map(d => ({
     ...d,
     profile: pMap[d.id] || {},
     sub: sMap[d.id] || {},
-    vehicle: (vMap[d.id] || [])[0] || {}
+    vehicle: (vMap[d.id] || [])[0] || {},
+    docCount: docCountMap[d.id] || 0
   }));
 
   // Filtering
@@ -559,23 +562,27 @@ app.get('/drivers', requireAuth, async (req, res) => {
   `;
 
   const rows = pageDrivers.map((d) => {
-    const p = d.profile; const s = d.sub; const v = d.vehicle;
+    const p = d.profile; const s = d.sub; const v = d.vehicle; const dc = d.docCount;
     const verifyBtn = d.is_verified
       ? `<form class="inline" method="post" action="/drivers/${d.id}/unverify">${iconBtnSuspend('Suspender / Bloquear Motorista')}</form>`
       : `<form class="inline" method="post" action="/drivers/${d.id}/verify">${iconBtnApprove('Aprovar Motorista')}</form>`;
     
-    const docsBtn = iconBtnDocs(`/drivers/${d.id}/documents`, 'Ver Documentos Anexados (CNH, CRLV, etc.)');
+    const docsBtn = iconBtnDocs(`/drivers/${d.id}/documents`, `Ver Documentos Anexados (${dc} arquivos)`);
     const editBtn = iconBtnEdit(`/drivers/${d.id}/edit`, 'Editar Perfil e Veículo');
     const keyBtn = iconBtnKey(`/drivers/${d.id}/reset-password`, 'Redefinir Senha do Motorista');
     const planBtn = iconBtnPlan(`/drivers/${d.id}/plan`, 'Alterar Plano / Assinatura');
     const waBtn = iconBtnWhatsApp(p.phone, 'Conversar no WhatsApp');
+
+    const docBadge = dc > 0 
+      ? `<br><small style="color:#047857;font-weight:700;background:#ECFDF5;padding:2px 7px;border-radius:100px;display:inline-block;margin-top:2px;">${dc} documento(s)</small>`
+      : `<br><small style="color:#9CA3AF;display:inline-block;margin-top:2px;">Sem anexos</small>`;
 
     return [
       `<div><strong>${esc(p.full_name ?? '—')}</strong><br><small style="color:var(--mut);">${esc(p.email ?? '')}</small></div>`,
       esc(fmtPhone(p.phone)),
       `${esc(v.model ?? '—')}<br><small style="color:#6B7280;font-weight:600">${esc(v.plate ?? '')}</small>`,
       badge(d.status),
-      d.is_verified ? badge('approved') : badge(d.documents_status ?? 'pending'),
+      (d.is_verified ? badge('approved') : badge(d.documents_status ?? 'pending')) + docBadge,
       esc(d.pix_key ?? '—'),
       s.plan ? `${badge(s.plan)}<br><small>${badge(s.status)}</small>` : '<span style="color:var(--mut);font-size:12px;">Sem plano</span>',
       `<div style="display:flex;gap:4px;align-items:center;flex-wrap:nowrap;">${verifyBtn} ${docsBtn} ${editBtn} ${keyBtn} ${planBtn} ${waBtn}</div>`,
@@ -866,8 +873,11 @@ app.get('/drivers/:id/documents', requireAuth, async (req, res) => {
 
   const docNames = {
     cnh: 'CNH / Carteira de Habilitação',
+    rg: 'RG / Documento de Identidade',
+    vehicle_doc: 'CRLV / Documento do Veículo',
     crlv: 'CRLV / Documento do Veículo',
     antecedentes: 'Certidão de Antecedentes Criminais',
+    selfie: 'Foto de Perfil / Selfie com Documento',
     photo: 'Foto de Perfil / Selfie com Documento',
     residence: 'Comprovante de Residência',
   };
