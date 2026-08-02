@@ -493,3 +493,115 @@ export function deleteAccountPage() {
 </body>
 </html>`;
 }
+
+export function termsOfServicePage() {
+  return `<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Termos e Condições de Uso · Rotta Urbana</title>
+  
+  <link rel="icon" type="image/png" href="/app-icon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=Outfit:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --panel: #ffffff;
+      --border: #e2e8f0;
+      --primary: #84cc16;
+      --primary-dark: #4d7c0f;
+      --text: #0f172a;
+      --text-muted: #475569;
+      --font-outfit: 'Outfit', sans-serif;
+      --font-sans: 'Plus Jakarta Sans', sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background-color: var(--bg); color: var(--text); font-family: var(--font-sans); line-height: 1.6; padding-top: 120px; padding-bottom: 80px; }
+    .container { max-width: 800px; margin: 0 auto; padding: 0 24px; }
+    header { position: fixed; top: 0; left: 0; width: 100%; z-index: 100; background: #0f172a; border-bottom: 1px solid rgba(255, 255, 255, 0.08); height: 80px; display: flex; align-items: center; }
+    .header-wrap { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+    .logo-img { height: 38px; object-fit: contain; }
+    .back-link { color: #94a3b8; font-size: 14px; font-weight: 600; text-decoration: none; }
+    .back-link:hover { color: var(--primary); }
+    .policy-box { background: var(--panel); border: 1px solid var(--border); border-radius: 24px; padding: 48px; box-shadow: 0 10px 15px -3px rgba(15, 23, 42, 0.05); }
+    h1 { font-family: var(--font-outfit); font-size: 36px; font-weight: 900; margin-bottom: 12px; color: var(--text); line-height: 1.15; }
+    .meta-date { font-size: 14px; color: var(--text-muted); margin-bottom: 32px; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+    h2 { font-family: var(--font-outfit); font-size: 22px; font-weight: 800; margin-top: 32px; margin-bottom: 16px; color: var(--text); }
+    p { margin-bottom: 16px; color: var(--text-muted); font-size: 15px; }
+    ul, ol { margin-bottom: 20px; padding-left: 24px; color: var(--text-muted); font-size: 15px; }
+    li { margin-bottom: 8px; }
+    .contact-card { background: var(--bg); border: 1px solid var(--border); border-radius: 16px; padding: 24px; margin-top: 32px; }
+    .contact-card h3 { font-family: var(--font-outfit); font-size: 18px; font-weight: 700; margin-bottom: 8px; }
+    .contact-card p { margin-bottom: 8px; font-size: 14.5px; }
+    .contact-card p:last-child { margin-bottom: 0; }
+    @media (max-width: 768px) {
+      .policy-box { padding: 24px; border-radius: 16px; }
+      h1 { font-size: 28px; }
+      body { padding-top: 100px; }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="container header-wrap">
+      <a href="/">
+        <img src="/logo.png" alt="Rotta Urbana Logo" class="logo-img">
+      </a>
+      <a href="/" class="back-link">← Voltar ao site</a>
+    </div>
+  </header>
+
+  <main class="container">
+    <div class="policy-box">
+      <h1>Termos e Condições de Uso</h1>
+      <div class="meta-date">Última atualização: 01 de Julho de 2026</div>
+
+      <p>Bem-vindo ao <strong>Rotta Urbana</strong>. Estes Termos e Condições de Uso ("Termos") regem o acesso e a utilização dos serviços oferecidos pela <strong>ROTTA URBANA LTDA</strong> por meio da nossa plataforma digital e aplicativos móveis para passageiros e motoristas parceiros.</p>
+
+      <h2>1. Aceitação dos Termos</h2>
+      <p>Ao se cadastrar, baixar ou utilizar o aplicativo Rotta Urbana, você declara ter lido, compreendido e aceito integralmente estes Termos e a nossa Política de Privacidade. Caso não concorde com qualquer disposição aqui prevista, você não deverá utilizar a plataforma.</p>
+
+      <h2>2. Cadastro e Requisitos</h2>
+      <p>Para utilizar os serviços do Rotta Urbana, o usuário deve ser plenamente capaz segundo as leis brasileiras (maior de 18 anos) e fornecer informações verídicas, completas e atualizadas.</p>
+      <ul>
+        <li><strong>Para Passageiros:</strong> O cadastro exige nome, e-mail, telefone válido e senha de acesso.</li>
+        <li><strong>Para Motoristas Parceiros:</strong> Além dos dados pessoais básicos, o motorista deverá fornecer cópia legível da CNH com observação de Exercício de Atividade Remunerada (EAR), CRLV do veículo cadastrado, comprovante de residência e atestado de antecedentes criminais. A aprovação da conta depende da validação completa dos documentos pela equipe Rotta Urbana.</li>
+      </ul>
+
+      <h2>3. Natureza dos Serviços</h2>
+      <p>O Rotta Urbana opera como uma plataforma de tecnologia que conecta intermediando passageiros e motoristas parceiros autônomos. O Rotta Urbana não é empresa de transporte e não possui frota própria de veículos. Os motoristas parceiros prestam serviços de transporte privado individual de passageiros de forma autônoma e independente.</p>
+
+      <h2>4. Tarifas, Pagamentos e Assinaturas</h2>
+      <p>As tarifas de transporte calculadas pelo aplicativo consideram bandeirada base, distância percorrida (KM) e tempo estimado de rota (minutos).</p>
+      <ul>
+        <li><strong>Pagamentos via PIX:</strong> O passageiro efetua o pagamento diretamente ao motorista via chave PIX exibida na tela do aplicativo ao término da viagem ou via meio direto disponibilizado na plataforma.</li>
+        <li><strong>Planos de Assinatura do Motorista:</strong> O motorista parceiro pode optar por planos flexíveis (Por Corrida, Diário, Semanal ou Mensal) para utilizar a plataforma, mantendo o controle transparente de seus ganhos sem taxas ocultas.</li>
+      </ul>
+
+      <h2>5. Cancelamento e Segurança</h2>
+      <p>O passageiro e o motorista podem cancelar a viagem antes do seu início. O descumprimento injustificado de viagens aceitas ou comportamento inadequado sujeito à denúncia no chat ou botão de emergência poderá resultar na suspensão ou banimento definitivo da conta do usuário.</p>
+
+      <h2>6. Direitos de Propriedade Intelectual</h2>
+      <p>Todos os direitos autorais, marcas registrados, logos e códigos da marca Rotta Urbana são de propriedade exclusiva da ROTTA URBANA LTDA. É proibida a reprodução ou engenharia reversa sem autorização expressa por escrito.</p>
+
+      <h2>7. Alterações destes Termos</h2>
+      <p>O Rotta Urbana poderá alterar estes Termos a qualquer momento. As modificações entrarão em vigor após a publicação da nova versão na plataforma. O uso continuado dos serviços após as alterações constitui aceitação dos novos termos.</p>
+
+      <div class="contact-card">
+        <h3>Dúvidas e Canais Oficiais</h3>
+        <p>Se você tiver qualquer dúvida sobre estes Termos de Uso, entre em contato com nossa equipe:</p>
+        <p><strong>Empresa:</strong> Rotta Urbana Ltda</p>
+        <p><strong>E-mail de Contato:</strong> <a href="mailto:contato@rottaurbana.com.br" style="color: var(--primary-dark); font-weight: bold;">contato@rottaurbana.com.br</a></p>
+        <p><strong>WhatsApp Oficial:</strong> <a href="https://wa.me/5566996471003" target="_blank" style="color: var(--primary-dark); font-weight: bold;">+55 66 99647-1003</a></p>
+      </div>
+    </div>
+  </main>
+
+</body>
+</html>`;
+}

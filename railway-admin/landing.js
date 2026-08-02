@@ -712,9 +712,11 @@ export function landingPage(opts = {}) {
       </div>
     </div>
     <div style="max-width:1300px; margin:0 auto; display:flex; justify-content:space-between; align-items:center; padding-top:24px; flex-wrap:wrap; gap:12px;">
-      <span style="font-family:'Inter',sans-serif; font-size:13px; color:#646A64;">© 2026 Rotta Urbana. Todos os direitos reservados.</span>
-      <div style="display:flex; gap:24px; flex-wrap:wrap;">
-        <a href="/politica-de-privacidade" style="font-family:'Inter',sans-serif; font-size:13px; color:#646A64; text-decoration:none;" style-hover="color:#8A9088;">Termos &amp; Privacidade</a>
+      <span style="font-family:'Inter',sans-serif; font-size:13px; color:#646A64;">© 2026 Rotta Urbana Ltda. Todos os direitos reservados.</span>
+      <div style="display:flex; gap:20px; flex-wrap:wrap;">
+        <a href="/politica-de-privacidade" style="font-family:'Inter',sans-serif; font-size:13px; color:#646A64; text-decoration:none;" style-hover="color:#8A9088;">Política de Privacidade</a>
+        <a href="/termos-de-uso" style="font-family:'Inter',sans-serif; font-size:13px; color:#646A64; text-decoration:none;" style-hover="color:#8A9088;">Termos de Uso</a>
+        <a href="/exclusao-de-conta" style="font-family:'Inter',sans-serif; font-size:13px; color:#646A64; text-decoration:none;" style-hover="color:#8A9088;">Exclusão de Conta</a>
       </div>
     </div>
   </footer>

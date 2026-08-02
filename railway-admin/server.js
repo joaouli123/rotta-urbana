@@ -117,7 +117,13 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // ─── Políticas Públicas (Google Play / App Store) ───────────────────────────
 app.get('/politica-de-privacidade', (req, res) => render(res, privacyPolicyPage()));
+app.get('/privacy', (req, res) => render(res, privacyPolicyPage()));
+
+app.get('/termos-de-uso', (req, res) => render(res, termsOfServicePage()));
+app.get('/terms', (req, res) => render(res, termsOfServicePage()));
+
 app.get('/exclusao-de-conta', (req, res) => render(res, deleteAccountPage()));
+app.get('/delete-account', (req, res) => render(res, deleteAccountPage()));
 
 // ─── Armazenamento de Leads ────────────────────────────────────────────────
 let localLeads = [];
