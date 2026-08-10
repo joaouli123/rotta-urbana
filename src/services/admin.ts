@@ -65,6 +65,8 @@ export interface AdminDriver {
   vehicle_plate: string | null;
   vehicle_color: string | null;
   vehicle_year: number | null;
+  operating_city?: string | null;
+  operating_state?: string | null;
   subscription_status: SubscriptionStatus | null;
   subscription_due: string | null;
 }
@@ -173,12 +175,17 @@ export async function setPlanWeeklyPrice(price: number): Promise<void> {
 
 // ── Managers ──────────────────────────────────────────────────────────────────
 export interface Manager {
+  manager_id: string;
   profile_id: string;
   full_name: string;
   email: string | null;
   phone: string | null;
-  city: string | null;
+  manager_type: 'city' | 'network';
+  city?: string | null;
+  cities: { city: string; state: string | null }[];
+  explicit_driver_count: number;
   is_active: boolean;
+  created_at: string;
 }
 
 export interface UserSearchResult {
@@ -286,4 +293,60 @@ export async function getDriverRanking(limit = 30): Promise<DriverRankingEntry[]
   const { data, error } = await supabase.rpc('admin_driver_ranking', { p_limit: limit });
   if (error) throw error;
   return (data as DriverRankingEntry[]) ?? [];
+}
+
+export interface ManagerConfigInput {
+  profileId: string;
+  managerType: 'city' | 'network';
+  cities: string[];
+  driverIds: string[];
+}
+
+export interface CreateManagerAccountInput {
+  fullName: string;
+  email: string;
+  phone?: string;
+  password: string;
+  managerType: 'city' | 'network';
+  cities: string[];
+  driverIds: string[];
+}
+
+export async function configureManager(input: ManagerConfigInput): Promise<string> {
+  const { data, error } = await supabase.rpc('admin_configure_manager', {
+    p_profile_id: input.profileId,
+    p_manager_type: input.managerType,
+    p_cities: input.cities,
+    p_driver_ids: input.driverIds,
+  });
+  if (error) throw error;
+  return String(data);
+}
+
+export async function createManagerAccount(input: CreateManagerAccountInput): Promise<{ manager_id: string; profile_id: string }> {
+  const { data, error } = await supabase.functions.invoke('create-manager', {
+    body: input,
+  });
+  if (error) throw error;
+  return data as { manager_id: string; profile_id: string };
+}
+
+export async function setManagerActive(profileId: string, active: boolean): Promise<void> {
+  const { error } = await supabase.rpc('admin_set_manager_active', {
+    p_profile_id: profileId,
+    p_active: active,
+  });
+  if (error) throw error;
+}
+
+export interface ManagerScope {
+  manager_type: 'city' | 'network';
+  cities: string[];
+  driver_ids: string[];
+}
+
+export async function getManagerScope(profileId: string): Promise<ManagerScope> {
+  const { data, error } = await supabase.rpc('admin_manager_scope', { p_profile_id: profileId });
+  if (error) throw error;
+  return data as ManagerScope;
 }

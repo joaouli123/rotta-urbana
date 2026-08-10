@@ -2,6 +2,7 @@
   "expo": {
     "name": "rotta-urbana",
     "slug": "rotta-urbana",
+    "scheme": "rotta-urbana",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -45,6 +46,11 @@
       ],
       "expo-font"
     ],
-    "owner": "cleipytt49app2"
+    "owner": "cleipytt49app2",
+    "extra": {
+      "eas": {
+        "projectId": "a9ff15b3-6403-4c01-8cec-a2d0f9deea13"
+      }
+    }
   }
 }

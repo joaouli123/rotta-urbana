@@ -66,11 +66,12 @@ const fi = StyleSheet.create({
 interface LoginScreenProps {
   onRegister: () => void;
   onRegisterDriver: () => void;
+  onForgotPassword: (email: string) => void;
 }
 
 const HERO_HEIGHT_RATIO = 0.58;
 
-const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver }) => {
+const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver, onForgotPassword }) => {
   const { signIn } = useAuth();
   const insets = useSafeAreaInsets();
   const { width } = useWindowDimensions();
@@ -142,7 +143,7 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver 
             }
           />
 
-          <TouchableOpacity style={s.forgotBtn} activeOpacity={0.7}>
+          <TouchableOpacity style={s.forgotBtn} onPress={() => onForgotPassword(email)} activeOpacity={0.7}>
             <Text style={s.forgotTxt}>Esqueci minha senha</Text>
           </TouchableOpacity>
 

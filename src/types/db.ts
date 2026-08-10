@@ -42,6 +42,8 @@ export interface DriverRow {
   location_updated_at: string | null;
   heading: number | null;
   total_rides: number;
+  operating_city?: string | null;
+  operating_state?: string | null;
 }
 
 export interface RideRow {

@@ -29,6 +29,7 @@ import { getManagerKpis, type ManagerKpis } from '../../services/manager';
 interface ManagerDashboardProps {
   onDrivers: () => void;
   onRides: () => void;
+  onReports: () => void;
   onSupport: () => void;
   onSignOut: () => void;
   cityName: string;
@@ -37,6 +38,7 @@ interface ManagerDashboardProps {
 const ManagerDashboardScreen: React.FC<ManagerDashboardProps> = ({
   onDrivers,
   onRides,
+  onReports,
   onSupport,
   onSignOut,
   cityName,
@@ -51,6 +53,7 @@ const ManagerDashboardScreen: React.FC<ManagerDashboardProps> = ({
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  const scopeLabel = kpis?.context?.manager_type === 'network' ? 'Toda a rede' : kpis?.context?.cities?.join(' / ') || cityName;
 
   return (
     <View style={styles.container}>
@@ -68,7 +71,7 @@ const ManagerDashboardScreen: React.FC<ManagerDashboardProps> = ({
             <Text style={styles.headerSub}>Bem-vindo, Gerente</Text>
             <View style={styles.cityRow}>
               <MapPin size={18} color={Colors.primary} />
-              <Text style={styles.cityName}>{cityName}</Text>
+              <Text style={styles.cityName}>{scopeLabel}</Text>
             </View>
           </View>
           <TouchableOpacity style={styles.signOutBtn} onPress={onSignOut} activeOpacity={0.75}>
@@ -123,6 +126,7 @@ const ManagerDashboardScreen: React.FC<ManagerDashboardProps> = ({
               {[
                 { label: 'Motoristas', icon: Users, color: Colors.primary, onPress: onDrivers },
                 { label: 'Corridas', icon: Navigation, color: Colors.info, onPress: onRides },
+                { label: 'Relatorios', icon: Activity, color: Colors.success, onPress: onReports },
                 { label: 'Suporte', icon: Headphones, color: Colors.warning, onPress: onSupport },
               ].map((a) => (
                 <TouchableOpacity key={a.label} style={styles.actionCard} onPress={a.onPress} activeOpacity={0.8}>

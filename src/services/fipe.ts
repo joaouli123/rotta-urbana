@@ -10,7 +10,16 @@ export interface FipeResult {
   code: string;       // codeFipe
   brand: string;
   model: string;
+  /** Effective year used by the platform's vehicle rules. Zero-km FIPE entries use the current year. */
   year: number;
+  /** Raw FIPE model year. FIPE uses 32000 for zero-km vehicles. */
+  fipeModelYear: number;
+  /** Year/fuel code selected in the FIPE table, e.g. 2025-1 or 32000-1. */
+  fipeYearCode: string;
+  /** Human-readable year shown to the user, e.g. "2025 - Gasolina" or "0 km - Gasolina". */
+  yearLabel: string;
+  fuel: string;
+  isZeroKm: boolean;
   reference: string;
 }
 
@@ -29,6 +38,21 @@ export const fipeModels = (brandId: string, kind: FipeKind = 'cars') =>
 export const fipeYears = (brandId: string, modelId: string, kind: FipeKind = 'cars') =>
   get<FipeItem[]>(`/${kind}/brands/${brandId}/models/${modelId}/years`);
 
+export function getFipeYearInfo(item: FipeItem) {
+  const name = String(item.name ?? '').trim();
+  const match = name.match(/^(\d{4,5})(?:\s+(.+))?$/);
+  const rawYear = Number(match?.[1] ?? name.match(/\d{4,5}/)?.[0] ?? 0);
+  const fuel = String(match?.[2] ?? '').trim();
+  const isZeroKm = rawYear === 32000;
+
+  return {
+    rawYear,
+    fuel,
+    isZeroKm,
+    label: `${isZeroKm ? '0 km' : rawYear || name}${fuel ? ` - ${fuel}` : ''}`,
+  };
+}
+
 function parseBRL(s: string): number {
   // "R$ 10.000,00" -> 10000
   return Number(String(s).replace('R$', '').trim().replace(/\./g, '').replace(',', '.')) || 0;
@@ -36,12 +60,23 @@ function parseBRL(s: string): number {
 
 export async function fipePrice(brandId: string, modelId: string, yearId: string, kind: FipeKind = 'cars'): Promise<FipeResult> {
   const d = await get<any>(`/${kind}/brands/${brandId}/models/${modelId}/years/${yearId}`);
+  const rawModelYear = Number(d.modelYear) || 0;
+  const isZeroKm = rawModelYear === 32000;
+  const currentYear = new Date().getFullYear();
+  const fuel = String(d.fuel ?? '').trim();
+  const effectiveYear = isZeroKm ? currentYear : rawModelYear;
+
   return {
     value: parseBRL(d.price),
     code: d.codeFipe ?? '',
     brand: d.brand ?? '',
     model: d.model ?? '',
-    year: Number(d.modelYear) || 0,
+    year: effectiveYear,
+    fipeModelYear: rawModelYear,
+    fipeYearCode: yearId,
+    yearLabel: `${isZeroKm ? '0 km' : rawModelYear || 'Ano nao informado'}${fuel ? ` - ${fuel}` : ''}`,
+    fuel,
+    isZeroKm,
     reference: d.referenceMonth ?? '',
   };
 }

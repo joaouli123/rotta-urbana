@@ -1,0 +1,46 @@
+import { useEffect, useState } from 'react';
+import { Alert, Linking } from 'react-native';
+import { supabase } from '../lib/supabase';
+import { parsePasswordRecoveryUrl } from '../services/authRecovery';
+
+export function usePasswordRecoveryLink() {
+  const [ready, setReady] = useState(false);
+  const [active, setActive] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const handleUrl = async (url: string | null) => {
+      if (!url) return;
+      const payload = parsePasswordRecoveryUrl(url);
+      if (!payload) return;
+      if ('error' in payload) {
+        Alert.alert('Link de senha', payload.error);
+        return;
+      }
+
+      const { error } = await supabase.auth.setSession({
+        access_token: payload.accessToken,
+        refresh_token: payload.refreshToken,
+      });
+      if (error) {
+        Alert.alert('Link de senha', 'Nao foi possivel validar o link. Solicite uma nova redefinicao.');
+      } else if (mounted) {
+        setActive(true);
+      }
+    };
+
+    Linking.getInitialURL()
+      .then(handleUrl)
+      .catch(() => undefined)
+      .finally(() => { if (mounted) setReady(true); });
+
+    const subscription = Linking.addEventListener('url', ({ url }) => { void handleUrl(url); });
+    return () => {
+      mounted = false;
+      subscription.remove();
+    };
+  }, []);
+
+  return { ready, active, clear: () => setActive(false) };
+}

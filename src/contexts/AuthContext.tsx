@@ -21,6 +21,8 @@ interface AuthContextValue {
   loading: boolean;          // initial session restore
   role: Role | null;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
+  resetPasswordForEmail: (email: string) => Promise<{ error?: string }>;
+  updatePassword: (password: string) => Promise<{ error?: string }>;
   signUp: (input: SignUpInput) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -82,6 +84,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     });
     return error ? { error: error.message } : {};
   };
+  const resetPasswordForEmail: AuthContextValue['resetPasswordForEmail'] = async (email) => {
+    const redirectTo = process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL
+      || 'rotta-urbana://auth/reset-password';
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+      redirectTo,
+    });
+    return error ? { error: error.message } : {};
+  };
+
+  const updatePassword: AuthContextValue['updatePassword'] = async (password) => {
+    const { error } = await supabase.auth.updateUser({ password });
+    return error ? { error: error.message } : {};
+  };
 
   const signUp: AuthContextValue['signUp'] = async (input) => {
     const { data, error } = await supabase.auth.signUp({
@@ -123,7 +138,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <AuthContext.Provider
-      value={{ session, profile, loading, role: profile?.role ?? null, signIn, signUp, signOut, refreshProfile }}
+      value={{ session, profile, loading, role: profile?.role ?? null, signIn, resetPasswordForEmail, updatePassword, signUp, signOut, refreshProfile }}
     >
       {children}
     </AuthContext.Provider>

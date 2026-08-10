@@ -3,6 +3,9 @@ import { View, ActivityIndicator, Alert, Linking, Share } from 'react-native';
 import * as Location from 'expo-location';
 import { useAuth } from '../contexts/AuthContext';
 import { Colors } from '../constants';
+import { supabase } from '../lib/supabase';
+import { parsePasswordRecoveryUrl } from '../services/authRecovery';
+import { usePasswordRecoveryLink } from '../hooks/usePasswordRecoveryLink';
 import type { RideRow, RideTypeDb } from '../types/db';
 import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide, relaxFemalePreference, getRideCounterpart } from '../services/rides';
 import { getSearchingRides, subscribeSearchingRides, setStatus, updateLocation, getMyDriver } from '../services/drivers';
@@ -17,6 +20,8 @@ import SplashScreen from '../screens/auth/SplashScreen';
 import OnboardingScreen from '../screens/auth/OnboardingScreen';
 import LoginScreen from '../screens/auth/LoginScreen';
 import RegisterPassengerScreen from '../screens/auth/RegisterPassengerScreen';
+import ForgotPasswordScreen from '../screens/auth/ForgotPasswordScreen';
+import ResetPasswordScreen from '../screens/auth/ResetPasswordScreen';
 import RegisterDriverScreen from '../screens/auth/RegisterDriverScreen';
 
 // Passenger
@@ -49,11 +54,13 @@ import AdminPaymentsScreen from '../screens/admin/AdminPaymentsScreen';
 import AdminMonitoringScreen from '../screens/admin/AdminMonitoringScreen';
 import AdminSupportScreen from '../screens/admin/AdminSupportScreen';
 import AdminReportsScreen from '../screens/admin/AdminReportsScreen';
-import AdminManagersScreen from '../screens/admin/AdminManagersScreen';
+import AdminManagersScreen from '../screens/admin/AdminManagersNetworkScreen';
 
 // Manager
 import ManagerDashboardScreen from '../screens/manager/ManagerDashboardScreen';
 import ManagerDriversScreen from '../screens/manager/ManagerDriversScreen';
+import ManagerRidesScreen from '../screens/manager/ManagerRidesScreen';
+import ManagerReportsScreen from '../screens/manager/ManagerReportsScreen';
 import ManagerSupportScreen from '../screens/manager/ManagerSupportScreen';
 
 // Plan selection (shown once after driver registration)
@@ -82,7 +89,8 @@ const Loading = () => (
 
 // ─── Auth flow (logged out) ──────────────────────────────────────────────────
 const AuthFlow: React.FC = () => {
-  const [screen, setScreen] = useState<'onboarding' | 'login' | 'register_passenger' | 'register_driver'>('onboarding');
+  const [screen, setScreen] = useState<'onboarding' | 'login' | 'forgot_password' | 'register_passenger' | 'register_driver'>('onboarding');
+  const [forgotEmail, setForgotEmail] = useState('');
   switch (screen) {
     case 'onboarding':
       return <OnboardingScreen onComplete={() => setScreen('login')} />;
@@ -90,12 +98,15 @@ const AuthFlow: React.FC = () => {
       return <RegisterPassengerScreen onBack={() => setScreen('login')} />;
     case 'register_driver':
       return <RegisterDriverScreen onBack={() => setScreen('login')} />;
+    case 'forgot_password':
+      return <ForgotPasswordScreen initialEmail={forgotEmail} onBack={() => setScreen('login')} />;
     case 'login':
     default:
       return (
         <LoginScreen
           onRegister={() => setScreen('register_passenger')}
           onRegisterDriver={() => setScreen('register_driver')}
+          onForgotPassword={(value) => { setForgotEmail(value); setScreen('forgot_password'); }}
         />
       );
   }
@@ -682,7 +693,7 @@ const AdminFlow: React.FC = () => {
 };
 
 // ─── Manager flow ─────────────────────────────────────────────────────────────
-type MScreen = 'manager_dashboard' | 'manager_drivers' | 'manager_support';
+type MScreen = 'manager_dashboard' | 'manager_drivers' | 'manager_rides' | 'manager_reports' | 'manager_support';
 
 const ManagerFlow: React.FC = () => {
   const { profile, signOut } = useAuth();
@@ -695,7 +706,8 @@ const ManagerFlow: React.FC = () => {
       return (
         <ManagerDashboardScreen
           onDrivers={() => setScreen('manager_drivers')}
-          onRides={() => { /* TODO: ManagerRidesScreen */ }}
+          onRides={() => setScreen('manager_rides')}
+          onReports={() => setScreen('manager_reports')}
           onSupport={() => setScreen('manager_support')}
           onSignOut={signOut}
           cityName="Minha Cidade"
@@ -703,6 +715,10 @@ const ManagerFlow: React.FC = () => {
       );
     case 'manager_drivers':
       return <ManagerDriversScreen onBack={dash} />;
+    case 'manager_rides':
+      return <ManagerRidesScreen onBack={dash} />;
+    case 'manager_reports':
+      return <ManagerReportsScreen onBack={dash} />;
     case 'manager_support':
       return <ManagerSupportScreen onBack={dash} />;
     default:
@@ -714,8 +730,11 @@ const ManagerFlow: React.FC = () => {
 const AppNavigator: React.FC = () => {
   const { session, profile, loading } = useAuth();
   const [splashDone, setSplashDone] = useState(false);
+  const { ready: recoveryReady, active: passwordRecovery, clear: clearPasswordRecovery } = usePasswordRecoveryLink();
 
   if (!splashDone) return <SplashScreen onFinish={() => setSplashDone(true)} />;
+  if (!recoveryReady) return <Loading />;
+  if (passwordRecovery) return <ResetPasswordScreen onFinished={clearPasswordRecovery} />;
   if (loading) return <Loading />;
   if (!session) return <AuthFlow />;   // truly signed out
   if (!profile) return <Loading />;    // signed in but profile still fetching — never flash AuthFlow

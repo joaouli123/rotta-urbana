@@ -13,6 +13,8 @@ export interface NewVehicle {
   model: string; plate: string; year: number; color: string;
   type?: 'sedan' | 'hatch' | 'suv' | 'moto';
   brand?: string; fipeCode?: string; fipeValue?: number; seats?: number;
+  fipeYearCode?: string; fipeModelYear?: number; fipeFuel?: string;
+  fipeReference?: string; fipeZeroKm?: boolean;
 }
 
 export async function addVehicle(v: NewVehicle): Promise<void> {
@@ -24,6 +26,11 @@ export async function addVehicle(v: NewVehicle): Promise<void> {
     type: v.type ?? 'sedan', is_primary: true,
     brand: v.brand ?? null, fipe_code: v.fipeCode ?? null,
     fipe_value: v.fipeValue ?? null, seats: v.seats ?? 4,
+    fipe_year_code: v.fipeYearCode ?? null,
+    fipe_model_year: v.fipeModelYear ?? null,
+    fipe_fuel: v.fipeFuel ?? null,
+    fipe_reference: v.fipeReference ?? null,
+    fipe_zero_km: v.fipeZeroKm ?? false,
   });
   if (error) throw error;
 }
@@ -103,4 +110,12 @@ export async function getEarnings(): Promise<{ today: number; week: number; mont
     total: Number(d.total) || 0,
     rides: Number(d.rides) || 0,
   };
+}
+
+export async function updateMyOperatingCity(city: string, state?: string): Promise<void> {
+  const { error } = await supabase.rpc('update_my_operating_city', {
+    p_city: city.trim(),
+    p_state: state?.trim() || null,
+  });
+  if (error) throw error;
 }

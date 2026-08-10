@@ -26,7 +26,8 @@ import {
 } from 'lucide-react-native';
 import { Card, Badge, Avatar } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
-import { getAdminDrivers, verifyDriver, type AdminDriver } from '../../services/admin';
+import { getManagerDrivers, verifyManagerDriver } from '../../services/manager';
+import type { AdminDriver } from '../../services/admin';
 
 type FilterKey = 'Todos' | 'Pendentes' | 'Verificados';
 const FILTERS: FilterKey[] = ['Todos', 'Pendentes', 'Verificados'];
@@ -56,7 +57,7 @@ const ManagerDriversScreen: React.FC<Props> = ({ onBack }) => {
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setDrivers(await getAdminDrivers(300)); } catch { /* ignore */ }
+    try { setDrivers(await getManagerDrivers(300)); } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
 
@@ -77,7 +78,7 @@ const ManagerDriversScreen: React.FC<Props> = ({ onBack }) => {
     if (!selected || acting) return;
     setActing(true);
     try {
-      await verifyDriver(selected.driver_id, approve);
+      await verifyManagerDriver(selected.driver_id, approve);
       setDrivers((prev) =>
         prev.map((d) =>
           d.driver_id === selected.driver_id

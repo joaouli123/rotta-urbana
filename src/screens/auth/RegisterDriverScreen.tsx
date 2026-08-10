@@ -27,11 +27,12 @@ import {
   Eye,
   EyeOff,
   ChevronLeft,
+  MapPin,
 } from 'lucide-react-native';
 import { Colors, Radius } from '../../constants';
 import { useAuth } from '../../contexts/AuthContext';
 import { friendlyError } from '../../lib/errors';
-import { addVehicle, updateDriverPix } from '../../services/drivers';
+import { addVehicle, updateDriverPix, updateMyOperatingCity } from '../../services/drivers';
 import { uploadDocument, type DocType } from '../../services/documents';
 import FipePicker from '../../components/FipePicker';
 import type { Gender } from '../../types/db';
@@ -93,9 +94,15 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
   const [vehicleYear, setVehicleYear] = useState('');
   const [vehicleColor, setVehicleColor] = useState('');
   const [vehicleSeats, setVehicleSeats] = useState('4');
+  const [operatingCity, setOperatingCity] = useState('');
   const [brand, setBrand] = useState('');
   const [fipeValue, setFipeValue] = useState<number | undefined>(undefined);
   const [fipeCode, setFipeCode] = useState('');
+  const [fipeYearCode, setFipeYearCode] = useState('');
+  const [fipeModelYear, setFipeModelYear] = useState<number | undefined>(undefined);
+  const [fipeFuel, setFipeFuel] = useState('');
+  const [fipeReference, setFipeReference] = useState('');
+  const [fipeZeroKm, setFipeZeroKm] = useState(false);
   const [pixKey, setPixKey] = useState('');
   // Documents picked during signup. Uploaded right after the account is created,
   // since Storage needs an authenticated session.
@@ -124,7 +131,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
     }
     // Account + driver row are created by the signup trigger; persist the vehicle.
     try {
-      const yearNum = Math.min(2100, Math.max(1980, parseInt(vehicleYear, 10) || new Date().getFullYear()));
+      const yearNum = parseInt(vehicleYear, 10);
       await addVehicle({
         model: vehicleModel.trim() || (vehicleType === 'moto' ? 'Moto' : 'Veículo'),
         plate: vehiclePlate.trim().toUpperCase().replace(/\s+/g, ''),
@@ -134,8 +141,14 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
         brand: brand.trim() || undefined,
         fipeCode: fipeCode || undefined,
         fipeValue,
+        fipeYearCode: fipeYearCode || undefined,
+        fipeModelYear,
+        fipeFuel: fipeFuel || undefined,
+        fipeReference: fipeReference || undefined,
+        fipeZeroKm,
         seats: vehicleType === 'moto' ? 1 : Math.min(9, Math.max(1, parseInt(vehicleSeats, 10) || 4)),
       });
+      await updateMyOperatingCity(operatingCity);
       if (pixKey.trim()) await updateDriverPix(pixKey, inferPixType(pixKey));
     } catch {
       // non-fatal: the driver can add/edit the vehicle/PIX later
@@ -183,6 +196,18 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
     if (step === 1 && !vehiclePlate.trim()) {
       Alert.alert('Atenção', 'Informe a placa do veículo.');
       return;
+    }
+    if (step === 1 && !operatingCity.trim()) {
+      Alert.alert('Atencao', 'Informe a cidade de atuacao do motorista.');
+      return;
+    }
+    if (step === 1) {
+      const year = parseInt(vehicleYear, 10);
+      const maxYear = new Date().getFullYear() + 1;
+      if (!Number.isInteger(year) || year < 1980 || year > maxYear) {
+        Alert.alert('Ano invalido', `Informe um ano entre 1980 e ${maxYear}. Para veiculo zero-km, selecione a opcao "0 km" na FIPE.`);
+        return;
+      }
     }
     if (step === 2 && !docImages.cnh) {
       Alert.alert('Atenção', 'Envie ao menos a foto da CNH para continuar.');
@@ -276,6 +301,8 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
                       // reset FIPE selection so the picker reloads the right table
                       setVehicleModel(''); setVehicleYear(''); setBrand('');
                       setFipeValue(undefined); setFipeCode('');
+                      setFipeYearCode(''); setFipeModelYear(undefined); setFipeFuel('');
+                      setFipeReference(''); setFipeZeroKm(false);
                       setVehicleSeats(key === 'moto' ? '1' : '4');
                     }}
                     activeOpacity={0.85}
@@ -287,6 +314,9 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
               })}
             </View>
 
+            <AuthField label="Cidade de atuacao" value={operatingCity} onChangeText={setOperatingCity}
+              placeholder="Ex.: Sinop" autoCapitalize="words"
+              leftIcon={<MapPin size={18} color="#999" />} />
             <FipePicker
               key={vehicleType}
               kind={vehicleType === 'moto' ? 'motorcycles' : 'cars'}
@@ -296,6 +326,11 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
                 setBrand(r.brand);
                 setFipeValue(r.value);
                 setFipeCode(r.code);
+                setFipeYearCode(r.fipeYearCode);
+                setFipeModelYear(r.fipeModelYear);
+                setFipeFuel(r.fuel);
+                setFipeReference(r.reference);
+                setFipeZeroKm(r.isZeroKm);
               }}
             />
             <AuthField label="Placa" value={vehiclePlate} onChangeText={setVehiclePlate}

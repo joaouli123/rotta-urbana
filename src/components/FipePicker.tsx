@@ -4,7 +4,7 @@ import {
 } from 'react-native';
 import { ChevronDown, Search, X, Check } from 'lucide-react-native';
 import { Colors, Radius } from '../constants';
-import { fipeBrands, fipeModels, fipeYears, fipePrice, type FipeItem, type FipeResult, type FipeKind } from '../services/fipe';
+import { fipeBrands, fipeModels, fipeYears, fipePrice, getFipeYearInfo, type FipeItem, type FipeResult, type FipeKind } from '../services/fipe';
 
 interface Props {
   onSelected: (r: FipeResult) => void;
@@ -51,7 +51,10 @@ export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
     setOpen(null);
   };
 
-  const filtered = list.filter((i) => i.name.toLowerCase().includes(search.toLowerCase()));
+  const filtered = list.filter((i) => {
+    const displayName = open === 'year' ? getFipeYearInfo(i).label : i.name;
+    return `${i.name} ${displayName}`.toLowerCase().includes(search.toLowerCase());
+  });
 
   const Field = ({ lvl, label, value, disabled }: { lvl: Level; label: string; value?: string; disabled?: boolean }) => (
     <TouchableOpacity
@@ -73,14 +76,19 @@ export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
     <View style={{ gap: 12, marginBottom: 12 }}>
       <Field lvl="brand" label="Marca (tabela FIPE)" value={brand?.name} />
       <Field lvl="model" label="Modelo" value={model?.name} disabled={!brand} />
-      <Field lvl="year" label="Ano" value={year?.name} disabled={!model} />
+      <Field lvl="year" label="Ano / situacao" value={year ? getFipeYearInfo(year).label : undefined} disabled={!model} />
 
       {result && (
         <View style={styles.result}>
           <Check size={16} color={Colors.success} />
-          <Text style={styles.resultText}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.resultText} numberOfLines={2}>
+              {result.brand} {result.model} - {result.yearLabel}
+            </Text>
+            <Text style={styles.resultText}>
             Valor FIPE: R$ {result.value.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} · {result.code}
           </Text>
+          </View>
         </View>
       )}
 
@@ -109,7 +117,9 @@ export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
                 keyboardShouldPersistTaps="handled"
                 renderItem={({ item }) => (
                   <TouchableOpacity style={styles.row} onPress={() => pick(item)} activeOpacity={0.7}>
-                    <Text style={styles.rowText}>{item.name}</Text>
+                    <Text style={styles.rowText}>
+                      {open === 'year' ? getFipeYearInfo(item).label : item.name}
+                    </Text>
                   </TouchableOpacity>
                 )}
                 ListEmptyComponent={<Text style={styles.empty}>Nada encontrado</Text>}

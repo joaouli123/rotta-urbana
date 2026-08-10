@@ -22,12 +22,8 @@ import {
 } from 'lucide-react-native';
 import { Card, Badge } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
-import {
-  getAdminTickets,
-  setTicketStatus,
-  type AdminTicket,
-  type TicketStatus,
-} from '../../services/admin';
+import type { AdminTicket, TicketStatus } from '../../services/admin';
+import { getManagerTickets, setManagerTicketStatus } from '../../services/manager';
 
 type FilterValue = TicketStatus | 'all';
 
@@ -63,7 +59,7 @@ const ManagerSupportScreen: React.FC<Props> = ({ onBack }) => {
 
   const load = useCallback(async () => {
     setLoading(true);
-    try { setTickets(await getAdminTickets(200)); } catch { /* ignore */ }
+    try { setTickets(await getManagerTickets(200)); } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
 
@@ -91,7 +87,7 @@ const ManagerSupportScreen: React.FC<Props> = ({ onBack }) => {
     setActing(true);
     try {
       const resp = response.trim() || undefined;
-      await setTicketStatus(selected.ticket_id, status, resp);
+      await setManagerTicketStatus(selected.ticket_id, status, resp);
       const updated: AdminTicket = { ...selected, status, response: resp ?? selected.response };
       setTickets((prev) => prev.map((t) => t.ticket_id === selected.ticket_id ? updated : t));
       setSelected(null);
