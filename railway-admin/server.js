@@ -1466,7 +1466,7 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
 
         <!-- 4. Integração Mercado Pago: checkout e recorrência -->
         <div class="card" style="border-left:4px solid #009EE3;">
-          <h2 style="margin:0 0 6px 0;">Integração Mercado Pago (cartão, Pix e boleto)</h2>
+          <h2 style="margin:0 0 6px 0;">Integração Mercado Pago (cartão e Pix)</h2>
           <p style="margin:0 0 16px 0;color:var(--mut);font-size:13.5px;">O app usa o checkout hospedado do Mercado Pago. As assinaturas recorrentes e as tentativas de cobrança são controladas pelo provedor; o webhook sincroniza o painel.</p>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">
             <div>

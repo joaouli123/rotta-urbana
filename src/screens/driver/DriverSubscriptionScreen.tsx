@@ -142,7 +142,7 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
       'Trocar para ' + PLAN_LABELS[plan],
       plan === 'commission'
         ? 'Você passará a pagar comissão por corrida, sem mensalidade fixa. Acesso imediato.'
-        : 'Você será encaminhado ao Mercado Pago para escolher cartão, Pix ou boleto no plano ' + PLAN_LABELS[plan] + '. Continuar?',
+        : 'Você será encaminhado ao Mercado Pago para pagar com cartão ou Pix no plano ' + PLAN_LABELS[plan] + '. Continuar?',
       [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Confirmar', onPress: () => doSwitch(plan) },
@@ -275,7 +275,7 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
           <View style={s.pixPanel}>
             <Text style={s.pixPanelTitle}>Pagamento seguro</Text>
             <Text style={s.pixPanelSub}>
-              O Mercado Pago abre uma tela segura para escolher cartão, Pix ou boleto no plano {PLAN_LABELS[pendingPlan]}.
+              O Mercado Pago abre uma tela segura para pagar com cartão ou Pix no plano {PLAN_LABELS[pendingPlan]}.
             </Text>
 
             <View style={s.pixAmountBox}>

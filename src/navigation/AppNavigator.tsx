@@ -174,10 +174,6 @@ const PassengerFlow: React.FC = () => {
         Alert.alert('Pagamento no cartão', `Pague ${valor} na maquininha do motorista.`);
         return;
       }
-      if (ride.payment_method === 'boleto') {
-        Alert.alert('Pagamento via boleto', `Combine o boleto de ${valor} diretamente com o motorista.`);
-        return;
-      }
       // PIX → show the driver's copia-e-cola, with a share/copy action.
       if (ride.payment_method === 'pix') {
         try {
@@ -520,7 +516,7 @@ const DriverFlow: React.FC = () => {
       const checkout = await createSubscriptionCheckout(plan);
       const label = plan === 'daily' ? 'Diária' : plan === 'weekly' ? 'Semanal' : 'Mensal';
       await Linking.openURL(checkout.init_point);
-      Alert.alert('Checkout aberto', `Escolha cartão, Pix ou boleto para ativar a assinatura ${label}. A cobrança recorrente será gerenciada pelo Mercado Pago.`);
+      Alert.alert('Checkout aberto', `Pague com cartão ou Pix para ativar a assinatura ${label}. A cobrança recorrente será gerenciada pelo Mercado Pago.`);
     } catch (e: any) {
       Alert.alert('Erro', friendlyError(e?.message));
     }

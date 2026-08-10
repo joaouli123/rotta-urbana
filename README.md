@@ -96,7 +96,7 @@ git push origin master                       # Coolify faz o deploy automático
 (`src/lib/pix.ts`, BR Code EMV + CRC16) com o valor da corrida — sem gateway por motorista.
 
 **Assinatura (motorista → plataforma):** diária, semanal ou mensal (valores no admin), pelo checkout
-hospedado do Mercado Pago. O motorista escolhe cartão, Pix ou boleto, e as cobranças recorrentes são
+hospedado do Mercado Pago. O motorista paga com cartão ou Pix, e as cobranças recorrentes são
 sincronizadas por `subscription_preapproval`, `subscription_authorized_payment` e `payment` no webhook.
 No Coolify, configure `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET` e
 `PUBLIC_APP_URL=https://rottaurbana.com.br`. O app nunca coleta nem armazena dados brutos do cartão.

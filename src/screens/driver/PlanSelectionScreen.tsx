@@ -193,7 +193,7 @@ interface PixPanelProps {
 const PixPanel: React.FC<PixPanelProps> = ({ code, amount, onDone }) => (
   <View style={px.panel}>
     <Text style={px.title}>Pagamento seguro</Text>
-    <Text style={px.sub}>O Mercado Pago abre uma tela segura para escolher cartão, Pix ou boleto.</Text>
+    <Text style={px.sub}>O Mercado Pago abre uma tela segura para pagar com cartão ou Pix.</Text>
 
     <View style={px.amountBox}>
       <Text style={px.amountLabel}>Valor da recorrência</Text>

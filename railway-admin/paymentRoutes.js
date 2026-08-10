@@ -33,10 +33,16 @@ const providerPaymentStatus = (status) => {
 
 const providerPaymentMethod = (provider) => {
   const method = String(provider?.payment_method_id || provider?.payment_method?.id || '').toLowerCase();
-  if (method === 'pix') return 'pix';
-  if (method.includes('ticket') || method.includes('boleto')) return 'boleto';
-  return 'card';
+  const type = String(provider?.payment_type_id || provider?.payment_method?.type || '').toLowerCase();
+  if (!method && !type) return 'other';
+  if (method === 'pix' || type === 'bank_transfer') return 'pix';
+  if (type === 'ticket' || method.includes('ticket') || method.includes('boleto') || method === 'bolbradesco') return 'boleto';
+  if (type === 'account_money' || method === 'account_money') return 'other';
+  if (type === 'credit_card' || type === 'debit_card' || method) return 'card';
+  return 'other';
 };
+
+const isAllowedPaymentMethod = (method) => method === 'pix' || method === 'card';
 
 function dateOnly(value, fallbackDays = 30) {
   const date = value ? new Date(value) : null;
@@ -157,11 +163,16 @@ async function applyAuthorizedPaymentWebhook(admin, provider) {
 
   const providerStatus = payment.status || provider.status;
   const status = providerPaymentStatus(providerStatus);
+  const method = providerPaymentMethod(payment);
+  if (method && !isAllowedPaymentMethod(method)) {
+    console.warn('[MercadoPago] cobrança ignorada: método não permitido', { driverId, method, paymentId: payment.id });
+    return { driverId, paymentStatus: 'ignored', reason: 'payment_method_not_allowed' };
+  }
   const row = {
     driver_id: driverId,
     subscription_id: local.id,
     amount: Number(provider.transaction_amount ?? payment.transaction_amount ?? local.amount),
-    method: providerPaymentMethod(payment),
+    method,
     status,
     provider: 'mercadopago',
     provider_payment_id: payment.id ? String(payment.id) : null,
@@ -198,11 +209,16 @@ async function applyPaymentWebhook(admin, provider) {
   if (!driverId) return null;
   const local = await getSubscription(admin, driverId);
   const status = providerPaymentStatus(provider.status);
+  const method = providerPaymentMethod(provider);
+  if (method && !isAllowedPaymentMethod(method)) {
+    console.warn('[MercadoPago] pagamento ignorado: método não permitido', { driverId, method, paymentId: provider.id });
+    return { driverId, paymentStatus: 'ignored', reason: 'payment_method_not_allowed' };
+  }
   const row = {
     driver_id: driverId,
     subscription_id: local?.id || null,
     amount: Number(provider.transaction_amount || 0),
-    method: providerPaymentMethod(provider),
+    method,
     status,
     provider: 'mercadopago',
     provider_payment_id: String(provider.id),

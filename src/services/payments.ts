@@ -57,7 +57,7 @@ export async function getAppSettings(): Promise<AppSettings | null> {
   return (data as AppSettings) ?? null;
 }
 
-/** Opens Mercado Pago's hosted recurring checkout (card, Pix or boleto). */
+/** Opens Mercado Pago's hosted recurring checkout for the allowed methods: card or Pix. */
 export async function createSubscriptionCheckout(plan: Exclude<PlanType, 'commission'>): Promise<SubscriptionCheckout> {
   const checkout = await paymentsApi<SubscriptionCheckout>('/api/subscriptions/create-checkout', {
     method: 'POST',

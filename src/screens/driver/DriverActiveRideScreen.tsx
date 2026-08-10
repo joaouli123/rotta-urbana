@@ -92,7 +92,7 @@ const PAYMENT_LABEL: Record<string, string> = {
   pix: 'PIX direto na sua chave',
   cash: 'Dinheiro (receba na corrida)',
   card: 'Cartão',
-  boleto: 'Boleto',
+  boleto: 'Pagamento indisponível',
 };
 
 const CANCEL_REASONS = [
