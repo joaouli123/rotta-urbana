@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "Painel administrativo web do Rotta Urbana (deploy no Railway)",
+  "description": "Painel administrativo web do Rotta Urbana (deploy no Coolify)",
   "scripts": {
     "start": "node server.js"
   },

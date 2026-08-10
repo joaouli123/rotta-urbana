@@ -73,10 +73,10 @@ node --env-file=.env scripts/seed-users.mjs
 node --env-file=.env scripts/e2e-test.mjs    # teste end-to-end (25 checagens)
 ```
 
-## Admin web (Railway)
+## Admin web (Coolify)
 
-Painel completo em `railway-admin/` (Express + Supabase secret key), deploy no Railway:
-**https://rotta-urbana-admin-production.up.railway.app** — login com a conta admin.
+Painel completo em `railway-admin/` (Express + Supabase secret key), publicado pelo Coolify no domínio oficial:
+**https://rottaurbana.com.br/console-ru-7f3a9c/login** — login com a conta admin.
 
 - **KPIs:** passageiros, motoristas (online/verificados/pendentes), corridas (hoje/mês, por status),
   receita de assinaturas, tarifas do mês, assinaturas ativas, suporte aberto + gráfico 14 dias.
@@ -86,8 +86,8 @@ Painel completo em `railway-admin/` (Express + Supabase secret key), deploy no R
 Deploy/atualização:
 ```bash
 cd railway-admin
-railway up                                   # build + deploy (Node 22)
-railway variables --set "CHAVE=valor"        # SUPABASE_URL, SUPABASE_SECRET_KEY, etc.
+git push origin master                       # Coolify faz o deploy automático
+# Configure os secrets no ambiente do serviço Coolify (Node 22).
 ```
 
 ## Pagamentos
@@ -95,10 +95,11 @@ railway variables --set "CHAVE=valor"        # SUPABASE_URL, SUPABASE_SECRET_KEY
 **Corrida (passageiro → motorista):** PIX **direto** na chave do motorista. O app gera o copia-e-cola
 (`src/lib/pix.ts`, BR Code EMV + CRC16) com o valor da corrida — sem gateway por motorista.
 
-**Assinatura (motorista → plataforma):** diária ou mensal (valores no admin), PIX copia-e-cola para a
-chave PIX da plataforma. Opcionalmente, Mercado Pago (Edge Functions `create-pix-payment` /
-`mercadopago-webhook` / `dev-confirm-payment`): sem `MERCADOPAGO_ACCESS_TOKEN` roda em **simulação**;
-em produção rode `npx supabase secrets set MERCADOPAGO_ACCESS_TOKEN=... PAYMENTS_SIMULATE=false`.
+**Assinatura (motorista → plataforma):** diária, semanal ou mensal (valores no admin), pelo checkout
+hospedado do Mercado Pago. O motorista escolhe cartão, Pix ou boleto, e as cobranças recorrentes são
+sincronizadas por `subscription_preapproval`, `subscription_authorized_payment` e `payment` no webhook.
+No Coolify, configure `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET` e
+`PUBLIC_APP_URL=https://rottaurbana.com.br`. O app nunca coleta nem armazena dados brutos do cartão.
 
 > Evolução futura: split/marketplace via Mercado Pago por motorista (cada um conecta a própria conta).
 
