@@ -40,6 +40,7 @@ const DriverProfileScreen: React.FC<DriverProfileScreenProps> = ({
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const [driver, setDriver] = useState<DriverRow | null>(null);
   const [sub, setSub] = useState<SubscriptionRow | null>(null);
+  const [managerName, setManagerName] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
@@ -47,14 +48,16 @@ const DriverProfileScreen: React.FC<DriverProfileScreenProps> = ({
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const [pRes, dRes, sRes] = await Promise.all([
+      const [pRes, dRes, sRes, managerRes] = await Promise.all([
         supabase.from('profiles').select('*').eq('id', user.id).single(),
         supabase.from('drivers').select('*').eq('id', user.id).single(),
         supabase.from('subscriptions').select('*').eq('driver_id', user.id).maybeSingle(),
+        supabase.rpc('driver_manager_name'),
       ]);
       if (pRes.data) setProfile(pRes.data as ProfileRow);
       if (dRes.data) setDriver(dRes.data as DriverRow);
       if (sRes.data) setSub(sRes.data as SubscriptionRow);
+      setManagerName(!managerRes.error && typeof managerRes.data === 'string' ? managerRes.data : null);
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
@@ -170,6 +173,7 @@ const DriverProfileScreen: React.FC<DriverProfileScreenProps> = ({
               { label: 'E-mail', value: profile?.email ?? '—' },
               { label: 'Telefone', value: profile?.phone ?? '—' },
               { label: 'Documentos', value: driver?.documents_status === 'approved' ? 'Aprovado' : driver?.documents_status === 'pending' ? 'Em análise' : 'Pendente' },
+              { label: 'Gerente responsável', value: managerName ?? 'Não vinculado' },
             ].map(row => (
               <View key={row.label} style={styles.infoRow}>
                 <Text style={styles.infoLabel}>{row.label}</Text>

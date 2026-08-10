@@ -78,11 +78,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [loadProfile]);
 
   const signIn: AuthContextValue['signIn'] = async (email, password) => {
-    const { error } = await supabase.auth.signInWithPassword({
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: email.trim().toLowerCase(),
       password,
     });
-    return error ? { error: error.message } : {};
+    if (error) return { error: error.message };
+
+    // The mobile app is intentionally limited to passengers and drivers.
+    // Admins and managers authenticate through their respective web panels.
+    const { data: signedProfile, error: profileError } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', data.user.id)
+      .maybeSingle();
+    if (profileError) {
+      await supabase.auth.signOut();
+      return { error: profileError.message };
+    }
+    if (!signedProfile || !['driver', 'passenger'].includes(signedProfile.role)) {
+      await supabase.auth.signOut();
+      return { error: 'Este acesso é exclusivo para motorista e passageiro. Gerentes e administradores devem entrar pelo site.' };
+    }
+    return {};
   };
   const resetPasswordForEmail: AuthContextValue['resetPasswordForEmail'] = async (email) => {
     const redirectTo = process.env.EXPO_PUBLIC_AUTH_REDIRECT_URL

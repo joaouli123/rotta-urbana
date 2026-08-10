@@ -46,23 +46,6 @@ import DriverSubscriptionScreen from '../screens/driver/DriverSubscriptionScreen
 import DriverRatingsScreen from '../screens/driver/DriverRatingsScreen';
 import DriverRatePassengerScreen from '../screens/driver/DriverRatePassengerScreen';
 
-// Admin
-import AdminDashboardScreen from '../screens/admin/AdminDashboardScreen';
-import AdminDriversScreen from '../screens/admin/AdminDriversScreen';
-import AdminPassengersScreen from '../screens/admin/AdminPassengersScreen';
-import AdminPaymentsScreen from '../screens/admin/AdminPaymentsScreen';
-import AdminMonitoringScreen from '../screens/admin/AdminMonitoringScreen';
-import AdminSupportScreen from '../screens/admin/AdminSupportScreen';
-import AdminReportsScreen from '../screens/admin/AdminReportsScreen';
-import AdminManagersScreen from '../screens/admin/AdminManagersNetworkScreen';
-
-// Manager
-import ManagerDashboardScreen from '../screens/manager/ManagerDashboardScreen';
-import ManagerDriversScreen from '../screens/manager/ManagerDriversScreen';
-import ManagerRidesScreen from '../screens/manager/ManagerRidesScreen';
-import ManagerReportsScreen from '../screens/manager/ManagerReportsScreen';
-import ManagerSupportScreen from '../screens/manager/ManagerSupportScreen';
-
 // Plan selection (shown once after driver registration)
 import PlanSelectionScreen from '../screens/driver/PlanSelectionScreen';
 import { getDriverPlanType, type PlanType } from '../services/payments';
@@ -652,85 +635,17 @@ const DriverFlow: React.FC = () => {
   }
 };
 
-// ─── Admin flow ──────────────────────────────────────────────────────────────
-type AScreen =
-  | 'admin_dashboard' | 'admin_drivers' | 'admin_passengers' | 'admin_payments'
-  | 'admin_monitoring' | 'admin_support' | 'admin_reports' | 'admin_managers';
-
-const AdminFlow: React.FC = () => {
-  const [screen, setScreen] = useState<AScreen>('admin_dashboard');
-  const dash = () => setScreen('admin_dashboard');
-  switch (screen) {
-    case 'admin_dashboard':
-      return (
-        <AdminDashboardScreen
-          onDrivers={() => setScreen('admin_drivers')}
-          onPassengers={() => setScreen('admin_passengers')}
-          onPayments={() => setScreen('admin_payments')}
-          onMonitoring={() => setScreen('admin_monitoring')}
-          onReports={() => setScreen('admin_reports')}
-          onManagers={() => setScreen('admin_managers')}
-          onSupport={() => setScreen('admin_support')}
-        />
-      );
-    case 'admin_drivers':
-      return <AdminDriversScreen onBack={dash} onDriverDetail={() => {}} />;
-    case 'admin_passengers':
-      return <AdminPassengersScreen onBack={dash} />;
-    case 'admin_payments':
-      return <AdminPaymentsScreen onBack={dash} />;
-    case 'admin_monitoring':
-      return <AdminMonitoringScreen onBack={dash} />;
-    case 'admin_support':
-      return <AdminSupportScreen onBack={dash} />;
-    case 'admin_reports':
-      return <AdminReportsScreen onBack={dash} />;
-    case 'admin_managers':
-      return <AdminManagersScreen onBack={dash} />;
-    default:
-      return null;
-  }
-};
-
-// ─── Manager flow ─────────────────────────────────────────────────────────────
-type MScreen = 'manager_dashboard' | 'manager_drivers' | 'manager_rides' | 'manager_reports' | 'manager_support';
-
-const ManagerFlow: React.FC = () => {
-  const { profile, signOut } = useAuth();
-  const [screen, setScreen] = useState<MScreen>('manager_dashboard');
-  const dash = () => setScreen('manager_dashboard');
-
-  // city comes from the managers table via manager_kpis RPC — pass profile name as fallback
-  switch (screen) {
-    case 'manager_dashboard':
-      return (
-        <ManagerDashboardScreen
-          onDrivers={() => setScreen('manager_drivers')}
-          onRides={() => setScreen('manager_rides')}
-          onReports={() => setScreen('manager_reports')}
-          onSupport={() => setScreen('manager_support')}
-          onSignOut={signOut}
-          cityName="Minha Cidade"
-        />
-      );
-    case 'manager_drivers':
-      return <ManagerDriversScreen onBack={dash} />;
-    case 'manager_rides':
-      return <ManagerRidesScreen onBack={dash} />;
-    case 'manager_reports':
-      return <ManagerReportsScreen onBack={dash} />;
-    case 'manager_support':
-      return <ManagerSupportScreen onBack={dash} />;
-    default:
-      return null;
-  }
-};
-
 // ─── Root: route by auth + role ──────────────────────────────────────────────
 const AppNavigator: React.FC = () => {
-  const { session, profile, loading } = useAuth();
+  const { session, profile, loading, signOut } = useAuth();
   const [splashDone, setSplashDone] = useState(false);
   const { ready: recoveryReady, active: passwordRecovery, clear: clearPasswordRecovery } = usePasswordRecoveryLink();
+
+  useEffect(() => {
+    if (session && profile && profile.role !== 'driver' && profile.role !== 'passenger') {
+      void signOut();
+    }
+  }, [session?.user.id, profile?.role]);
 
   if (!splashDone) return <SplashScreen onFinish={() => setSplashDone(true)} />;
   if (!recoveryReady) return <Loading />;
@@ -739,9 +654,8 @@ const AppNavigator: React.FC = () => {
   if (!session) return <AuthFlow />;   // truly signed out
   if (!profile) return <Loading />;    // signed in but profile still fetching — never flash AuthFlow
   if (profile.role === 'driver') return <DriverFlow />;
-  if (profile.role === 'admin') return <AdminFlow />;
-  if (profile.role === 'manager') return <ManagerFlow />;
-  return <PassengerFlow />;
+  if (profile.role === 'passenger') return <PassengerFlow />;
+  return <Loading />; // administradores e gerentes acessam somente os painéis web
 };
 
 export default AppNavigator;
