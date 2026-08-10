@@ -7,7 +7,7 @@ const DEFAULT_MANAGER_PANEL_SLUG = 'painel-gerente-ru-6c4a9e';
 const MANAGER_PANEL_SLUG = String(process.env.MANAGER_PANEL_SLUG || DEFAULT_MANAGER_PANEL_SLUG).trim().replace(/^\/+|\/+$/g, '');
 const MANAGER_BASE_PATH = '/' + MANAGER_PANEL_SLUG;
 const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/users', '/drivers', '/managers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
-const MANAGER_ROUTE_PREFIXES = ['/login', '/logout', '/drivers', '/rides', '/reports', '/support'];
+const MANAGER_ROUTE_PREFIXES = ['/login', '/logout', '/drivers', '/users', '/rides', '/reports', '/support'];
 const adminHref = (route = '') => {
   const value = String(route || '');
   if (!value || value === '/') return ADMIN_BASE_PATH;

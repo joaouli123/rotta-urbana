@@ -180,7 +180,7 @@ const ManagerSupportScreen: React.FC<Props> = ({ onBack }) => {
                       <Badge label={cfg.label} variant={cfg.badgeVariant} />
                     </View>
 
-                    <Text style={styles.ticketUser}>{ticket.user_name ?? 'Usuário'}</Text>
+                    <Text style={styles.ticketUser}>{ticket.user_name ?? 'Usuário'}{ticket.user_role ? ` · ${ticket.user_role === 'driver' ? 'Motorista' : 'Passageiro'}` : ''}</Text>
                     <Text style={styles.ticketPreview} numberOfLines={2}>{ticket.message}</Text>
 
                     <View style={styles.ticketMeta}>

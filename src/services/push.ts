@@ -41,6 +41,22 @@ export async function registerForPushNotifications(): Promise<void> {
         lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
         enableVibrate: true,
       });
+      await Notifications.setNotificationChannelAsync('support', {
+        name: 'Suporte',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: 'default',
+        vibrationPattern: [0, 250, 150, 250],
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        enableVibrate: true,
+      });
+      await Notifications.setNotificationChannelAsync('ride-status', {
+        name: 'Status da corrida',
+        importance: Notifications.AndroidImportance.HIGH,
+        sound: 'default',
+        vibrationPattern: [0, 250, 150, 250],
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        enableVibrate: true,
+      });
     }
 
     const { status: existing } = await Notifications.getPermissionsAsync();

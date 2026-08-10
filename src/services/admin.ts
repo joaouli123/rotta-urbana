@@ -107,6 +107,7 @@ export type TicketStatus = 'open' | 'in_progress' | 'closed';
 export interface AdminTicket {
   ticket_id: string;
   user_name: string | null;
+  user_role?: string | null;
   subject: string;
   message: string;
   status: TicketStatus;

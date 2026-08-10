@@ -47,7 +47,7 @@ export async function loadManagerWorkspace(admin) {
     admin.from('manager_cities').select('*'),
     admin.from('manager_drivers').select('*'),
     admin.from('manager_audit_log').select('*').order('created_at', { ascending: false }).limit(2000),
-    admin.from('rides').select('driver_id,status,price,requested_at').gte('requested_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(10000),
+    admin.from('rides').select('driver_id,passenger_id,status,price,requested_at').gte('requested_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(10000),
   ]);
 
   const managersRaw = throwOnError(managersResult, 'Gerentes');
@@ -152,10 +152,24 @@ export async function loadManagerPortal(admin, profileId) {
   if (!manager.is_active) throw new Error('O acesso deste gerente está desativado.');
 
   const allowedDriverIds = new Set(manager.effectiveDriverIds);
+  const scopedRides = workspace.rides.filter((ride) => allowedDriverIds.has(ride.driver_id));
+  const passengerIds = new Set(scopedRides.map((ride) => ride.passenger_id).filter(Boolean));
+  const allowedUserIds = new Set([...allowedDriverIds, ...passengerIds]);
+  const driverMap = Object.fromEntries(manager.drivers.map((driver) => [driver.id, driver]));
+  const users = workspace.profiles
+    .filter((profile) => allowedUserIds.has(profile.id))
+    .map((profile) => ({
+      ...profile,
+      userType: allowedDriverIds.has(profile.id) ? 'driver' : 'passenger',
+      driver: driverMap[profile.id] || null,
+    }))
+    .sort((a, b) => String(a.full_name || a.email || '').localeCompare(String(b.full_name || b.email || ''), 'pt-BR'));
   return {
     manager,
     drivers: manager.drivers,
-    rides: workspace.rides.filter((ride) => allowedDriverIds.has(ride.driver_id)),
+    rides: scopedRides,
+    users,
+    allowedUserIds: [...allowedUserIds],
   };
 }
 

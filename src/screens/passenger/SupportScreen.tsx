@@ -18,7 +18,7 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { Colors, Radius } from '../../constants';
 import { getRideHistory } from '../../services/rides';
-import { openSupportTicket } from '../../services/profile';
+import { getMySupportTickets, openSupportTicket, type MySupportTicket } from '../../services/profile';
 import type { RideRow } from '../../types/db';
 
 interface SupportRide { id: string; date: string; dest: string; price: string; }
@@ -62,6 +62,7 @@ const SupportScreen: React.FC<Props> = ({ onBack, onSubmit }) => {
   const [sending, setSending]             = useState(false);
   const [protocol, setProtocol]           = useState('');
   const [rides, setRides]                 = useState<SupportRide[]>([]);
+  const [myTickets, setMyTickets]          = useState<MySupportTicket[]>([]);
 
   // Load the user's real rides for the "corrida relacionada" selector
   useEffect(() => {
@@ -73,6 +74,7 @@ const SupportScreen: React.FC<Props> = ({ onBack, onSubmit }) => {
         price: fmtPrice(r.price),
       })));
     }).catch(() => {});
+    getMySupportTickets().then(setMyTickets).catch(() => {});
   }, []);
 
   const topic = TOPICS.find(t => t.id === selectedTopic);
@@ -108,6 +110,7 @@ const SupportScreen: React.FC<Props> = ({ onBack, onSubmit }) => {
         ? `${comment.trim()}\n\n[Corrida relacionada: ${selectedRide}]`
         : comment.trim();
       const id = await openSupportTicket(subjectParts.join(' '), message);
+      getMySupportTickets().then(setMyTickets).catch(() => {});
       setProtocol(id ? id.slice(0, 8).toUpperCase() : '');
       setSubmitted(true);
       setTimeout(onSubmit, 2200);
@@ -150,6 +153,23 @@ const SupportScreen: React.FC<Props> = ({ onBack, onSubmit }) => {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          {myTickets.length > 0 && (
+            <View style={styles.historyCard}>
+              <Text style={styles.historyTitle}>Minhas solicitações</Text>
+              {myTickets.map((ticket) => (
+                <View key={ticket.id} style={styles.historyItem}>
+                  <View style={styles.historyTop}>
+                    <Text style={styles.historySubject} numberOfLines={1}>{ticket.subject}</Text>
+                    <Text style={styles.historyStatus}>
+                      {ticket.status === 'closed' ? 'Resolvido' : ticket.status === 'in_progress' ? 'Em análise' : 'Aberto'}
+                    </Text>
+                  </View>
+                  {ticket.response ? <Text style={styles.historyResponse}>Resposta: {ticket.response}</Text> : <Text style={styles.historyPending}>Aguardando retorno da equipe.</Text>}
+                </View>
+              ))}
+            </View>
+          )}
+
           {/* ── Step 1: Topic ─────────────────────────────────── */}
           <Text style={styles.stepLabel}>1. QUAL O PROBLEMA?</Text>
           <View style={styles.topicsGrid}>
@@ -282,6 +302,18 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 17, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
 
   scroll: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 48 },
+
+  historyCard: {
+    backgroundColor: Colors.card, borderRadius: Radius.lg,
+    borderWidth: 1, borderColor: Colors.border, padding: 14, gap: 10,
+  },
+  historyTitle: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
+  historyItem: { paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.border, gap: 4 },
+  historyTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  historySubject: { flex: 1, fontSize: 13, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
+  historyStatus: { fontSize: 11, fontFamily: 'Poppins_600SemiBold', color: Colors.primary },
+  historyResponse: { fontSize: 12, lineHeight: 18, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary },
+  historyPending: { fontSize: 12, lineHeight: 18, fontFamily: 'Poppins_400Regular', color: Colors.textMuted },
 
   stepLabel: {
     fontSize: 10, fontFamily: 'Poppins_600SemiBold',

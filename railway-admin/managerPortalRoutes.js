@@ -96,6 +96,40 @@ const driverRows = (drivers, stats, query = '') => {
   ]);
 };
 
+const userRows = (users, query = '') => {
+  const needle = String(query || '').trim().toLocaleLowerCase('pt-BR');
+  return users.filter((user) => {
+    const haystack = [user.full_name, user.email, user.phone, user.address_city, user.userType].join(' ').toLocaleLowerCase('pt-BR');
+    return !needle || haystack.includes(needle);
+  }).map((user) => [
+    `<strong>${esc(user.full_name || 'Sem nome')}</strong><br><small class="muted">${esc(user.email || '')}</small>`,
+    badge(user.userType === 'driver' ? 'driver' : 'passenger'),
+    esc(fmtPhone(user.phone)),
+    user.userType === 'driver'
+      ? `${badge(user.driver?.status || 'offline')}<br><small class="muted">${esc(user.driver?.operating_city || user.address_city || 'Cidade não informada')}</small>`
+      : '<small class="muted">Passageiro com corrida no escopo</small>',
+    user.userType === 'driver'
+      ? `<div class="filters"><a class="act" href="/drivers/${user.id}/edit">Editar</a><a class="act gray" href="/drivers/${user.id}/reset-password">Senha</a></div>`
+      : '<small class="muted">Somente acompanhamento</small>',
+  ]);
+};
+
+const supportScope = async (admin, portal) => {
+  const allowedUserIds = portal.allowedUserIds || portal.drivers.map((driver) => driver.id);
+  if (!allowedUserIds.length) return { tickets: [], names: {}, roles: {} };
+  const [{ data: tickets, error }, { data: profiles, error: profilesError }] = await Promise.all([
+    admin.from('support_tickets').select('*').in('user_id', allowedUserIds).order('created_at', { ascending: false }).limit(200),
+    admin.from('profiles').select('id,full_name,email,role').in('id', allowedUserIds),
+  ]);
+  if (error) throw error;
+  if (profilesError) throw profilesError;
+  return {
+    tickets: tickets || [],
+    names: Object.fromEntries((profiles || []).map((profile) => [profile.id, profile.full_name || profile.email || 'Usuário'])),
+    roles: Object.fromEntries((profiles || []).map((profile) => [profile.id, profile.role])),
+  };
+};
+
 const managerDriverFormFields = (profile, driver, vehicle) => `
   <div class="row2">
     <div><label>Nome completo</label><input name="full_name" value="${esc(profile.full_name || '')}" required></div>
@@ -209,6 +243,15 @@ export function registerManagerPortalRoutes({ managerRouter, requireManagerAuth,
     render(res, managerLayout({ title: 'Motoristas', active: '/drivers', ...managerContext(req, portal), body }));
   });
 
+  managerRouter.get('/users', requireManagerAuth, async (req, res) => {
+    const portal = await getPortal(req, res, render, '/users', 'Usuários da rede', admin);
+    if (!portal) return;
+    const query = String(req.query.q || '');
+    const rows = userRows(portal.users || [], query);
+    const body = `${req.query.error ? `<div class="err">${esc(req.query.error)}</div>` : ''}<div class="notice"><strong>${portal.users?.length || 0} usuário(s) no escopo.</strong> Motoristas vinculados podem ser editados e ter a senha redefinida. Passageiros aparecem apenas para acompanhamento quando possuem corrida com a rede nos últimos 30 dias.</div><div class="card"><form method="get" action="/users" style="display:flex;gap:10px;margin-bottom:18px"><input name="q" value="${esc(query)}" placeholder="Buscar nome, e-mail ou telefone..."><button class="act" type="submit">Buscar</button></form>${table(['Usuário', 'Tipo', 'Contato', 'Vínculo / status', 'Ações'], rows)}</div>`;
+    render(res, managerLayout({ title: 'Usuários da rede', active: '/users', ...managerContext(req, portal), body }));
+  });
+
   managerRouter.get('/drivers/:id/edit', requireManagerAuth, async (req, res) => {
     const portal = await getPortal(req, res, render, '/drivers', 'Editar motorista', admin);
     if (!portal) return;
@@ -289,21 +332,49 @@ export function registerManagerPortalRoutes({ managerRouter, requireManagerAuth,
   managerRouter.get('/support', requireManagerAuth, async (req, res) => {
     const portal = await getPortal(req, res, render, '/support', 'Suporte', admin);
     if (!portal) return;
-    const allowed = new Set(portal.drivers.map((driver) => driver.id));
-    const ticketResult = allowed.size
-      ? await admin.from('support_tickets').select('*').in('user_id', [...allowed]).order('created_at', { ascending: false }).limit(200)
-      : { data: [], error: null };
-    const { data: tickets, error } = ticketResult;
-    if (error) return pageError(req, res, render, '/support', 'Suporte', error);
-    const names = Object.fromEntries(portal.drivers.map((driver) => [driver.id, driverName(driver)]));
+    let scoped;
+    try { scoped = await supportScope(admin, portal); } catch (error) { return pageError(req, res, render, '/support', 'Suporte', error); }
+    const { tickets, names, roles } = scoped;
     const rows = (tickets || []).map((ticket) => [
-      esc(names[ticket.user_id] || 'Motorista'),
+      `${esc(names[ticket.user_id] || 'Usuário')}<br><small class="muted">${esc(roles[ticket.user_id] === 'driver' ? 'Motorista' : 'Passageiro')}</small>`,
       esc(ticket.subject || 'Sem assunto'),
       esc(String(ticket.message || '').slice(0, 110)),
       badge(ticket.status || 'open'),
       fmtDate(ticket.created_at),
+      `<a class="act gray" href="/support/${ticket.id}">Abrir</a>`,
     ]);
-    const body = `<div class="notice"><strong>Suporte da sua equipe.</strong> Aqui aparecem os chamados abertos pelos motoristas dentro do seu escopo. Para alterar o status ou tratar um chamado, solicite ao administrador.</div>${card('Tickets dos motoristas', table(['Motorista', 'Assunto', 'Mensagem', 'Status', 'Criado'], rows))}`;
+    const body = `${req.query.ok ? '<div class="ok">Ticket atualizado. O usuário será notificado se tiver permitido notificações.</div>' : ''}${req.query.error ? `<div class="err">${esc(req.query.error)}</div>` : ''}<div class="notice"><strong>Suporte da sua rede.</strong> Aqui aparecem chamados de motoristas e passageiros que tiveram corrida com motoristas do seu escopo nos últimos 30 dias. Ao responder ou mudar o status, o usuário recebe uma notificação no app.</div>${card('Tickets da rede', table(['Usuário', 'Assunto', 'Mensagem', 'Status', 'Criado', 'Ação'], rows))}`;
     render(res, managerLayout({ title: 'Suporte', active: '/support', ...managerContext(req, portal), body }));
+  });
+
+  managerRouter.get('/support/:id', requireManagerAuth, async (req, res) => {
+    const portal = await getPortal(req, res, render, '/support', 'Detalhes do suporte', admin);
+    if (!portal) return;
+    try {
+      const { tickets, names, roles } = await supportScope(admin, portal);
+      const ticket = tickets.find((item) => item.id === req.params.id);
+      if (!ticket) return res.status(404).send('Chamado fora do escopo deste gerente.');
+      const body = `<div style="margin-bottom:16px"><a href="/support" class="muted">← Voltar para suporte</a></div><div class="card" style="max-width:820px;margin:0 auto"><div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap"><div><h2 style="margin-bottom:6px">${esc(ticket.subject || 'Chamado')}</h2><p class="muted" style="margin:0">${esc(names[ticket.user_id] || 'Usuário')} · ${esc(roles[ticket.user_id] === 'driver' ? 'Motorista' : 'Passageiro')} · ${fmtDate(ticket.created_at)}</p></div>${badge(ticket.status || 'open')}</div><div style="margin:22px 0;padding:16px;background:#F8FAFC;border:1px solid var(--line);border-radius:12px;white-space:pre-wrap;line-height:1.6">${esc(ticket.message || '')}</div>${ticket.response ? `<div class="notice"><strong>Resposta registrada:</strong><br>${esc(ticket.response)}</div>` : ''}<form method="post" action="/support/${ticket.id}/status"><label>Resposta ao usuário</label><textarea name="response" rows="6" placeholder="Escreva uma orientação ou atualização para o usuário...">${esc(ticket.response || '')}</textarea><label>Status</label><select name="status"><option value="open" ${ticket.status === 'open' ? 'selected' : ''}>Aberto</option><option value="in_progress" ${ticket.status === 'in_progress' ? 'selected' : ''}>Em andamento</option><option value="closed" ${ticket.status === 'closed' ? 'selected' : ''}>Fechado</option></select><div style="margin-top:22px;text-align:right"><button class="act" type="submit">Salvar e notificar usuário</button></div></form></div>`;
+      render(res, managerLayout({ title: 'Detalhes do suporte', active: '/support', ...managerContext(req, portal), body }));
+    } catch (error) {
+      pageError(req, res, render, '/support', 'Detalhes do suporte', error);
+    }
+  });
+
+  managerRouter.post('/support/:id/status', requireManagerAuth, async (req, res) => {
+    try {
+      const portal = await loadManagerPortal(admin, req.session.managerUserId);
+      const { tickets } = await supportScope(admin, portal);
+      if (!tickets.some((ticket) => ticket.id === req.params.id)) return res.status(403).send('Chamado fora do escopo deste gerente.');
+      const status = ['open', 'in_progress', 'closed'].includes(req.body.status) ? req.body.status : null;
+      if (!status) throw new Error('Status de suporte inválido.');
+      const response = String(req.body.response || '').trim() || null;
+      const { error } = await admin.from('support_tickets').update({ status, response, updated_at: new Date().toISOString() }).eq('id', req.params.id);
+      if (error) throw error;
+      res.redirect('/support?ok=1');
+    } catch (error) {
+      console.error('[Manager support update]', error);
+      res.redirect(`/support?error=${encodeURIComponent(error.message)}`);
+    }
   });
 }

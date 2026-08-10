@@ -63,7 +63,7 @@ if (!/^[a-z0-9][a-z0-9-]{10,63}$/.test(MANAGER_PANEL_SLUG)) {
 }
 const MANAGER_BASE_PATH = '/' + MANAGER_PANEL_SLUG;
 const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/users', '/drivers', '/managers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
-const MANAGER_ROUTE_PREFIXES = ['/login', '/logout', '/drivers', '/rides', '/reports', '/support'];
+const MANAGER_ROUTE_PREFIXES = ['/login', '/logout', '/drivers', '/users', '/rides', '/reports', '/support'];
 const adminPath = (value = '') => {
   const raw = String(value || '');
   const match = raw.match(/^([^?#]*)(.*)$/);

@@ -33,3 +33,26 @@ export async function openSupportTicket(subject: string, message: string): Promi
   if (error) throw error;
   return (data?.id as string) ?? '';
 }
+
+export interface MySupportTicket {
+  id: string;
+  subject: string;
+  message: string;
+  status: 'open' | 'in_progress' | 'closed';
+  response: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export async function getMySupportTickets(limit = 10): Promise<MySupportTicket[]> {
+  const { data: u } = await supabase.auth.getUser();
+  if (!u?.user) throw new Error('not authenticated');
+  const { data, error } = await supabase
+    .from('support_tickets')
+    .select('id,subject,message,status,response,created_at,updated_at')
+    .eq('user_id', u.user.id)
+    .order('created_at', { ascending: false })
+    .limit(Math.max(1, Math.min(limit, 50)));
+  if (error) throw error;
+  return (data ?? []) as MySupportTicket[];
+}
