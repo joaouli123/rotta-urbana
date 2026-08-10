@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, StatusBar, Dimensions,
+  ActivityIndicator, Alert, StatusBar, Dimensions, Linking,
 } from 'react-native';
-import { Clipboard } from 'react-native';
-import { Check, Copy } from 'lucide-react-native';
+import { Check } from 'lucide-react-native';
 import { Colors } from '../../constants';
 import {
-  getAppSettings, selectPlan, buildPlanPix, type PlanType,
+  getAppSettings, selectPlan, createSubscriptionCheckout, type PlanType,
 } from '../../services/payments';
 import type { AppSettings } from '../../types/db';
 
@@ -191,44 +190,32 @@ interface PixPanelProps {
   onDone: () => void;
 }
 
-const PixPanel: React.FC<PixPanelProps> = ({ code, amount, onDone }) => {
-  const copy = () => {
-    Clipboard.setString(code);
-    Alert.alert('Copiado!', 'Código PIX copiado para a área de transferência.');
-  };
+const PixPanel: React.FC<PixPanelProps> = ({ code, amount, onDone }) => (
+  <View style={px.panel}>
+    <Text style={px.title}>Pagamento seguro</Text>
+    <Text style={px.sub}>O Mercado Pago abre uma tela segura para escolher cartão, Pix ou boleto.</Text>
 
-  return (
-    <View style={px.panel}>
-      <Text style={px.title}>Quase lá!</Text>
-      <Text style={px.sub}>Faça o pagamento via PIX para ativar seu plano.</Text>
-
-      <View style={px.amountBox}>
-        <Text style={px.amountLabel}>Valor a pagar</Text>
-        <Text style={px.amount}>R$ {fmtBRL(amount)}</Text>
-      </View>
-
-      <View style={px.codeBox}>
-        <Text style={px.codeLabel}>PIX Copia e Cola</Text>
-        <Text style={px.code} selectable numberOfLines={5}>{code}</Text>
-        <TouchableOpacity style={px.copyBtn} onPress={copy} activeOpacity={0.85}>
-          <Copy size={15} color="#fff" />
-          <Text style={px.copyBtnTxt}>Copiar código PIX</Text>
-        </TouchableOpacity>
-      </View>
-
-      <View style={px.note}>
-        <Text style={px.noteTxt}>
-          Seu acesso será liberado após confirmação do pagamento pelo administrador.
-        </Text>
-      </View>
-
-      <TouchableOpacity style={px.doneBtn} onPress={onDone} activeOpacity={0.85}>
-        <Check size={16} color="#1A1A1A" strokeWidth={2.5} />
-        <Text style={px.doneBtnTxt}>Já paguei — Continuar</Text>
-      </TouchableOpacity>
+    <View style={px.amountBox}>
+      <Text style={px.amountLabel}>Valor da recorrência</Text>
+      <Text style={px.amount}>R$ {fmtBRL(amount)}</Text>
     </View>
-  );
-};
+
+    <TouchableOpacity style={px.copyBtn} onPress={() => Linking.openURL(code)} activeOpacity={0.85}>
+      <Text style={px.copyBtnTxt}>Abrir checkout do Mercado Pago</Text>
+    </TouchableOpacity>
+
+    <View style={px.note}>
+      <Text style={px.noteTxt}>
+        A cobrança recorrente e a confirmação são processadas automaticamente pelo Mercado Pago. Não digite os dados do cartão no app.
+      </Text>
+    </View>
+
+    <TouchableOpacity style={px.doneBtn} onPress={onDone} activeOpacity={0.85}>
+      <Check size={16} color="#1A1A1A" strokeWidth={2.5} />
+      <Text style={px.doneBtnTxt}>Voltar ao app</Text>
+    </TouchableOpacity>
+  </View>
+);
 
 const px = StyleSheet.create({
   panel: {
@@ -306,8 +293,8 @@ const PlanSelectionScreen: React.FC<PlanSelectionScreenProps> = ({ onDone }) => 
     try {
       await selectPlan(selected);
       if (selected === 'commission') { onDone(); return; }
-      const result = await buildPlanPix(selected);
-      setPixCode(result.code);
+      const result = await createSubscriptionCheckout(selected);
+      setPixCode(result.init_point);
       setPixAmount(result.amount);
     } catch (err: unknown) {
       Alert.alert('Erro', err instanceof Error ? err.message : 'Tente novamente.');

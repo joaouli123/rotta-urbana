@@ -89,9 +89,17 @@ export interface SubscriptionRow {
   id: string;
   driver_id: string;
   status: SubscriptionStatus;
+  plan?: 'commission' | 'daily' | 'weekly' | 'monthly';
   amount: number;
   due_date: string;
   paid_at: string | null;
+  provider?: string | null;
+  provider_subscription_id?: string | null;
+  provider_status?: string | null;
+  provider_payment_method_id?: string | null;
+  next_payment_at?: string | null;
+  provider_last_synced_at?: string | null;
+  provider_cancelled_at?: string | null;
 }
 
 export interface AppSettings {
@@ -111,11 +119,22 @@ export interface AppSettings {
 
 export interface PaymentRow {
   id: string;
+  driver_id?: string;
+  subscription_id?: string | null;
   amount: number;
+  method?: PaymentMethodDb;
   status: 'pending' | 'approved' | 'rejected' | 'refunded' | 'cancelled';
+  provider?: string;
+  provider_payment_id?: string | null;
+  provider_status?: string | null;
+  provider_subscription_id?: string | null;
+  provider_authorized_payment_id?: string | null;
+  external_reference?: string | null;
   pix_qr_code: string | null;
   pix_qr_code_base64: string | null;
   pix_ticket_url: string | null;
   expires_at: string | null;
   created_at: string;
+  paid_at?: string | null;
+  provider_metadata?: Record<string, unknown> | null;
 }

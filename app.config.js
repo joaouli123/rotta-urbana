@@ -42,6 +42,7 @@ module.exports = ({ config }) => ({
       },
     ],
     'expo-font',
+    'expo-asset',
     'expo-audio',
     [
       'expo-notifications',

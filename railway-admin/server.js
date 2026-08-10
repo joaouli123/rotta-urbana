@@ -7,6 +7,7 @@ import { privacyPolicyPage, deleteAccountPage } from './policies.js';
 import * as emailService from './emailService.js';
 import { registerManagerRoutes } from './managerRoutes.js';
 import { registerManagerPortalRoutes } from './managerPortalRoutes.js';
+import { registerMercadoPagoRoutes } from './paymentRoutes.js';
 import { loadUserBundle, resetUserPassword, updateDriverProfile, updateUserProfile } from './userAdmin.js';
 
 const {
@@ -138,6 +139,7 @@ setInterval(() => { const now = Date.now(); for (const [ip, e] of loginHits) if 
 
 const requireAuth = (req, res, next) => (req.session?.userId ? next() : res.redirect(adminPath('/login')));
 const requireManagerAuth = (req, res, next) => (req.session?.managerUserId ? next() : res.redirect(managerPath('/login')));
+
 adminRouter.use((req, res, next) => {
   const originalRedirect = res.redirect.bind(res);
   res.redirect = (target, ...rest) => originalRedirect(typeof target === 'string' ? adminPath(target) : target, ...rest);
@@ -1170,12 +1172,12 @@ adminRouter.get('/subscriptions', requireAuth, async (req, res) => {
   const pMap = Object.fromEntries((profiles ?? []).map((p) => [p.id, p.full_name]));
   const rows = pageSubs.map((s) => [
     esc(pMap[s.driver_id] ?? '—'), badge(s.plan), badge(s.status), brl(s.amount),
-    s.due_date ?? '—', fmtDate(s.paid_at),
+    s.due_date ?? '—', esc(s.provider_status || '—'), s.next_payment_at ? fmtDate(s.next_payment_at) : '—', fmtDate(s.paid_at),
     `<form class="inline" method="post" action="/subscriptions/${s.driver_id}/activate">${iconBtnApprove('Renovar / Ativar Assinatura')}</form>`,
   ]);
   const pageControls = pagination(totalItems, page, pageSize, req.originalUrl);
   const body = `<div class="card"><h2>Assinaturas dos motoristas (${totalItems})</h2>
-    ${table(['Motorista', 'Plano', 'Status', 'Valor', 'Vence em', 'Pago em', 'Ação'], rows)}
+    ${table(['Motorista', 'Plano', 'Status', 'Valor', 'Vence em', 'Status Mercado Pago', 'Próxima cobrança', 'Pago em', 'Ação'], rows)}
     ${pageControls}</div>`;
   render(res, layout({ title: 'Assinaturas', active: '/subscriptions', email: req.session.email, body }));
 });
@@ -1203,14 +1205,14 @@ adminRouter.get('/payments', requireAuth, async (req, res) => {
 
   const names = await profileNames(pagePayments.map((p) => p.driver_id));
   const rows = pagePayments.map((p) => [
-    esc(names[p.driver_id] ?? '—'), brl(p.amount), esc(p.method), esc(p.provider), badge(p.status), fmtDate(p.created_at),
-    p.status === 'pending'
+    esc(names[p.driver_id] ?? '—'), brl(p.amount), esc(p.method), esc(p.provider), badge(p.status), esc(p.provider_status || '—'), fmtDate(p.created_at),
+    p.status === 'pending' && p.provider !== 'mercadopago'
       ? `<form class="inline" method="post" action="/payments/${p.id}/confirm">${iconBtnDollar('Confirmar Pagamento')}</form>`
       : '—',
   ]);
   const pageControls = pagination(totalItems, page, pageSize, req.originalUrl);
   const body = `<div class="card"><h2>Pagamentos de assinatura (${totalItems})</h2>
-    ${table(['Motorista', 'Valor', 'Método', 'Provedor', 'Status', 'Criado', 'Ação'], rows)}
+    ${table(['Motorista', 'Valor', 'Método', 'Provedor', 'Status local', 'Status Mercado Pago', 'Criado', 'Ação'], rows)}
     ${pageControls}</div>`;
   render(res, layout({ title: 'Pagamentos', active: '/payments', email: req.session.email, body }));
 });
@@ -1462,10 +1464,10 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
           </div>
         </div>
 
-        <!-- 4. Integração Mercado Pago PIX Automático -->
+        <!-- 4. Integração Mercado Pago: checkout e recorrência -->
         <div class="card" style="border-left:4px solid #009EE3;">
-          <h2 style="margin:0 0 6px 0;">Integração Mercado Pago (PIX Automático &amp; QRCodes)</h2>
-          <p style="margin:0 0 16px 0;color:var(--mut);font-size:13.5px;">Credenciais ativas para geração automática de cobranças via PIX com reconciliação instantânea.</p>
+          <h2 style="margin:0 0 6px 0;">Integração Mercado Pago (cartão, Pix e boleto)</h2>
+          <p style="margin:0 0 16px 0;color:var(--mut);font-size:13.5px;">O app usa o checkout hospedado do Mercado Pago. As assinaturas recorrentes e as tentativas de cobrança são controladas pelo provedor; o webhook sincroniza o painel.</p>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">
             <div>
               <label>Mercado Pago Public Key</label>
@@ -1478,6 +1480,10 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
             <div>
               <label>Status do Access Token</label>
               <input value="${process.env.MERCADOPAGO_ACCESS_TOKEN ? 'Ativo (Produção)' : 'Pendente'}" readonly style="background:#F8FAFC;font-weight:700;color:${process.env.MERCADOPAGO_ACCESS_TOKEN ? '#047857' : '#DC2626'}">
+            </div>
+            <div>
+              <label>Status do Webhook Secret</label>
+              <input value="${process.env.MERCADOPAGO_WEBHOOK_SECRET ? 'Configurado' : 'Pendente — configurar no Coolify'}" readonly style="background:#F8FAFC;font-weight:700;color:${process.env.MERCADOPAGO_WEBHOOK_SECRET ? '#047857' : '#DC2626'}">
             </div>
           </div>
           <div style="margin-top:14px;background:#EFF6FF;border:1px solid #BFDBFE;padding:12px 16px;border-radius:10px;font-size:12.5px;color:#1E40AF;">
@@ -1639,8 +1645,9 @@ registerManagerRoutes({ adminRouter, requireAuth, render, admin });
 registerManagerPortalRoutes({ managerRouter, requireManagerAuth, managerLoginLimiter, render, admin });
 app.use(MANAGER_BASE_PATH, managerRouter);
 app.use(ADMIN_BASE_PATH, adminRouter);
+registerMercadoPagoRoutes({ app, admin, isProd: IS_PROD });
 
-app.post('/api/payments/create-pix', async (req, res) => {
+app.post('/api/payments/create-pix-legacy-disabled', async (req, res) => {
   const token = process.env.MERCADOPAGO_ACCESS_TOKEN;
   const { amount, description, email, driver_id } = req.body;
 
@@ -1707,7 +1714,7 @@ app.post('/api/payments/create-pix', async (req, res) => {
         method: 'pix',
         provider: 'mercadopago',
         status: 'pending',
-        external_id: String(data.id)
+        provider_payment_id: String(data.id)
       });
     }
 
@@ -1733,7 +1740,7 @@ app.post('/api/payments/create-pix', async (req, res) => {
 });
 
 // 2. Webhook Mercado Pago (Reconciliação Automática de Pagamentos)
-app.post('/api/mercadopago/webhook', async (req, res) => {
+app.post('/api/mercadopago/webhook-legacy-disabled', async (req, res) => {
   const token = process.env.MERCADOPAGO_ACCESS_TOKEN;
   const body = req.body;
   const paymentId = body?.data?.id || req.query.id || req.query['data.id'];
@@ -1765,7 +1772,7 @@ app.post('/api/mercadopago/webhook', async (req, res) => {
       }
 
       // Atualiza tabela de pagamentos
-      await admin.from('payments').update({ status: 'approved' }).eq('external_id', String(data.id));
+      await admin.from('payments').update({ status: 'approved' }).eq('provider_payment_id', String(data.id));
       console.log(`[MercadoPago Webhook Approved] Payment ID: ${data.id} for Driver: ${driverId}`);
     }
 

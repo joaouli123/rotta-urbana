@@ -4,6 +4,38 @@ import type { PaymentRow, SubscriptionRow, AppSettings } from '../types/db';
 
 export type PlanType = 'commission' | 'daily' | 'weekly' | 'monthly';
 
+const PAYMENTS_API = (process.env.EXPO_PUBLIC_API_URL || 'https://rottaurbana.com.br').replace(/\/$/, '');
+
+export interface SubscriptionCheckout {
+  provider: 'mercadopago';
+  subscription_id: string;
+  status: string;
+  plan: Exclude<PlanType, 'commission'>;
+  amount: number;
+  init_point: string;
+  sandbox_init_point?: string | null;
+  local_subscription_id?: string;
+}
+
+async function paymentsApi<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+  if (!token) throw new Error('Sessão expirada. Entre novamente para continuar.');
+
+  const response = await fetch(`${PAYMENTS_API}${path}`, {
+    ...init,
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...(init.headers || {}),
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload?.error || `Falha no servidor de pagamentos (${response.status}).`);
+  return payload as T;
+}
+
 export async function getSubscription(): Promise<SubscriptionRow | null> {
   const { data: u } = await supabase.auth.getUser();
   if (!u?.user) return null;
@@ -25,27 +57,29 @@ export async function getAppSettings(): Promise<AppSettings | null> {
   return (data as AppSettings) ?? null;
 }
 
-/** Driver switches between daily/monthly plans (amount comes from settings). */
-export async function setSubscriptionPlan(plan: 'daily' | 'monthly'): Promise<SubscriptionRow> {
-  const { data, error } = await supabase.rpc('set_subscription_plan', { p_plan: plan });
-  if (error) throw error;
-  return (Array.isArray(data) ? data[0] : data) as SubscriptionRow;
+/** Opens Mercado Pago's hosted recurring checkout (card, Pix or boleto). */
+export async function createSubscriptionCheckout(plan: Exclude<PlanType, 'commission'>): Promise<SubscriptionCheckout> {
+  const checkout = await paymentsApi<SubscriptionCheckout>('/api/subscriptions/create-checkout', {
+    method: 'POST',
+    body: JSON.stringify({ plan }),
+  });
+  if (!checkout?.init_point) throw new Error('O Mercado Pago não retornou o link de pagamento.');
+  return checkout;
 }
 
-/** PIX copia-e-cola to pay the driver subscription into the platform's PIX key. */
-export async function buildSubscriptionPix(): Promise<{ code: string; amount: number } | null> {
-  const [settings, sub] = await Promise.all([getAppSettings(), getSubscription()]);
-  if (!settings?.platform_pix_key || !sub) return null;
-  const code = buildPixPayload({
-    key: settings.platform_pix_key, name: settings.platform_pix_name,
-    city: settings.platform_pix_city, amount: Number(sub.amount), txid: 'ASSINATURA',
-  });
-  return code ? { code, amount: Number(sub.amount) } : null;
+/** Reconciles the local subscription with Mercado Pago after returning to the app. */
+export async function syncSubscriptionStatus(): Promise<SubscriptionRow | null> {
+  const result = await paymentsApi<{ subscription: SubscriptionRow | null }>('/api/subscriptions/status');
+  return result.subscription;
+}
+
+export async function cancelSubscription(): Promise<void> {
+  await paymentsApi('/api/subscriptions/cancel', { method: 'POST', body: '{}' });
 }
 
 /**
- * Driver chooses their billing model. Commission = access imediato.
- * Fixed plans (daily/weekly/monthly) = aguarda pagamento via PIX.
+ * Driver chooses their billing model. Commission is immediate; fixed plans
+ * are handed to the Mercado Pago recurring checkout after this selection.
  */
 export async function selectPlan(plan: PlanType): Promise<void> {
   const { error } = await supabase.rpc('driver_select_plan', { p_plan: plan });
@@ -58,61 +92,6 @@ export async function getDriverPlanType(): Promise<PlanType | null> {
   if (!u?.user) return null;
   const { data } = await supabase.from('drivers').select('plan_type').eq('id', u.user.id).single();
   return (data?.plan_type as PlanType) ?? null;
-}
-
-/**
- * Builds a PIX copia-e-cola code for the driver to pay their chosen fixed plan
- * into the platform's PIX key.
- */
-export async function buildPlanPix(plan: PlanType): Promise<{ code: string; amount: number }> {
-  const settings = await getAppSettings();
-  if (!settings?.platform_pix_key) throw new Error('Chave PIX não configurada');
-
-  let amount: number;
-  switch (plan) {
-    case 'daily':
-      amount = settings.plan_daily_price ?? settings.subscription_daily_amount;
-      break;
-    case 'weekly':
-      amount = settings.plan_weekly_price ?? (settings.subscription_monthly_amount / 4);
-      break;
-    case 'monthly':
-      amount = settings.subscription_monthly_amount;
-      break;
-    default:
-      throw new Error('Plano inválido para geração de PIX');
-  }
-
-  // Tenta gerar via API do Mercado Pago no servidor de produção
-  try {
-    const { data: u } = await supabase.auth.getUser();
-    const res = await fetch('https://rottaurbana.com.br/api/payments/create-pix', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        amount,
-        description: `Plano Rotta Urbana (${plan.toUpperCase()})`,
-        email: u?.user?.email || 'motorista@rottaurbana.com.br',
-        driver_id: u?.user?.id
-      })
-    });
-    const json = await res.json();
-    if (json?.qr_code) {
-      return { code: json.qr_code, amount };
-    }
-  } catch {
-    // Fallback gracioso para payload estático se offline
-  }
-
-  const code = buildPixPayload({
-    key: settings.platform_pix_key,
-    name: settings.platform_pix_name,
-    city: settings.platform_pix_city,
-    amount,
-    txid: `PLANO${plan.toUpperCase().slice(0, 4)}`,
-  });
-  if (!code) throw new Error('Erro ao gerar código PIX');
-  return { code, amount };
 }
 
 /** PIX copia-e-cola for a passenger to pay the ride fare DIRECTLY to the driver. */

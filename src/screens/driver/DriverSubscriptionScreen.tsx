@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  StatusBar, ActivityIndicator, Alert, Clipboard,
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, AppState,
+  StatusBar, ActivityIndicator, Alert, Linking,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ChevronLeft, CheckCircle, AlertCircle, Clock, RefreshCw,
-  Check, Copy, Calendar, Zap,
+  Check, Calendar, Zap,
 } from 'lucide-react-native';
 import { Colors, Radius } from '../../constants';
 import {
-  getSubscription, getAppSettings, selectPlan, buildPlanPix,
+  getSubscription, getAppSettings, selectPlan, createSubscriptionCheckout, syncSubscriptionStatus,
   getDriverPlanType, type PlanType,
 } from '../../services/payments';
 import type { SubscriptionRow, AppSettings } from '../../types/db';
@@ -110,11 +110,14 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, cfg, pt] = await Promise.all([
+      const [loadedSub, cfg, pt] = await Promise.all([
         getSubscription(),
         getAppSettings(),
         getDriverPlanType(),
       ]);
+      const s = loadedSub?.provider_subscription_id
+        ? await syncSubscriptionStatus().catch(() => loadedSub)
+        : loadedSub;
       setSub(s);
       setSettings(cfg);
       setCurrentPlan(pt);
@@ -122,7 +125,13 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const listener = AppState.addEventListener('change', (state) => {
+      if (state === 'active') load();
+    });
+    return () => listener.remove();
+  }, [load]);
 
   const plans = buildPlans(settings);
 
@@ -133,7 +142,7 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
       'Trocar para ' + PLAN_LABELS[plan],
       plan === 'commission'
         ? 'Você passará a pagar comissão por corrida, sem mensalidade fixa. Acesso imediato.'
-        : 'Será gerado um código PIX para você pagar o plano ' + PLAN_LABELS[plan] + '. Continuar?',
+        : 'Você será encaminhado ao Mercado Pago para escolher cartão, Pix ou boleto no plano ' + PLAN_LABELS[plan] + '. Continuar?',
       [
         { text: 'Cancelar', style: 'cancel' },
         { text: 'Confirmar', onPress: () => doSwitch(plan) },
@@ -154,8 +163,8 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
         load();
         return;
       }
-      const result = await buildPlanPix(plan);
-      setPixCode(result.code);
+      const result = await createSubscriptionCheckout(plan);
+      setPixCode(result.init_point);
       setPixAmount(result.amount);
     } catch (err: unknown) {
       Alert.alert('Erro', err instanceof Error ? err.message : 'Tente novamente.');
@@ -163,12 +172,6 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
     } finally {
       setSwitching(false);
     }
-  };
-
-  const copyPix = () => {
-    if (!pixCode) return;
-    Clipboard.setString(pixCode);
-    Alert.alert('Copiado!', 'Código PIX copiado para a área de transferência.');
   };
 
   const dismissPix = () => {
@@ -270,9 +273,9 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
         {/* ── PIX panel (shown after switching to a fixed plan) ── */}
         {pixCode !== null && pendingPlan && (
           <View style={s.pixPanel}>
-            <Text style={s.pixPanelTitle}>Quase lá!</Text>
+            <Text style={s.pixPanelTitle}>Pagamento seguro</Text>
             <Text style={s.pixPanelSub}>
-              Faça o pagamento via PIX para ativar o plano {PLAN_LABELS[pendingPlan]}.
+              O Mercado Pago abre uma tela segura para escolher cartão, Pix ou boleto no plano {PLAN_LABELS[pendingPlan]}.
             </Text>
 
             <View style={s.pixAmountBox}>
@@ -280,24 +283,19 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
               <Text style={s.pixAmount}>{fmtBRL(pixAmount)}</Text>
             </View>
 
-            <View style={s.pixCodeBox}>
-              <Text style={s.pixCodeLabel}>PIX COPIA E COLA</Text>
-              <Text style={s.pixCode} selectable numberOfLines={5}>{pixCode}</Text>
-              <TouchableOpacity style={s.copyBtn} onPress={copyPix} activeOpacity={0.85}>
-                <Copy size={14} color="#fff" />
-                <Text style={s.copyBtnTxt}>Copiar código PIX</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity style={s.copyBtn} onPress={() => Linking.openURL(pixCode)} activeOpacity={0.85}>
+              <Text style={s.copyBtnTxt}>Abrir checkout do Mercado Pago</Text>
+            </TouchableOpacity>
 
             <View style={s.pixNote}>
               <Text style={s.pixNoteTxt}>
-                Seu acesso será liberado após confirmação do pagamento pelo administrador.
+                A cobrança recorrente e a confirmação são processadas automaticamente pelo Mercado Pago. Não digite os dados do cartão no app.
               </Text>
             </View>
 
             <TouchableOpacity style={s.doneBtn} onPress={dismissPix} activeOpacity={0.85}>
               <Check size={15} color="#1A1A1A" strokeWidth={2.5} />
-              <Text style={s.doneBtnTxt}>Já paguei — Continuar</Text>
+              <Text style={s.doneBtnTxt}>Voltar ao app</Text>
             </TouchableOpacity>
           </View>
         )}

@@ -12,7 +12,7 @@ import { getSearchingRides, subscribeSearchingRides, setStatus, updateLocation, 
 import { playSound, stopSound } from '../lib/sounds';
 import { registerForPushNotifications, clearPushToken } from '../services/push';
 import { showSearchingNotification, showDriverFoundNotification, clearRideNotification, ensureNotificationPermission } from '../services/localNotifications';
-import { setSubscriptionPlan, buildSubscriptionPix, buildRideFarePix } from '../services/payments';
+import { selectPlan, createSubscriptionCheckout, buildRideFarePix } from '../services/payments';
 import { friendlyError } from '../lib/errors';
 
 // Auth
@@ -514,20 +514,13 @@ const DriverFlow: React.FC = () => {
     else setScreen('driver_home');
   };
 
-  const startSubPayment = async (plan: 'daily' | 'monthly') => {
+  const startSubPayment = async (plan: 'daily' | 'weekly' | 'monthly') => {
     try {
-      const sub = await setSubscriptionPlan(plan);
-      const pix = await buildSubscriptionPix();
-      const label = plan === 'daily' ? 'Diária' : 'Mensal';
-      if (!pix?.code) {
-        Alert.alert('PIX indisponível', 'O admin precisa cadastrar a chave PIX da plataforma no painel.');
-        return;
-      }
-      Alert.alert(
-        `Assinatura ${label} — R$ ${Number(sub.amount).toFixed(2)}`,
-        `Pague via PIX copia-e-cola abaixo. A confirmação é feita pelo admin:\n\n${pix.code}`,
-        [{ text: 'OK' }],
-      );
+      await selectPlan(plan);
+      const checkout = await createSubscriptionCheckout(plan);
+      const label = plan === 'daily' ? 'Diária' : plan === 'weekly' ? 'Semanal' : 'Mensal';
+      await Linking.openURL(checkout.init_point);
+      Alert.alert('Checkout aberto', `Escolha cartão, Pix ou boleto para ativar a assinatura ${label}. A cobrança recorrente será gerenciada pelo Mercado Pago.`);
     } catch (e: any) {
       Alert.alert('Erro', friendlyError(e?.message));
     }
@@ -536,6 +529,7 @@ const DriverFlow: React.FC = () => {
   const paySubscription = () => {
     Alert.alert('Plano da assinatura', 'Como você quer pagar?', [
       { text: 'Diária', onPress: () => startSubPayment('daily') },
+      { text: 'Semanal', onPress: () => startSubPayment('weekly') },
       { text: 'Mensal', onPress: () => startSubPayment('monthly') },
       { text: 'Cancelar', style: 'cancel' },
     ]);
