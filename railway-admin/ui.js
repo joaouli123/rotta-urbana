@@ -3,7 +3,7 @@
 const DEFAULT_ADMIN_PANEL_SLUG = 'console-ru-7f3a9c';
 const ADMIN_PANEL_SLUG = String(process.env.ADMIN_PANEL_SLUG || DEFAULT_ADMIN_PANEL_SLUG).trim().replace(/^\/+|\/+$/g, '');
 const ADMIN_BASE_PATH = '/' + ADMIN_PANEL_SLUG;
-const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/drivers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
+const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/drivers', '/managers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
 const adminHref = (route = '') => {
   const value = String(route || '');
   if (!value || value === '/') return ADMIN_BASE_PATH;
@@ -229,7 +229,7 @@ export const pagination = (totalItems, currentPage = 1, pageSize = 20, reqUrl = 
 const NAV = [
   ['/admin', 'Visão Geral', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>`],
   ['/drivers', 'Motoristas', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`],
-  ['/rides', 'Corridas', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>`],
+  ['/managers', 'Gerentes', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/></svg>`],  ['/rides', 'Corridas', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>`],
   ['/subscriptions', 'Assinaturas', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>`],
   ['/payments', 'Pagamentos', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>`],
   ['/leads', 'Leads / Contatos', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>`],
@@ -310,7 +310,15 @@ export const layout = ({ title, active, body, email, head = '' }) => `<!doctype 
   input,select{background:#fff;border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:10px 14px;font-size:14px;width:100%}
   input:focus,select:focus{outline:none;border-color:var(--pri);box-shadow:0 0 0 3px rgba(16,185,129,0.15)}
   label{display:block;color:var(--mut);font-size:12px;margin:12px 0 5px;font-weight:600}
-  .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}  .manager-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;margin-bottom:24px}
+  .manager-card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:18px;box-shadow:var(--shadow)}
+  .manager-card h3{font-size:15px;margin:0 0 5px;font-weight:800}.manager-card p{margin:4px 0;color:var(--mut);font-size:12.5px}
+  .manager-card .metric{font-size:26px;font-weight:800;margin-top:14px}.manager-card .metric-label{font-size:11px;color:var(--mut);font-weight:600}
+  .chips{display:flex;gap:6px;flex-wrap:wrap}.chip{display:inline-flex;align-items:center;padding:4px 9px;border-radius:99px;background:#ECFDF5;color:#047857;font-size:11px;font-weight:700}
+  .muted{color:var(--mut);font-size:12.5px}.actions{display:flex;gap:6px;align-items:center;flex-wrap:wrap}.notice{padding:13px 16px;border-radius:12px;background:#EFF6FF;border:1px solid #BFDBFE;color:#1E40AF;font-size:13px;margin-bottom:18px}
+  .danger-zone{background:#FFF7F7;border:1px solid #FECACA;border-radius:14px;padding:16px}.driver-picker{max-height:440px;overflow:auto;border:1px solid var(--line);border-radius:12px;padding:6px}.driver-option{display:flex;align-items:center;gap:10px;padding:10px;border-radius:9px;border-bottom:1px solid #F1F5F9}.driver-option:last-child{border-bottom:0}.driver-option:hover{background:#F8FAFC}.driver-option input{width:auto}.driver-option small{display:block;color:var(--mut);margin-top:2px}.split{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(300px,.85fr);gap:20px}
+  .progress{height:7px;background:#E2E8F0;border-radius:99px;overflow:hidden}.progress>span{display:block;height:100%;background:var(--pri);border-radius:99px}
+  @media (max-width:900px){.main{margin-left:0;padding:24px 16px}.side{position:relative;width:100%;height:auto;min-height:0}.app{display:block}.side>div:first-child{display:flex;flex-wrap:wrap;align-items:center;gap:10px}.brand{padding-bottom:8px!important}.nav{display:flex;flex-wrap:wrap}.nav a{padding:8px 10px}.side-logout{margin:8px 0 0;padding-top:8px}.side>div:last-child{display:none}.split{grid-template-columns:1fr}.row2{grid-template-columns:1fr}}
   .filters a{padding:8px 16px;border:1px solid var(--line);border-radius:100px;font-size:13px;font-weight:600;color:var(--mut);margin-right:8px;background:var(--panel);transition:all .15s ease}
   .filters a.on,.filters a:hover{background:var(--pri);color:#03130c;border-color:var(--pri)}
   

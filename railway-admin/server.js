@@ -5,6 +5,7 @@ import { layout, loginPage, esc, brl, fmtDate, fmtPhone, badge, kpiCard, table, 
 import { landingPage } from './landing.js';
 import { privacyPolicyPage, deleteAccountPage } from './policies.js';
 import * as emailService from './emailService.js';
+import { registerManagerRoutes } from './managerRoutes.js';
 
 const {
   SUPABASE_URL,
@@ -49,7 +50,7 @@ if (!/^[a-z0-9][a-z0-9-]{10,63}$/.test(ADMIN_PANEL_SLUG)) {
   process.exit(1);
 }
 const ADMIN_BASE_PATH = '/' + ADMIN_PANEL_SLUG;
-const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/drivers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
+const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/drivers', '/managers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
 const adminPath = (value = '') => {
   const raw = String(value || '');
   const match = raw.match(/^([^?#]*)(.*)$/);
@@ -1552,6 +1553,7 @@ adminRouter.post('/settings/fares', requireAuth, async (req, res) => {
 // ─── Mercado Pago PIX API Endpoints ─────────────────────────────────────────
 
 // 1. Criar Cobrança PIX em Tempo Real (Gera QR Code + Copia e Cola)
+registerManagerRoutes({ adminRouter, requireAuth, render, admin });
 app.use(ADMIN_BASE_PATH, adminRouter);
 
 app.post('/api/payments/create-pix', async (req, res) => {
