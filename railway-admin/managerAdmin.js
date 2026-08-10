@@ -142,7 +142,21 @@ export async function loadManagerWorkspace(admin) {
     rides30d: rides.length,
   };
 
-  return { managers, drivers, profiles, summary };
+  return { managers, drivers, profiles, rides, summary };
+}
+
+export async function loadManagerPortal(admin, profileId) {
+  const workspace = await loadManagerWorkspace(admin);
+  const manager = workspace.managers.find((item) => item.profile_id === profileId);
+  if (!manager) throw new Error('Gerente não encontrado ou ainda não configurado.');
+  if (!manager.is_active) throw new Error('O acesso deste gerente está desativado.');
+
+  const allowedDriverIds = new Set(manager.effectiveDriverIds);
+  return {
+    manager,
+    drivers: manager.drivers,
+    rides: workspace.rides.filter((ride) => allowedDriverIds.has(ride.driver_id)),
+  };
 }
 
 export async function findProfileByEmail(admin, email) {

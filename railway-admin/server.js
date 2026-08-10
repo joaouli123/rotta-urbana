@@ -1,11 +1,12 @@
 import express from 'express';
 import session from 'express-session';
 import { createClient } from '@supabase/supabase-js';
-import { layout, loginPage, esc, brl, fmtDate, fmtPhone, badge, kpiCard, table, pagination, iconBtnApprove, iconBtnSuspend, iconBtnDollar, iconBtnClose, iconBtnTrash, iconBtnWhatsApp, iconBtnEdit, iconBtnKey, iconBtnPlan, iconBtnDocs } from './ui.js';
+import { layout, loginPage, managerLoginPage, esc, brl, fmtDate, fmtPhone, badge, kpiCard, table, pagination, iconBtnApprove, iconBtnSuspend, iconBtnDollar, iconBtnClose, iconBtnTrash, iconBtnWhatsApp, iconBtnEdit, iconBtnKey, iconBtnPlan, iconBtnDocs } from './ui.js';
 import { landingPage } from './landing.js';
 import { privacyPolicyPage, deleteAccountPage } from './policies.js';
 import * as emailService from './emailService.js';
 import { registerManagerRoutes } from './managerRoutes.js';
+import { registerManagerPortalRoutes } from './managerPortalRoutes.js';
 
 const {
   SUPABASE_URL,
@@ -50,7 +51,17 @@ if (!/^[a-z0-9][a-z0-9-]{10,63}$/.test(ADMIN_PANEL_SLUG)) {
   process.exit(1);
 }
 const ADMIN_BASE_PATH = '/' + ADMIN_PANEL_SLUG;
+const DEFAULT_MANAGER_PANEL_SLUG = 'painel-gerente-ru-6c4a9e';
+const MANAGER_PANEL_SLUG = String(process.env.MANAGER_PANEL_SLUG || DEFAULT_MANAGER_PANEL_SLUG)
+  .trim()
+  .replace(/^\/+|\/+$/g, '');
+if (!/^[a-z0-9][a-z0-9-]{10,63}$/.test(MANAGER_PANEL_SLUG)) {
+  console.error('MANAGER_PANEL_SLUG inválido: use 11-64 caracteres minúsculos, números e hífens.');
+  process.exit(1);
+}
+const MANAGER_BASE_PATH = '/' + MANAGER_PANEL_SLUG;
 const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/drivers', '/managers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
+const MANAGER_ROUTE_PREFIXES = ['/login', '/logout', '/drivers', '/rides', '/reports', '/support'];
 const adminPath = (value = '') => {
   const raw = String(value || '');
   const match = raw.match(/^([^?#]*)(.*)$/);
@@ -63,6 +74,18 @@ const adminPath = (value = '') => {
   return raw;
 };
 const adminRouter = express.Router();
+const managerRouter = express.Router();
+const managerPath = (value = '') => {
+  const raw = String(value || '');
+  const match = raw.match(/^([^?#]*)(.*)$/);
+  const pathname = match?.[1] || raw;
+  const suffix = match?.[2] || '';
+  if (pathname === '/' || pathname === '/manager' || pathname === '') return MANAGER_BASE_PATH + suffix;
+  if (MANAGER_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'))) {
+    return MANAGER_BASE_PATH + pathname + suffix;
+  }
+  return raw;
+};
 
 // Baseline security headers (no extra deps).
 app.use((req, res, next) => {
@@ -98,22 +121,30 @@ app.use((req, res, next) => {
 const LOGIN_MAX = 8;            // attempts
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const loginHits = new Map();    // ip -> { count, resetAt }
-const loginLimiter = (req, res, next) => {
+const makeLoginLimiter = (page) => (req, res, next) => {
   const ip = req.ip || 'unknown';
   const now = Date.now();
   let e = loginHits.get(ip);
   if (!e || now > e.resetAt) { e = { count: 0, resetAt: now + LOGIN_WINDOW_MS }; loginHits.set(ip, e); }
-  if (e.count >= LOGIN_MAX) return render(res, loginPage('Muitas tentativas. Tente novamente em alguns minutos.'));
+  if (e.count >= LOGIN_MAX) return render(res, page('Muitas tentativas. Tente novamente em alguns minutos.'));
   e.count++;
   next();
 };
+const loginLimiter = makeLoginLimiter(loginPage);
+const managerLoginLimiter = makeLoginLimiter(managerLoginPage);
 // Opportunistic cleanup so the Map can't grow unbounded.
 setInterval(() => { const now = Date.now(); for (const [ip, e] of loginHits) if (now > e.resetAt) loginHits.delete(ip); }, LOGIN_WINDOW_MS).unref?.();
 
 const requireAuth = (req, res, next) => (req.session?.userId ? next() : res.redirect(adminPath('/login')));
+const requireManagerAuth = (req, res, next) => (req.session?.managerUserId ? next() : res.redirect(managerPath('/login')));
 adminRouter.use((req, res, next) => {
   const originalRedirect = res.redirect.bind(res);
   res.redirect = (target, ...rest) => originalRedirect(typeof target === 'string' ? adminPath(target) : target, ...rest);
+  next();
+});
+managerRouter.use((req, res, next) => {
+  const originalRedirect = res.redirect.bind(res);
+  res.redirect = (target, ...rest) => originalRedirect(typeof target === 'string' ? managerPath(target) : target, ...rest);
   next();
 });
 const render = (res, html) => res.set('Content-Type', 'text/html; charset=utf-8').send(html);
@@ -1554,6 +1585,8 @@ adminRouter.post('/settings/fares', requireAuth, async (req, res) => {
 
 // 1. Criar Cobrança PIX em Tempo Real (Gera QR Code + Copia e Cola)
 registerManagerRoutes({ adminRouter, requireAuth, render, admin });
+registerManagerPortalRoutes({ managerRouter, requireManagerAuth, managerLoginLimiter, render, admin });
+app.use(MANAGER_BASE_PATH, managerRouter);
 app.use(ADMIN_BASE_PATH, adminRouter);
 
 app.post('/api/payments/create-pix', async (req, res) => {
