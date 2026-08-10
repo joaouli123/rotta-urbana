@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { managerLayout, managerLoginPage, esc, fmtDate, fmtPhone, badge, brl, table } from './ui.js';
 import { loadManagerPortal } from './managerAdmin.js';
+import { loadUserBundle, resetUserPassword, updateDriverProfile } from './userAdmin.js';
 
 const ACTIVE_RIDE_STATUSES = new Set(['searching', 'driver_found', 'driver_on_way', 'driver_arrived', 'in_progress']);
 const driverName = (driver) => driver.profile?.full_name || driver.profile?.email || 'Motorista sem nome';
@@ -91,8 +92,45 @@ const driverRows = (drivers, stats, query = '') => {
     `${esc(driverVehicle(driver))}<br><small class="muted">${esc(driver.vehicle?.plate || 'Placa não informada')}</small>`,
     `${badge(driver.status || 'offline')}<br>${driver.is_verified ? badge('approved') : badge('pending')}`,
     `${stats[driver.id]?.total || 0} total<br><small class="muted">${stats[driver.id]?.completed || 0} concluídas · ${stats[driver.id]?.active || 0} ativas</small>`,
+    `<div class="filters"><a class="act" href="/drivers/${driver.id}/edit">Editar</a><a class="act gray" href="/drivers/${driver.id}/reset-password">Senha</a></div>`,
   ]);
 };
+
+const managerDriverFormFields = (profile, driver, vehicle) => `
+  <div class="row2">
+    <div><label>Nome completo</label><input name="full_name" value="${esc(profile.full_name || '')}" required></div>
+    <div><label>E-mail de acesso</label><input name="email" type="email" value="${esc(profile.email || '')}" required></div>
+    <div><label>Telefone</label><input name="phone" value="${esc(profile.phone || '')}"></div>
+    <div><label>CPF</label><input name="cpf" value="${esc(profile.cpf || '')}"></div>
+    <div><label>Gênero</label><select name="gender"><option value="">Não informado</option><option value="female" ${profile.gender === 'female' ? 'selected' : ''}>Feminino</option><option value="male" ${profile.gender === 'male' ? 'selected' : ''}>Masculino</option><option value="other" ${profile.gender === 'other' ? 'selected' : ''}>Outro</option></select></div>
+  </div>
+  <h3 style="margin:22px 0 12px;font-size:15px;">Endereço</h3>
+  <div class="row2">
+    <div><label>CEP</label><input name="address_cep" value="${esc(profile.address_cep || '')}"></div>
+    <div><label>Estado</label><input name="address_state" maxlength="2" value="${esc(profile.address_state || '')}"></div>
+    <div><label>Cidade</label><input name="address_city" value="${esc(profile.address_city || '')}"></div>
+    <div><label>Bairro</label><input name="address_neighborhood" value="${esc(profile.address_neighborhood || '')}"></div>
+    <div><label>Rua</label><input name="address_street" value="${esc(profile.address_street || '')}"></div>
+    <div><label>Número</label><input name="address_number" value="${esc(profile.address_number || '')}"></div>
+    <div style="grid-column:1/-1"><label>Complemento</label><input name="address_complement" value="${esc(profile.address_complement || '')}"></div>
+  </div>
+  <h3 style="margin:22px 0 12px;font-size:15px;">Dados operacionais</h3>
+  <div class="row2">
+    <div><label>Chave PIX</label><input name="pix_key" value="${esc(driver.pix_key || '')}"></div>
+    <div><label>Cidade operacional</label><input name="operating_city" value="${esc(driver.operating_city || '')}"></div>
+    <div><label>Estado operacional</label><input name="operating_state" maxlength="2" value="${esc(driver.operating_state || '')}"></div>
+  </div>
+  <h3 style="margin:22px 0 12px;font-size:15px;">Veículo principal</h3>
+  <div class="row2">
+    <div><label>Marca</label><input name="vehicle_brand" value="${esc(vehicle.brand || '')}"></div>
+    <div><label>Modelo</label><input name="vehicle_model" value="${esc(vehicle.model || '')}"></div>
+    <div><label>Placa</label><input name="vehicle_plate" value="${esc(vehicle.plate || '')}"></div>
+    <div><label>Ano</label><input name="vehicle_year" type="number" min="1980" max="2100" value="${esc(vehicle.year || '')}"></div>
+    <div><label>Cor</label><input name="vehicle_color" value="${esc(vehicle.color || '')}"></div>
+    <div><label>Tipo</label><select name="vehicle_type"><option value="sedan" ${vehicle.type === 'sedan' ? 'selected' : ''}>Sedan</option><option value="hatch" ${vehicle.type === 'hatch' ? 'selected' : ''}>Hatch</option><option value="suv" ${vehicle.type === 'suv' ? 'selected' : ''}>SUV</option><option value="moto" ${vehicle.type === 'moto' ? 'selected' : ''}>Moto</option></select></div>
+    <div><label>Valor FIPE</label><input name="vehicle_fipe_value" type="number" min="0" step="0.01" value="${esc(vehicle.fipe_value || '')}"></div>
+    <div><label>Assentos</label><input name="vehicle_seats" type="number" min="1" max="9" value="${esc(vehicle.seats || 4)}"></div>
+  </div>`;
 
 export function registerManagerPortalRoutes({ managerRouter, requireManagerAuth, managerLoginLimiter, render, admin }) {
   managerRouter.get('/login', (req, res) => render(res, managerLoginPage(req.query.error || '')));
@@ -110,9 +148,10 @@ export function registerManagerPortalRoutes({ managerRouter, requireManagerAuth,
       const { data, error } = await authClient.auth.signInWithPassword({ email, password });
       if (error || !data?.user) return render(res, managerLoginPage('E-mail ou senha incorretos.'));
 
-      const { data: profile, error: profileError } = await admin.from('profiles').select('id,role,full_name,email').eq('id', data.user.id).maybeSingle();
+      const { data: profile, error: profileError } = await admin.from('profiles').select('id,role,full_name,email,is_active').eq('id', data.user.id).maybeSingle();
       if (profileError) throw profileError;
       if (profile?.role !== 'manager') return render(res, managerLoginPage('Este usuário ainda não possui perfil de gerente.'));
+      if (profile.is_active === false) return render(res, managerLoginPage('Este acesso está inativo. Solicite a ativação ao administrador.'));
 
       const { data: manager, error: managerError } = await admin.from('managers').select('id,is_active').eq('profile_id', data.user.id).maybeSingle();
       if (managerError) throw managerError;
@@ -166,8 +205,59 @@ export function registerManagerPortalRoutes({ managerRouter, requireManagerAuth,
     const stats = driverStats(portal.drivers, portal.rides);
     const query = String(req.query.q || '');
     const rows = driverRows(portal.drivers, stats, query);
-    const body = `<div class="notice"><strong>${portal.drivers.length} motorista(s) dentro do seu escopo.</strong> Esta lista é atualizada diretamente do cadastro e mostra status, verificação, veículo e desempenho recente.</div><div class="card"><form method="get" action="/drivers" style="display:flex;gap:10px;margin-bottom:18px"><input name="q" value="${esc(query)}" placeholder="Buscar nome, e-mail, cidade ou placa..."><button class="act" type="submit">Buscar</button></form>${table(['Motorista', 'Contato / cidade', 'Veículo', 'Status / verificação', 'Desempenho'], rows)}</div>`;
+    const body = `${req.query.ok ? '<div class="ok">Dados do motorista atualizados com sucesso.</div>' : ''}${req.query.error ? `<div class="err">${esc(req.query.error)}</div>` : ''}<div class="notice"><strong>${portal.drivers.length} motorista(s) dentro do seu escopo.</strong> Esta lista é atualizada diretamente do cadastro e mostra status, verificação, veículo e desempenho recente. O gerente pode editar dados cadastrais e veículo, mas não permissões, aprovação ou vínculo.</div><div class="card"><form method="get" action="/drivers" style="display:flex;gap:10px;margin-bottom:18px"><input name="q" value="${esc(query)}" placeholder="Buscar nome, e-mail, cidade ou placa..."><button class="act" type="submit">Buscar</button></form>${table(['Motorista', 'Contato / cidade', 'Veículo', 'Status / verificação', 'Desempenho', 'Ações'], rows)}</div>`;
     render(res, managerLayout({ title: 'Motoristas', active: '/drivers', ...managerContext(req, portal), body }));
+  });
+
+  managerRouter.get('/drivers/:id/edit', requireManagerAuth, async (req, res) => {
+    const portal = await getPortal(req, res, render, '/drivers', 'Editar motorista', admin);
+    if (!portal) return;
+    if (!portal.drivers.some((driver) => driver.id === req.params.id)) return res.status(403).send('Motorista fora do escopo deste gerente.');
+    try {
+      const { profile, driver, vehicle } = await loadUserBundle(admin, req.params.id);
+      const body = `<div style="margin-bottom:16px;"><a href="/drivers" class="muted">← Voltar para motoristas</a></div><div class="card" style="max-width:850px;margin:0 auto;"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;"><div><h2 style="margin-bottom:6px;">Editar motorista</h2><p class="muted" style="margin:0;">${esc(profile.full_name || '')} · ${esc(profile.email || '')}</p></div><a class="act gray" href="/drivers/${profile.id}/reset-password">Redefinir senha</a></div><form method="post" action="/drivers/${profile.id}/edit">${managerDriverFormFields(profile, driver || {}, vehicle || {})}<p class="muted" style="margin-top:18px;">O gerente pode editar os dados cadastrais, endereço, dados operacionais e veículo. Permissões, status de verificação e vínculos continuam sob controle do administrador.</p><div style="margin-top:24px;text-align:right;display:flex;gap:10px;justify-content:flex-end;"><a href="/drivers" class="act gray">Cancelar</a><button type="submit" class="act">Salvar alterações</button></div></form></div>`;
+      render(res, managerLayout({ title: 'Editar motorista', active: '/drivers', ...managerContext(req, portal), body }));
+    } catch (error) {
+      pageError(req, res, render, '/drivers', 'Editar motorista', error);
+    }
+  });
+
+  managerRouter.post('/drivers/:id/edit', requireManagerAuth, async (req, res) => {
+    try {
+      const portal = await loadManagerPortal(admin, req.session.managerUserId);
+      if (!portal.drivers.some((driver) => driver.id === req.params.id)) return res.status(403).send('Motorista fora do escopo deste gerente.');
+      await updateDriverProfile(admin, req.params.id, req.body);
+      res.redirect('/drivers?ok=1');
+    } catch (error) {
+      console.error('[Manager driver edit]', error);
+      res.redirect(`/drivers?error=${encodeURIComponent(error.message)}`);
+    }
+  });
+
+  managerRouter.get('/drivers/:id/reset-password', requireManagerAuth, async (req, res) => {
+    const portal = await getPortal(req, res, render, '/drivers', 'Redefinir senha', admin);
+    if (!portal) return;
+    if (!portal.drivers.some((driver) => driver.id === req.params.id)) return res.status(403).send('Motorista fora do escopo deste gerente.');
+    try {
+      const { profile } = await loadUserBundle(admin, req.params.id);
+      const body = `<div style="margin-bottom:16px;"><a href="/drivers/${profile.id}/edit" class="muted">← Voltar para edição</a></div><div class="card" style="max-width:600px;margin:0 auto;"><h2>Redefinir senha do motorista</h2><p class="muted">A nova senha será aplicada imediatamente para <strong>${esc(profile.full_name || '')}</strong> (${esc(profile.email || '')}).</p><form method="post" action="/drivers/${profile.id}/reset-password"><label>Nova senha</label><input name="new_password" type="password" autocomplete="new-password" minlength="8" required placeholder="Mínimo de 8 caracteres"><label>Confirmar nova senha</label><input name="confirm_password" type="password" autocomplete="new-password" minlength="8" required placeholder="Repita a senha"><div style="margin-top:24px;text-align:right;display:flex;gap:10px;justify-content:flex-end;"><a href="/drivers/${profile.id}/edit" class="act gray">Cancelar</a><button type="submit" class="act">Alterar senha</button></div></form></div>`;
+      render(res, managerLayout({ title: 'Redefinir senha', active: '/drivers', ...managerContext(req, portal), body }));
+    } catch (error) {
+      pageError(req, res, render, '/drivers', 'Redefinir senha', error);
+    }
+  });
+
+  managerRouter.post('/drivers/:id/reset-password', requireManagerAuth, async (req, res) => {
+    try {
+      const portal = await loadManagerPortal(admin, req.session.managerUserId);
+      if (!portal.drivers.some((driver) => driver.id === req.params.id)) return res.status(403).send('Motorista fora do escopo deste gerente.');
+      if (String(req.body.new_password || '') !== String(req.body.confirm_password || '')) throw new Error('As senhas não conferem.');
+      await resetUserPassword(admin, req.params.id, req.body.new_password);
+      res.redirect('/drivers?ok=1');
+    } catch (error) {
+      console.error('[Manager driver password]', error);
+      res.redirect(`/drivers?error=${encodeURIComponent(error.message)}`);
+    }
   });
 
   managerRouter.get('/rides', requireManagerAuth, async (req, res) => {

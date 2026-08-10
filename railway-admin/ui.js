@@ -6,7 +6,7 @@ const ADMIN_BASE_PATH = '/' + ADMIN_PANEL_SLUG;
 const DEFAULT_MANAGER_PANEL_SLUG = 'painel-gerente-ru-6c4a9e';
 const MANAGER_PANEL_SLUG = String(process.env.MANAGER_PANEL_SLUG || DEFAULT_MANAGER_PANEL_SLUG).trim().replace(/^\/+|\/+$/g, '');
 const MANAGER_BASE_PATH = '/' + MANAGER_PANEL_SLUG;
-const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/drivers', '/managers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
+const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/users', '/drivers', '/managers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
 const MANAGER_ROUTE_PREFIXES = ['/login', '/logout', '/drivers', '/rides', '/reports', '/support'];
 const adminHref = (route = '') => {
   const value = String(route || '');
@@ -406,6 +406,7 @@ ${error ? `<div class="err">${esc(error)}</div>` : ''}
 const MANAGER_NAV = [
   ['/', 'Visão geral', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>`],
   ['/drivers', 'Motoristas', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`],
+  ['/users', 'Usuários', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`],
   ['/rides', 'Corridas', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11"/></svg>`],
   ['/reports', 'Relatórios', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>`],
   ['/support', 'Suporte', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`],

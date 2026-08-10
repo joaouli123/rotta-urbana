@@ -7,6 +7,7 @@ import { privacyPolicyPage, deleteAccountPage } from './policies.js';
 import * as emailService from './emailService.js';
 import { registerManagerRoutes } from './managerRoutes.js';
 import { registerManagerPortalRoutes } from './managerPortalRoutes.js';
+import { loadUserBundle, resetUserPassword, updateDriverProfile, updateUserProfile } from './userAdmin.js';
 
 const {
   SUPABASE_URL,
@@ -60,7 +61,7 @@ if (!/^[a-z0-9][a-z0-9-]{10,63}$/.test(MANAGER_PANEL_SLUG)) {
   process.exit(1);
 }
 const MANAGER_BASE_PATH = '/' + MANAGER_PANEL_SLUG;
-const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/drivers', '/managers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
+const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/users', '/drivers', '/managers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
 const MANAGER_ROUTE_PREFIXES = ['/login', '/logout', '/drivers', '/rides', '/reports', '/support'];
 const adminPath = (value = '') => {
   const raw = String(value || '');
@@ -161,8 +162,9 @@ adminRouter.post('/login', loginLimiter, async (req, res) => {
     const { data, error } = await authClient.auth.signInWithPassword({ email: String(email).trim().toLowerCase(), password });
     if (error || !data?.user) return render(res, loginPage('E-mail ou senha incorretos.'));
 
-    const { data: profile } = await admin.from('profiles').select('role, full_name').eq('id', data.user.id).single();
+    const { data: profile } = await admin.from('profiles').select('role, full_name, is_active').eq('id', data.user.id).single();
     if (profile?.role !== 'admin') return render(res, loginPage('Acesso restrito a administradores.'));
+    if (profile.is_active === false) return render(res, loginPage('Este acesso administrativo está inativo.'));
 
     req.session.userId = data.user.id;
     req.session.email = data.user.email;
@@ -555,6 +557,118 @@ adminRouter.get('/', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Visão geral', active: '/admin', email: req.session.email, body }));
 });
 
+// ─── Usuários ────────────────────────────────────────────────────────────────
+const userRoleLabel = (role) => ({ admin: 'Administrador', manager: 'Gerente', driver: 'Motorista', passenger: 'Passageiro' }[role] || role || 'Usuário');
+const userFormFields = (profile, driver = {}, vehicle = {}, { includeDriver = false } = {}) => `
+  <div class="row2">
+    <div><label>Nome completo</label><input name="full_name" value="${esc(profile.full_name || '')}" required></div>
+    <div><label>E-mail de acesso</label><input name="email" type="email" value="${esc(profile.email || '')}" required></div>
+    <div><label>Telefone</label><input name="phone" value="${esc(profile.phone || '')}"></div>
+    <div><label>CPF</label><input name="cpf" value="${esc(profile.cpf || '')}"></div>
+    <div><label>Gênero</label><select name="gender"><option value="">Não informado</option><option value="female" ${profile.gender === 'female' ? 'selected' : ''}>Feminino</option><option value="male" ${profile.gender === 'male' ? 'selected' : ''}>Masculino</option><option value="other" ${profile.gender === 'other' ? 'selected' : ''}>Outro</option></select></div>
+    <div><label>Status da conta</label><select name="is_active"><option value="1" ${profile.is_active !== false ? 'selected' : ''}>Ativa</option><option value="0" ${profile.is_active === false ? 'selected' : ''}>Inativa</option></select></div>
+  </div>
+  <h3 style="margin:22px 0 12px;font-size:15px;color:var(--txt);">Endereço</h3>
+  <div class="row2">
+    <div><label>CEP</label><input name="address_cep" value="${esc(profile.address_cep || '')}"></div>
+    <div><label>Estado</label><input name="address_state" maxlength="2" value="${esc(profile.address_state || '')}"></div>
+    <div><label>Cidade</label><input name="address_city" value="${esc(profile.address_city || '')}"></div>
+    <div><label>Bairro</label><input name="address_neighborhood" value="${esc(profile.address_neighborhood || '')}"></div>
+    <div><label>Rua</label><input name="address_street" value="${esc(profile.address_street || '')}"></div>
+    <div><label>Número</label><input name="address_number" value="${esc(profile.address_number || '')}"></div>
+    <div style="grid-column:1/-1"><label>Complemento</label><input name="address_complement" value="${esc(profile.address_complement || '')}"></div>
+  </div>
+  ${includeDriver ? `<h3 style="margin:22px 0 12px;font-size:15px;color:var(--txt);">Dados do motorista</h3>
+  <div class="row2">
+    <div><label>Chave PIX</label><input name="pix_key" value="${esc(driver.pix_key || '')}"></div>
+    <div><label>Cidade operacional</label><input name="operating_city" value="${esc(driver.operating_city || '')}"></div>
+    <div><label>Estado operacional</label><input name="operating_state" maxlength="2" value="${esc(driver.operating_state || '')}"></div>
+  </div>
+  <h3 style="margin:22px 0 12px;font-size:15px;color:var(--txt);">Veículo principal</h3>
+  <div class="row2">
+    <div><label>Marca</label><input name="vehicle_brand" value="${esc(vehicle.brand || '')}"></div>
+    <div><label>Modelo</label><input name="vehicle_model" value="${esc(vehicle.model || '')}"></div>
+    <div><label>Placa</label><input name="vehicle_plate" value="${esc(vehicle.plate || '')}"></div>
+    <div><label>Ano</label><input name="vehicle_year" type="number" min="1980" max="2100" value="${esc(vehicle.year || '')}"></div>
+    <div><label>Cor</label><input name="vehicle_color" value="${esc(vehicle.color || '')}"></div>
+    <div><label>Tipo</label><select name="vehicle_type"><option value="sedan" ${vehicle.type === 'sedan' ? 'selected' : ''}>Sedan</option><option value="hatch" ${vehicle.type === 'hatch' ? 'selected' : ''}>Hatch</option><option value="suv" ${vehicle.type === 'suv' ? 'selected' : ''}>SUV</option><option value="moto" ${vehicle.type === 'moto' ? 'selected' : ''}>Moto</option></select></div>
+    <div><label>Valor FIPE</label><input name="vehicle_fipe_value" type="number" min="0" step="0.01" value="${esc(vehicle.fipe_value || '')}"></div>
+    <div><label>Assentos</label><input name="vehicle_seats" type="number" min="1" max="9" value="${esc(vehicle.seats || 4)}"></div>
+  </div>` : ''}`;
+
+adminRouter.get('/users', requireAuth, async (req, res) => {
+  const q = String(req.query.q || '').trim().toLocaleLowerCase('pt-BR');
+  const role = ['admin', 'manager', 'driver', 'passenger'].includes(req.query.role) ? req.query.role : '';
+  const { data, error } = await admin.from('profiles').select('id,full_name,email,phone,role,is_active,created_at,updated_at').order('created_at', { ascending: false });
+  if (error) return render(res, layout({ title: 'Usuários', active: '/users', email: req.session.email, body: `<div class="err">Erro ao carregar usuários: ${esc(error.message)}</div>` }));
+  const users = (data || []).filter((user) => {
+    const haystack = [user.full_name, user.email, user.phone].join(' ').toLocaleLowerCase('pt-BR');
+    return (!q || haystack.includes(q)) && (!role || user.role === role);
+  });
+  const rows = users.map((user) => [
+    `<strong>${esc(user.full_name || 'Sem nome')}</strong><br><small class="muted">${esc(user.email || '')}</small>`,
+    badge(userRoleLabel(user.role)),
+    esc(fmtPhone(user.phone)),
+    user.is_active === false ? badge('suspended') : badge('active'),
+    fmtDate(user.created_at),
+    `<div class="actions"><a class="btn-icon gray" href="/users/${user.id}/edit" title="Editar usuário" aria-label="Editar usuário">✎</a><a class="btn-icon gray" href="/users/${user.id}/reset-password" title="Redefinir senha" aria-label="Redefinir senha">🔑</a></div>`,
+  ]);
+  const body = `
+    ${req.query.ok ? '<div class="ok">Operação realizada com sucesso.</div>' : ''}${req.query.error ? `<div class="err">${esc(req.query.error)}</div>` : ''}
+    <div class="notice"><strong>Central de usuários.</strong> O administrador pode editar qualquer perfil, inclusive o próprio acesso. A alteração de e-mail é sincronizada com o login e a redefinição de senha é aplicada imediatamente.</div>
+    <div class="card" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;"><div class="filters"><a href="/users" class="${!role ? 'on' : ''}">Todos</a><a href="/users?role=driver" class="${role === 'driver' ? 'on' : ''}">Motoristas</a><a href="/users?role=passenger" class="${role === 'passenger' ? 'on' : ''}">Passageiros</a><a href="/users?role=manager" class="${role === 'manager' ? 'on' : ''}">Gerentes</a><a href="/users?role=admin" class="${role === 'admin' ? 'on' : ''}">Administradores</a></div><form method="get" action="/users" style="display:flex;gap:8px;min-width:280px;flex:1;max-width:430px;">${role ? `<input type="hidden" name="role" value="${esc(role)}">` : ''}<input name="q" value="${esc(req.query.q || '')}" placeholder="Buscar nome, e-mail ou telefone..."><button class="act" type="submit">Buscar</button></form></div>
+    <div class="card"><h2>Usuários cadastrados (${users.length})</h2>${table(['Usuário', 'Perfil', 'Telefone', 'Status', 'Cadastro', 'Ações'], rows)}</div>`;
+  render(res, layout({ title: 'Usuários', active: '/users', email: req.session.email, body }));
+});
+
+adminRouter.get('/users/:id/edit', requireAuth, async (req, res) => {
+  try {
+    const { profile, driver, vehicle } = await loadUserBundle(admin, req.params.id);
+    const body = `<div style="margin-bottom:16px;"><a href="/users" class="muted">← Voltar para usuários</a></div><div class="card" style="max-width:850px;margin:0 auto;"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;"><div><h2 style="margin-bottom:6px;">Editar usuário</h2><p class="muted" style="margin:0;">${esc(profile.full_name || '')} · ${esc(userRoleLabel(profile.role))}</p></div><a class="act gray" href="/users/${profile.id}/reset-password">Redefinir senha</a></div><form method="post" action="/users/${profile.id}/edit">${userFormFields(profile, driver || {}, vehicle || {}, { includeDriver: profile.role === 'driver' })}<p class="muted" style="margin-top:18px;">A função e as permissões são administradas separadamente. Para gerente, use a central de gerentes.</p><div style="margin-top:24px;text-align:right;display:flex;gap:10px;justify-content:flex-end;"><a href="/users" class="act gray">Cancelar</a><button type="submit" class="act">Salvar alterações</button></div></form></div>`;
+    render(res, layout({ title: `Editar · ${profile.full_name || 'Usuário'}`, active: '/users', email: req.session.email, body }));
+  } catch (error) {
+    res.status(404).send(esc(error.message));
+  }
+});
+
+adminRouter.post('/users/:id/edit', requireAuth, async (req, res) => {
+  try {
+    const current = await loadUserBundle(admin, req.params.id);
+    const updated = current.profile.role === 'driver'
+      ? await updateDriverProfile(admin, req.params.id, req.body)
+      : await updateUserProfile(admin, req.params.id, req.body);
+    if (req.params.id === req.session.userId) {
+      req.session.email = updated.profile?.email || updated.email || req.body.email;
+      if (updated.is_active === false) return req.session.destroy(() => res.redirect('/login?error=Este acesso foi desativado.'));
+    }
+    res.redirect('/users?ok=1');
+  } catch (error) {
+    console.error('[Admin user edit]', error);
+    res.redirect(`/users?error=${encodeURIComponent(error.message)}`);
+  }
+});
+
+adminRouter.get('/users/:id/reset-password', requireAuth, async (req, res) => {
+  try {
+    const { profile } = await loadUserBundle(admin, req.params.id);
+    const body = `<div style="margin-bottom:16px;"><a href="/users/${profile.id}/edit" class="muted">← Voltar para edição</a></div><div class="card" style="max-width:600px;margin:0 auto;"><h2>Redefinir senha</h2><p class="muted">A nova senha será aplicada imediatamente para <strong>${esc(profile.full_name || '')}</strong> (${esc(profile.email || '')}).</p><form method="post" action="/users/${profile.id}/reset-password"><label>Nova senha</label><input name="new_password" type="password" autocomplete="new-password" minlength="8" required placeholder="Mínimo de 8 caracteres"><label>Confirmar nova senha</label><input name="confirm_password" type="password" autocomplete="new-password" minlength="8" required placeholder="Repita a senha"><div style="margin-top:24px;text-align:right;display:flex;gap:10px;justify-content:flex-end;"><a href="/users/${profile.id}/edit" class="act gray">Cancelar</a><button type="submit" class="act">Alterar senha</button></div></form></div>`;
+    render(res, layout({ title: 'Redefinir senha', active: '/users', email: req.session.email, body }));
+  } catch (error) {
+    res.status(404).send(esc(error.message));
+  }
+});
+
+adminRouter.post('/users/:id/reset-password', requireAuth, async (req, res) => {
+  try {
+    if (String(req.body.new_password || '') !== String(req.body.confirm_password || '')) throw new Error('As senhas não conferem.');
+    await resetUserPassword(admin, req.params.id, req.body.new_password);
+    res.redirect('/users?ok=1');
+  } catch (error) {
+    console.error('[Admin user password]', error);
+    res.redirect(`/users?error=${encodeURIComponent(error.message)}`);
+  }
+});
+
 // ─── Drivers ──────────────────────────────────────────────────────────────
 adminRouter.get('/drivers', requireAuth, async (req, res) => {
   const page = Number(req.query.page) || 1;
@@ -562,7 +676,7 @@ adminRouter.get('/drivers', requireAuth, async (req, res) => {
   const searchQuery = (req.query.q || '').trim().toLowerCase();
   const verificationFilter = req.query.verification || '';
   const planFilter = req.query.plan || '';
-  const okMsg = req.query.ok ? `<div class="ok">✅ Operação realizada com sucesso!</div>` : '';
+  const okMsg = req.query.ok ? `<div class="ok">✅ Operação realizada com sucesso!</div>` : req.query.error ? `<div class="err">${esc(req.query.error)}</div>` : '';
 
   const [{ data: drivers }, { data: profiles }, { data: subs }, { data: vehicles }, { data: docs }] = await Promise.all([
     admin.from('drivers').select('*'),
@@ -706,79 +820,24 @@ adminRouter.post('/drivers/:id/unverify', requireAuth, async (req, res) => {
 // ─── Driver Profile Edit ───────────────────────────────────────────────────
 adminRouter.get('/drivers/:id/edit', requireAuth, async (req, res) => {
   const id = req.params.id;
-  const [{ data: driver }, { data: profile }, { data: vehicle }] = await Promise.all([
-    admin.from('drivers').select('*').eq('id', id).single(),
-    admin.from('profiles').select('*').eq('id', id).single(),
-    admin.from('vehicles').select('*').eq('driver_id', id).maybeSingle(),
-  ]);
-
-  if (!profile) return res.status(404).send('Motorista não encontrado.');
-
-  const p = profile ?? {};
-  const d = driver ?? {};
-  const v = vehicle ?? {};
-
-  const body = `
-    <div style="margin-bottom:16px;">
-      <a href="/drivers" style="color:var(--mut);font-size:14px;font-weight:600;text-decoration:none;">&larr; Voltar para a lista de motoristas</a>
-    </div>
-    <div class="card" style="max-width:700px;margin:0 auto;">
-      <h2>Editar Perfil do Motorista: ${esc(p.full_name)}</h2>
-      <form method="post" action="/drivers/${id}/edit">
-        <div class="row2">
-          <div><label>Nome Completo</label><input name="full_name" value="${esc(p.full_name || '')}" required></div>
-          <div><label>E-mail</label><input name="email" type="email" value="${esc(p.email || '')}" required></div>
-          <div><label>Telefone</label><input name="phone" value="${esc(p.phone || '')}" required></div>
-          <div><label>CPF</label><input name="cpf" value="${esc(p.cpf || '')}"></div>
-          <div><label>Chave PIX</label><input name="pix_key" value="${esc(d.pix_key || '')}"></div>
-          <div>
-            <label>Status da Conta</label>
-            <select name="is_active">
-              <option value="1" ${p.is_active !== false ? 'selected' : ''}>Ativa (Liberado)</option>
-              <option value="0" ${p.is_active === false ? 'selected' : ''}>Bloqueada / Inativa</option>
-            </select>
-          </div>
-        </div>
-
-        <h3 style="margin:22px 0 12px;font-size:15px;color:var(--txt);">Informações do Veículo</h3>
-        <div class="row2">
-          <div><label>Modelo do Veículo</label><input name="vehicle_model" value="${esc(v.model || '')}"></div>
-          <div><label>Placa do Veículo</label><input name="vehicle_plate" value="${esc(v.plate || '')}"></div>
-        </div>
-
-        <div style="margin-top:24px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
-          <a href="/drivers" class="act gray" style="padding:10px 18px;border-radius:10px;">Cancelar</a>
-          <button type="submit" class="act" style="padding:10px 24px;border-radius:10px;">Salvar Alterações</button>
-        </div>
-      </form>
-    </div>
-  `;
-  render(res, layout({ title: 'Editar Motorista', active: '/drivers', email: req.session.email, body }));
+  try {
+    const { profile, driver, vehicle } = await loadUserBundle(admin, id);
+    const body = `<div style="margin-bottom:16px;"><a href="/drivers" class="muted">&larr; Voltar para a lista de motoristas</a></div><div class="card" style="max-width:850px;margin:0 auto;"><h2>Editar Perfil do Motorista: ${esc(profile.full_name || '')}</h2><form method="post" action="/drivers/${id}/edit">${userFormFields(profile, driver || {}, vehicle || {}, { includeDriver: true })}<div style="margin-top:24px;text-align:right;display:flex;gap:10px;justify-content:flex-end;"><a href="/drivers" class="act gray">Cancelar</a><button type="submit" class="act">Salvar alterações</button></div></form></div>`;
+    render(res, layout({ title: 'Editar Motorista', active: '/drivers', email: req.session.email, body }));
+  } catch (error) {
+    res.status(404).send(esc(error.message));
+  }
 });
 
 adminRouter.post('/drivers/:id/edit', requireAuth, async (req, res) => {
   const id = req.params.id;
-  const b = req.body;
-
-  await Promise.all([
-    admin.from('profiles').update({
-      full_name: b.full_name,
-      email: b.email,
-      phone: b.phone,
-      cpf: b.cpf || null,
-      is_active: b.is_active === '1'
-    }).eq('id', id),
-    admin.from('drivers').update({
-      pix_key: b.pix_key || null
-    }).eq('id', id),
-    admin.from('vehicles').upsert({
-      driver_id: id,
-      model: b.vehicle_model || '',
-      plate: b.vehicle_plate || ''
-    })
-  ]);
-
-  res.redirect('/drivers?ok=1');
+  try {
+    await updateDriverProfile(admin, id, req.body);
+    res.redirect('/drivers?ok=1');
+  } catch (error) {
+    console.error('[Admin driver edit]', error);
+    res.redirect(`/drivers?error=${encodeURIComponent(error.message)}`);
+  }
 });
 
 // ─── Driver Password Reset ─────────────────────────────────────────────────
@@ -797,7 +856,9 @@ adminRouter.get('/drivers/:id/reset-password', requireAuth, async (req, res) => 
       
       <form method="post" action="/drivers/${id}/reset-password">
         <label>Nova Senha</label>
-        <input name="new_password" type="text" placeholder="Digite a nova senha (ex: Rotta1234)" required minlength="6" style="font-size:15px;font-weight:600;">
+        <input name="new_password" type="password" autocomplete="new-password" placeholder="Digite a nova senha (mínimo de 8 caracteres)" required minlength="8" style="font-size:15px;font-weight:600;">
+        <label>Confirmar Nova Senha</label>
+        <input name="confirm_password" type="password" autocomplete="new-password" placeholder="Repita a nova senha" required minlength="8" style="font-size:15px;font-weight:600;">
         
         <div style="margin-top:20px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
           <a href="/drivers" class="act gray" style="padding:10px 18px;border-radius:10px;">Cancelar</a>
@@ -812,24 +873,14 @@ adminRouter.get('/drivers/:id/reset-password', requireAuth, async (req, res) => 
 adminRouter.post('/drivers/:id/reset-password', requireAuth, async (req, res) => {
   const id = req.params.id;
   const newPass = req.body.new_password;
-
-  if (!newPass || newPass.length < 6) {
-    return res.status(400).send('A senha deve ter pelo menos 6 caracteres.');
+  try {
+    if (String(newPass || '') !== String(req.body.confirm_password || '')) throw new Error('As senhas não conferem.');
+    await resetUserPassword(admin, id, newPass);
+    res.redirect('/drivers?ok=1');
+  } catch (error) {
+    console.error('[Admin driver password]', error);
+    res.redirect(`/drivers?error=${encodeURIComponent(error.message)}`);
   }
-
-  const { data: profile } = await admin.from('profiles').select('*').eq('id', id).single();
-  const { error } = await admin.auth.admin.updateUserById(id, { password: newPass });
-
-  if (error) {
-    return res.status(500).send(`Erro ao alterar senha: ${error.message}`);
-  }
-
-  // Notifica via e-mail se possivel
-  if (profile && profile.email) {
-    await emailService.sendPasswordResetEmail({ email: profile.email, name: profile.full_name, resetUrl: '#' });
-  }
-
-  res.redirect('/drivers?ok=1');
 });
 
 // ─── Driver Plan / Subscription Change ──────────────────────────────────────
