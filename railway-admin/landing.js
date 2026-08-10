@@ -2,6 +2,25 @@ import fs from 'fs';
 import path from 'path';
 
 export function landingPage(opts = {}) {
+  const metaPixelId = String(opts.metaPixelId || process.env.META_PIXEL_ID || '1057949890036873').replace(/\D/g, '');
+  const metaPixelHead = metaPixelId ? `
+<script>
+!function(f,b,e,v,n,t,s)
+{if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+n.queue=[];t=b.createElement(e);t.async=!0;
+t.src=v;s=b.getElementsByTagName(e)[0];
+s.parentNode.insertBefore(t,s)}(window, document,'script',
+'https://connect.facebook.net/en_US/fbevents.js');
+fbq('init', '${metaPixelId}');
+fbq('track', 'PageView');
+</script>` : '';
+  const metaPixelNoScript = metaPixelId ? `
+<noscript><img height="1" width="1" style="display:none"
+src="https://www.facebook.com/tr?id=${metaPixelId}&ev=PageView&noscript=1"
+/></noscript>` : '';
+
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -10,6 +29,7 @@ export function landingPage(opts = {}) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="Rotta Urbana: Mais economia para o passageiro, lucro de verdade para o motorista. Sem taxas abusivas, pagamento instantâneo via PIX.">
 <link rel="icon" type="image/png" href="/assets/logo.png">
+${metaPixelHead}
 <script>
   window.__ADMIN_SETTINGS__ = ${JSON.stringify(opts.settings || {})};
   window.__ADMIN_FARES__ = ${JSON.stringify(opts.fares || [])};
@@ -19,6 +39,7 @@ export function landingPage(opts = {}) {
 <script src="/support.js"></script>
 </head>
 <body>
+${metaPixelNoScript}
 <x-dc>
 
 <helmet>
@@ -647,6 +668,9 @@ export function landingPage(opts = {}) {
         <sc-if value="{{ notSent }}" hint-placeholder-val="{{ true }}">
           <form onSubmit="{{ submit }}" style="display:flex; flex-direction:column; gap:14px; flex:1;">
             <div style="font-family:'Sora',sans-serif; font-weight:700; font-size:19px; color:#0B0C0D; margin-bottom:4px;">Formulário de contato</div>
+            <sc-if value="{{ hasError }}" hint-placeholder-val="{{ false }}">
+              <div role="alert" style="font-family:'Inter',sans-serif; font-size:14px; line-height:1.5; color:#A61B1B; background:#FFF1F1; border:1px solid #F3B5B5; border-radius:10px; padding:12px 14px;">{{ errorMessage }}</div>
+            </sc-if>
             <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:14px;">
               <input type="text" required="required" placeholder="Nome completo" style="font-family:'Inter',sans-serif; font-size:15px; color:#0B0C0D; padding:15px 16px; border-radius:10px; border:1.5px solid #E3E6E1; background:#FFFFFF; outline:none; width:100%; box-sizing:border-box;" style-focus="border-color:#48D10A;" />
               <input type="tel" placeholder="WhatsApp" style="font-family:'Inter',sans-serif; font-size:15px; color:#0B0C0D; padding:15px 16px; border-radius:10px; border:1.5px solid #E3E6E1; background:#FFFFFF; outline:none; width:100%; box-sizing:border-box;" style-focus="border-color:#48D10A;" />
@@ -726,7 +750,7 @@ export function landingPage(opts = {}) {
 </x-dc>
 <script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1600}, &quot;highlightedPlan&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;default&quot;: &quot;smart&quot;, &quot;options&quot;: [&quot;eco&quot;, &quot;smart&quot;, &quot;pro&quot;, &quot;vip&quot;], &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Planos&quot;}}">
 class Component extends DCLogic {
-  state = { sent: false, menu: false, vw: typeof window !== 'undefined' ? window.innerWidth : 1440 };
+  state = { sent: false, errorMessage: '', menu: false, vw: typeof window !== 'undefined' ? window.innerWidth : 1440 };
 
   componentDidMount() {
     this._onResize = () => { if (window.innerWidth !== this.state.vw) this.setState({ vw: window.innerWidth }); };
@@ -782,10 +806,15 @@ class Component extends DCLogic {
       closeMenu: () => this.setState({ menu: false }),
       sent: this.state.sent,
       notSent: !this.state.sent,
-      submit: e => {
+      hasError: Boolean(this.state.errorMessage),
+      errorMessage: this.state.errorMessage,
+      submit: async e => {
         e.preventDefault();
+        const form = e.currentTarget || e.target;
+        const submitButton = form?.querySelector('button[type="submit"]');
+        if (submitButton) submitButton.disabled = true;
+
         try {
-          const form = e.target;
           const inputs = form.querySelectorAll('input, select, textarea');
           const data = {};
           inputs.forEach(i => {
@@ -795,15 +824,33 @@ class Component extends DCLogic {
             else if (i.tagName === 'SELECT') data.subject = i.value;
             else if (i.tagName === 'TEXTAREA') data.message = i.value;
           });
-          fetch('/api/contact', {
+
+          const response = await fetch('/api/contact', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
-          }).catch(err => console.error('Error posting lead:', err));
-        } catch (err) {}
-        this.setState({ sent: true });
+          });
+          const result = await response.json().catch(() => ({}));
+          if (!response.ok || !result.success) {
+            throw new Error(result.error || 'Não foi possível enviar sua mensagem.');
+          }
+
+          // O Lead só é contabilizado depois que o servidor confirma o cadastro.
+          if (typeof window.fbq === 'function') {
+            window.fbq('track', 'Lead', {
+              content_name: 'Formulário de contato',
+              content_category: 'Contato'
+            });
+          }
+          this.setState({ sent: true, errorMessage: '' });
+        } catch (err) {
+          console.error('Error posting lead:', err);
+          this.setState({ sent: false, errorMessage: err.message || 'Não foi possível enviar sua mensagem. Tente novamente.' });
+        } finally {
+          if (submitButton) submitButton.disabled = false;
+        }
       },
-      reset: () => this.setState({ sent: false }),
+      reset: () => this.setState({ sent: false, errorMessage: '' }),
     };
   }
 }
