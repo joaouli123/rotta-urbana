@@ -125,6 +125,34 @@ export const badge = (txt) => {
   return `<span class="badge" style="background:${c}1A;color:${darken(c)};border:1px solid ${c}44">${esc(label)}</span>`;
 };
 
+const UI_ICON_PATHS = {
+  activity: '<path d="M3 12h4l2.2-7 4.1 14 2.2-7H21"/>',
+  analytics: '<line x1="4" y1="19" x2="4" y2="10"/><line x1="10" y1="19" x2="10" y2="5"/><line x1="16" y1="19" x2="16" y2="13"/><line x1="22" y1="19" x2="22" y2="8"/>',
+  card: '<rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>',
+  car: '<path d="M5 17h14l1-5-2-5H6l-2 5 1 5Z"/><circle cx="7.5" cy="17" r="1.5"/><circle cx="16.5" cy="17" r="1.5"/><path d="M6 10h12"/>',
+  chart: '<path d="M4 19V5"/><path d="M4 19h16"/><path d="m7 15 3-4 3 2 5-7"/>',
+  check: '<path d="m5 12 4 4L19 6"/>',
+  'chevron-left': '<path d="m15 18-6-6 6-6"/>',
+  'chevron-right': '<path d="m9 18 6-6-6-6"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  dashboard: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
+  filter: '<path d="M4 5h16M7 12h10M10 19h4"/>',
+  login: '<path d="M10 17l5-5-5-5"/><path d="M15 12H3"/><path d="M21 19V5a2 2 0 0 0-2-2h-5"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  message: '<path d="M20 11.5a7.5 7.5 0 0 1-8 7.5 8.8 8.8 0 0 1-3.7-.8L4 20l1.5-4.1A7.4 7.4 0 0 1 4 11.5 7.5 7.5 0 0 1 12 4a7.5 7.5 0 0 1 8 7.5Z"/>',
+  money: '<line x1="12" y1="2" x2="12" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H7"/>',
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 5 5"/>',
+  shield: '<path d="M12 3 20 6v5c0 5-3.4 8.5-8 10-4.6-1.5-8-5-8-10V6l8-3Z"/><path d="m9 12 2 2 4-4"/>',
+  user: '<circle cx="12" cy="7" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/>',
+  save: '<path d="M5 3h12l3 3v15H5z"/><path d="M8 3v6h8V3M8 21v-6h8v6"/>',
+};
+
+export const uiIcon = (name, size = 16) => {
+  const path = UI_ICON_PATHS[name] || UI_ICON_PATHS.dashboard;
+  return `<svg class="ui-icon" width="${Number(size) || 16}" height="${Number(size) || 16}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${path}</svg>`;
+};
+
 // Sophisticated Icon Buttons
 export const iconBtnApprove = (title = 'Aprovar / Ativar') => `
   <button type="submit" title="${esc(title)}" class="btn-icon approve" aria-label="${esc(title)}">
@@ -181,8 +209,21 @@ export const iconBtnWhatsApp = (phone, title = 'Conversar no WhatsApp') => {
     </a>`;
 };
 
+const kpiIconFor = (label) => {
+  const value = String(label || '').toLocaleLowerCase('pt-BR');
+  if (value.includes('corrid')) return 'activity';
+  if (value.includes('motorista') || value.includes('passageiro') || value.includes('usuário')) return 'users';
+  if (value.includes('faturamento') || value.includes('receita') || value.includes('pagamento')) return 'money';
+  if (value.includes('assinatura') || value.includes('plano')) return 'card';
+  if (value.includes('online')) return 'activity';
+  if (value.includes('pendente') || value.includes('suporte')) return value.includes('suporte') ? 'message' : 'clock';
+  if (value.includes('lead') || value.includes('contato')) return 'mail';
+  if (value.includes('taxa') || value.includes('evolução')) return 'chart';
+  return 'analytics';
+};
+
 export const kpiCard = (label, value, sub = '') =>
-  `<div class="kpi"><div class="kpi-val">${esc(value)}</div><div class="kpi-lbl">${esc(label)}</div>${sub ? `<div class="kpi-sub">${esc(sub)}</div>` : ''}</div>`;
+  `<div class="kpi"><div class="kpi-head"><span class="kpi-icon">${uiIcon(kpiIconFor(label), 16)}</span><div class="kpi-lbl">${esc(label)}</div></div><div class="kpi-val">${esc(value)}</div>${sub ? `<div class="kpi-sub">${esc(sub)}</div>` : ''}</div>`;
 
 export const table = (headers, rows) => `
   <div class="tablewrap"><table>
@@ -216,12 +257,12 @@ export const pagination = (totalItems, currentPage = 1, pageSize = 20, reqUrl = 
   }
 
   const prevBtn = page > 1
-    ? `<a href="${makeUrl(page - 1)}" class="page-btn">‹ Anterior</a>`
-    : `<span class="page-btn disabled">‹ Anterior</span>`;
+    ? `<a href="${makeUrl(page - 1)}" class="page-btn">${uiIcon('chevron-left', 14)} Anterior</a>`
+    : `<span class="page-btn disabled">${uiIcon('chevron-left', 14)} Anterior</span>`;
 
   const nextBtn = page < totalPages
-    ? `<a href="${makeUrl(page + 1)}" class="page-btn">Próximo ›</a>`
-    : `<span class="page-btn disabled">Próximo ›</span>`;
+    ? `<a href="${makeUrl(page + 1)}" class="page-btn">Próximo ${uiIcon('chevron-right', 14)}</a>`
+    : `<span class="page-btn disabled">Próximo ${uiIcon('chevron-right', 14)}</span>`;
 
   const numberBtns = pages.map(p => {
     if (p === '...') return `<span class="page-dots">...</span>`;
@@ -261,6 +302,7 @@ export const layout = ({ title, active, body, email, head = '' }) => `<!doctype 
 <title>${esc(title)} · Rotta Urbana Admin</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/admin-ui.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
 <style>
   :root{
@@ -378,30 +420,26 @@ export const layout = ({ title, active, body, email, head = '' }) => `<!doctype 
   </main>
 </div></body></html>`;
 
+const AUTH_STYLES = `<style>
+  :root{--auth-bg:#f3f7f5;--auth-ink:#12211a;--auth-muted:#6a7972;--auth-line:#dfe8e3;--auth-green:#10b981;--auth-green-dark:#047857}
+  *{box-sizing:border-box}html{background:var(--auth-bg)}body{min-height:100vh;margin:0;display:grid;place-items:center;padding:24px;font-family:'Inter',system-ui,sans-serif;color:var(--auth-ink);background:radial-gradient(circle at 12% 8%,rgba(16,185,129,.12),transparent 24rem),radial-gradient(circle at 92% 86%,rgba(4,120,87,.08),transparent 28rem),var(--auth-bg);-webkit-font-smoothing:antialiased}
+  .auth-shell{width:min(940px,100%);display:grid;grid-template-columns:minmax(280px,.86fr) minmax(360px,1.14fr);overflow:hidden;background:#fff;border:1px solid var(--auth-line);border-radius:24px;box-shadow:0 24px 70px rgba(21,55,40,.12)}
+  .auth-aside{position:relative;overflow:hidden;padding:44px;background:linear-gradient(145deg,#07110c 0%,#0b2418 100%);color:#effcf5}.auth-aside:after{position:absolute;right:-100px;bottom:-100px;width:290px;height:290px;border:1px solid rgba(167,243,208,.16);border-radius:50%;box-shadow:0 0 0 30px rgba(167,243,208,.045),0 0 0 60px rgba(167,243,208,.025);content:""}.auth-aside h2{position:relative;z-index:1;max-width:270px;margin:60px 0 14px;font-size:32px;line-height:1.08;letter-spacing:-1.2px}.auth-aside p{position:relative;z-index:1;max-width:285px;margin:0;color:#b8cec2;font-size:14px;line-height:1.65}.auth-mark{position:relative;z-index:1;display:inline-flex;width:42px;height:42px;align-items:center;justify-content:center;border:1px solid rgba(167,243,208,.28);border-radius:13px;background:rgba(16,185,129,.16);color:#a7f3d0}.auth-eyebrow{position:relative;z-index:1;display:flex;align-items:center;gap:7px;margin-top:18px;color:#a7f3d0;font-size:11px;font-weight:800;letter-spacing:.12em;text-transform:uppercase}.auth-points{position:relative;z-index:1;display:grid;gap:12px;margin-top:34px;color:#d4e8dc;font-size:12.5px}.auth-point{display:flex;align-items:center;gap:9px}.auth-point svg{color:#6ee7b7}.auth-form{padding:44px 48px}.auth-logo{height:48px;margin-bottom:30px}.auth-logo img{height:48px;width:auto;max-width:190px;object-fit:contain;filter:brightness(0)}.auth-kicker{display:inline-flex;align-items:center;gap:7px;color:var(--auth-green-dark);font-size:11px;font-weight:800;letter-spacing:.1em;text-transform:uppercase}.auth-form h1{margin:12px 0 7px;font-size:26px;line-height:1.15;letter-spacing:-.7px}.auth-form>p{margin:0 0 24px;color:var(--auth-muted);font-size:14px}.auth-error{display:flex;gap:9px;align-items:flex-start;margin-bottom:18px;padding:12px 14px;border:1px solid #fecaca;border-radius:12px;background:#fff5f5;color:#991b1b;font-size:13px;line-height:1.45}.auth-error .ui-icon{margin-top:1px;flex:0 0 auto}.auth-field{position:relative}.auth-form label{display:block;margin:15px 0 6px;color:#52645b;font-size:12px;font-weight:700}.auth-field .ui-icon{position:absolute;left:13px;top:12px;color:#899991}.auth-form input{width:100%;min-height:44px;padding:11px 13px 11px 39px;border:1px solid var(--auth-line);border-radius:11px;background:#fff;color:var(--auth-ink);font-size:14px}.auth-form input:focus{outline:0;border-color:var(--auth-green);box-shadow:0 0 0 3px rgba(16,185,129,.16)}.auth-submit{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;margin-top:26px;min-height:46px;border:0;border-radius:11px;background:var(--auth-green);color:#052016;font-size:14px;font-weight:800;cursor:pointer;transition:transform .18s ease,box-shadow .18s ease}.auth-submit:hover{transform:translateY(-1px);box-shadow:0 10px 22px rgba(16,185,129,.2)}.auth-footer{display:flex;align-items:center;gap:7px;margin-top:20px;color:#829189;font-size:11.5px}.auth-footer .ui-icon{color:var(--auth-green-dark)}
+  @media(max-width:700px){body{padding:14px}.auth-shell{display:block;border-radius:19px}.auth-aside{display:none}.auth-form{padding:31px 25px}.auth-logo{margin-bottom:23px}}
+</style>`;
+
+const authAside = (description) => `<section class="auth-aside" style="height:100%" aria-label="Rotta Urbana"><div class="auth-mark">${uiIcon('dashboard', 21)}</div><div class="auth-eyebrow">Rotta Urbana</div><h2>Operação sob controle.</h2><p>${description}</p><div class="auth-points"><div class="auth-point">${uiIcon('shield', 15)} Acesso protegido por sessão</div><div class="auth-point">${uiIcon('analytics', 15)} Dados operacionais em um só lugar</div></div></section>`;
+
 export const loginPage = (error = '') => `<!doctype html><html lang="pt-br"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Login · Rotta Urbana Admin</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<style>body{margin:0;font-family:'Inter',system-ui,sans-serif;background:#F8FAFC;color:#0F172A;-webkit-font-smoothing:antialiased}
-.login{max-width:400px;margin:10vh auto;background:#fff;border:1px solid #E2E8F0;border-radius:20px;padding:36px;box-shadow:0 12px 36px rgba(15,23,42,.08);text-align:left}
-h1{font-size:22px;font-weight:800;margin:0 0 4px;letter-spacing:-0.5px}p{color:#64748B;font-size:13.5px;margin:0 0 20px}span{color:#10B981}
-label{display:block;color:#64748B;font-size:12px;margin:14px 0 5px;font-weight:600}
-input{width:100%;background:#fff;border:1px solid #E2E8F0;color:#0F172A;border-radius:10px;padding:11px 14px;font-size:14px;box-sizing:border-box}
-input:focus{outline:none;border-color:#10B981;box-shadow:0 0 0 3px rgba(16,185,129,0.18)}
-button{width:100%;margin-top:22px;background:#10B981;color:#03130c;border:none;border-radius:10px;padding:12px;font-size:15px;font-weight:700;cursor:pointer;transition:all 0.15s ease}
-button:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(16,185,129,0.25)}
-.err{background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:11px 14px;border-radius:10px;font-size:13px;margin-bottom:16px;font-weight:500}</style>
-</head><body><form class="login" method="post" action="${adminHref('/login')}">
-<div style="text-align:center;margin-bottom:24px;">
-  <img src="/logo.png" alt="Rotta Urbana" style="height:72px;width:auto;object-fit:contain;display:inline-block;filter:brightness(0);">
-</div>
-<h1 style="text-align:center;">Painel Administrativo</h1>
-<p style="text-align:center;">Acesso exclusivo para administradores</p>
-${error ? `<div class="err">${esc(error)}</div>` : ''}
-<label>E-mail de Acesso</label><input name="email" type="email" required autofocus placeholder="admin@rottaurbana.app">
-<label>Senha</label><input name="password" type="password" required placeholder="••••••••">
-<button type="submit">Acessar Painel</button>
-</form></body></html>`;
+<link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">${AUTH_STYLES}
+</head><body><main class="auth-shell"><div>${authAside('Administre usuários, motoristas, gerentes, pagamentos e a operação com clareza.')}</div><form class="auth-form" method="post" action="${adminHref('/login')}" aria-labelledby="admin-login-title">
+<div class="auth-logo"><img src="/logo.png" alt="Rotta Urbana"></div><div class="auth-kicker">${uiIcon('shield', 14)} Área administrativa</div><h1 id="admin-login-title">Painel Administrativo</h1><p>Entre para acompanhar e operar a plataforma.</p>
+${error ? `<div class="auth-error" role="alert">${uiIcon('shield', 16)}<span>${esc(error)}</span></div>` : ''}
+<label for="admin-email">E-mail de acesso</label><div class="auth-field">${uiIcon('mail', 17)}<input id="admin-email" name="email" type="email" required autofocus autocomplete="username" placeholder="admin@rottaurbana.app"></div>
+<label for="admin-password">Senha</label><div class="auth-field">${uiIcon('shield', 17)}<input id="admin-password" name="password" type="password" required autocomplete="current-password" placeholder="Digite sua senha"></div>
+<button class="auth-submit" type="submit">${uiIcon('login', 17)} Acessar painel</button><div class="auth-footer">${uiIcon('shield', 14)} Sessão exclusiva para administradores</div>
+</form></main></body></html>`;
 
 const MANAGER_NAV = [
   ['/', 'Visão geral', `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>`],
@@ -418,10 +456,11 @@ export const managerLayout = ({ title, active, body, email, managerName = '' }) 
 <title>${esc(title)} · Rotta Urbana Gerência</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/admin-ui.css">
 <style>
   :root{--bg:#F8FAFC;--panel:#FFF;--line:#E2E8F0;--txt:#0F172A;--mut:#64748B;--pri:#10B981;--pri-dark:#047857;--side-bg:#07110D;--side-line:#17241D;--side-mut:#8E9CA0;--side-hover:#132019;--shadow:0 1px 3px rgba(0,0,0,.04),0 6px 16px rgba(0,0,0,.02)}
   *{box-sizing:border-box}body{margin:0;font-family:'Inter',system-ui,sans-serif;background:var(--bg);color:var(--txt);-webkit-font-smoothing:antialiased}a{color:inherit;text-decoration:none}.app{display:flex;min-height:100vh}.side{width:240px;background:var(--side-bg);border-right:1px solid var(--side-line);padding:24px 16px;position:fixed;height:100vh;z-index:10;display:flex;flex-direction:column;justify-content:space-between}.brand{padding:0 8px 24px}.nav a{display:flex;align-items:center;gap:12px;padding:11px 14px;border-radius:12px;color:var(--side-mut);font-size:14px;font-weight:500;margin-bottom:4px}.nav a.on,.nav a:hover{background:var(--side-hover);color:#FFF;font-weight:600}.nav a.on{background:rgba(16,185,129,.14);color:#34D399;border-left:3px solid var(--pri)}.nav a svg{opacity:.8}.side-logout{margin-top:16px;padding-top:16px;border-top:1px solid var(--side-line)}.side-logout button{width:100%;display:flex;align-items:center;gap:12px;padding:11px 14px;border:0;border-radius:12px;background:transparent;color:var(--side-mut);font:500 14px inherit;text-align:left;cursor:pointer}.side-logout button:hover{background:#2A1515;color:#FCA5A5}.main{margin-left:240px;flex:1;padding:32px 40px;max-width:1380px}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}.top h1{font-size:24px;font-weight:800;margin:0}.who{color:var(--mut);font-size:13.5px;display:flex;align-items:center;gap:14px}.who button{background:var(--panel);border:1px solid var(--line);color:var(--mut);border-radius:10px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px;margin-bottom:24px}.kpi{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px;box-shadow:var(--shadow)}.kpi-val{font-size:30px;font-weight:800}.kpi-lbl{color:var(--mut);font-size:13px;margin-top:4px;font-weight:600}.kpi-sub{color:var(--pri-dark);font-size:12.5px;margin-top:6px;font-weight:700}.card{background:var(--panel);border:1px solid var(--line);border-radius:20px;padding:24px;margin-bottom:24px;box-shadow:var(--shadow)}.card h2{font-size:17px;margin:0 0 18px}.tablewrap{overflow-x:auto;border-radius:14px;border:1px solid var(--line)}table{width:100%;border-collapse:collapse;font-size:13.5px;background:#FFF}th{text-align:left;color:#64748B;font-weight:700;font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;padding:14px 16px;background:#F8FAFC;border-bottom:1px solid var(--line)}td{padding:14px 16px;border-bottom:1px solid var(--line);vertical-align:middle;color:#334155}tbody tr:last-child td{border-bottom:0}tbody tr:hover{background:#F8FAFC}.empty{color:var(--mut);text-align:center;padding:32px}.badge{padding:4px 12px;border-radius:100px;font-size:11.5px;font-weight:700;display:inline-block;white-space:nowrap}.act{background:var(--pri);color:#03130c;border:0;border-radius:10px;padding:9px 16px;font-size:13.5px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px}.act.gray{background:#F1F5F9;color:var(--txt);border:1px solid var(--line)}.inline{display:inline-block;margin:0}.notice{padding:13px 16px;border-radius:12px;background:#EFF6FF;border:1px solid #BFDBFE;color:#1E40AF;font-size:13px;margin-bottom:18px}.muted{color:var(--mut);font-size:12.5px}.err{background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:12px 16px;border-radius:12px;font-size:13.5px;margin-bottom:18px}.ok{background:#ECFDF5;border:1px solid #A7F3D0;color:#065F46;padding:12px 16px;border-radius:12px;font-size:13.5px;margin-bottom:18px}.chip{display:inline-flex;padding:4px 9px;border-radius:99px;background:#ECFDF5;color:#047857;font-size:11px;font-weight:700}.filters{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.filters a{padding:8px 14px;border:1px solid var(--line);border-radius:99px;font-size:13px;font-weight:600;color:var(--mut)}.filters a.on,.filters a:hover{background:var(--pri);color:#03130c;border-color:var(--pri)}.row2{display:grid;grid-template-columns:1fr 1fr;gap:14px}label{display:block;color:var(--mut);font-size:12px;margin:12px 0 5px;font-weight:600}input,select{background:#FFF;border:1px solid var(--line);color:var(--txt);border-radius:10px;padding:10px 14px;font-size:14px;width:100%}input:focus,select:focus{outline:none;border-color:var(--pri);box-shadow:0 0 0 3px rgba(16,185,129,.15)}
   @media(max-width:900px){.app{display:block}.side{position:relative;width:100%;height:auto;min-height:0}.side>div:first-child{display:flex;flex-wrap:wrap;align-items:center;gap:10px}.brand{padding-bottom:8px}.nav{display:flex;flex-wrap:wrap}.nav a{padding:8px 10px}.side-logout{margin:8px 0 0;padding-top:8px}.side>div:last-child{display:none}.main{margin-left:0;padding:24px 16px}.row2{grid-template-columns:1fr}}
 </style></head><body><div class="app"><aside class="side"><div><div class="brand"><img src="/logo.png" alt="Rotta Urbana" style="height:52px;width:auto;max-width:200px;object-fit:contain;display:block"></div><nav class="nav">${MANAGER_NAV.map(([route, label, icon]) => `<a href="${managerHref(route)}" class="${active === route ? 'on' : ''}">${icon} ${label}</a>`).join('')}</nav><form class="side-logout" method="post" action="${managerHref('/logout')}"><button type="submit"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg><span>Sair</span></button></form></div><div style="padding:12px;font-size:11.5px;color:var(--side-mut);border-top:1px solid var(--side-line);margin-top:auto">Rotta Urbana · Painel do Gerente</div></aside><main class="main"><div class="top"><h1>${esc(title)}</h1><div class="who">${esc(managerName || email || '')}<form method="post" action="${managerHref('/logout')}"><button>Sair</button></form></div></div>${rewriteManagerLinks(body)}</main></div></body></html>`;
 
-export const managerLoginPage = (error = '') => `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Login · Painel do Gerente</title><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"><style>body{margin:0;font-family:'Inter',system-ui,sans-serif;background:#F8FAFC;color:#0F172A}.login{max-width:420px;margin:10vh auto;background:#FFF;border:1px solid #E2E8F0;border-radius:20px;padding:36px;box-shadow:0 12px 36px rgba(15,23,42,.08)}h1{font-size:22px;font-weight:800;margin:0 0 4px;text-align:center}p{color:#64748B;font-size:13.5px;margin:0 0 20px;text-align:center}label{display:block;color:#64748B;font-size:12px;margin:14px 0 5px;font-weight:600}input{width:100%;background:#FFF;border:1px solid #E2E8F0;color:#0F172A;border-radius:10px;padding:11px 14px;font-size:14px;box-sizing:border-box}input:focus{outline:none;border-color:#10B981;box-shadow:0 0 0 3px rgba(16,185,129,.18)}button{width:100%;margin-top:22px;background:#10B981;color:#03130c;border:0;border-radius:10px;padding:12px;font-size:15px;font-weight:700;cursor:pointer}.err{background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:11px 14px;border-radius:10px;font-size:13px;margin-bottom:16px;font-weight:500}.hint{margin-top:18px;font-size:12px;color:#64748B;text-align:center}</style></head><body><form class="login" method="post" action="${managerHref('/login')}"><div style="text-align:center;margin-bottom:24px"><img src="/logo.png" alt="Rotta Urbana" style="height:72px;width:auto;object-fit:contain;display:inline-block;filter:brightness(0)"></div><h1>Painel do Gerente</h1><p>Acompanhe sua equipe e sua operação</p>${error ? `<div class="err">${esc(error)}</div>` : ''}<label>E-mail de acesso</label><input name="email" type="email" required autofocus placeholder="gerente@rottaurbana.app"><label>Senha</label><input name="password" type="password" required placeholder="••••••••"><button type="submit">Entrar como gerente</button><div class="hint">O acesso precisa estar ativo e vinculado por um administrador.</div></form></body></html>`;
+export const managerLoginPage = (error = '') => `<!doctype html><html lang="pt-br"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Login · Painel do Gerente</title><link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">${AUTH_STYLES}</head><body><main class="auth-shell"><div>${authAside('Acompanhe os motoristas da sua rede, organize a rotina e tome decisões com dados confiáveis.')}</div><form class="auth-form" method="post" action="${managerHref('/login')}" aria-labelledby="manager-login-title"><div class="auth-logo"><img src="/logo.png" alt="Rotta Urbana"></div><div class="auth-kicker">${uiIcon('users', 14)} Área da gerência</div><h1 id="manager-login-title">Painel do Gerente</h1><p>Acompanhe sua equipe e sua operação.</p>${error ? `<div class="auth-error" role="alert">${uiIcon('shield', 16)}<span>${esc(error)}</span></div>` : ''}<label for="manager-email">E-mail de acesso</label><div class="auth-field">${uiIcon('mail', 17)}<input id="manager-email" name="email" type="email" required autofocus autocomplete="username" placeholder="gerente@rottaurbana.app"></div><label for="manager-password">Senha</label><div class="auth-field">${uiIcon('shield', 17)}<input id="manager-password" name="password" type="password" required autocomplete="current-password" placeholder="Digite sua senha"></div><button class="auth-submit" type="submit">${uiIcon('login', 17)} Entrar como gerente</button><div class="auth-footer">${uiIcon('shield', 14)} Acesso ativo e vinculado pelo administrador</div></form></main></body></html>`;

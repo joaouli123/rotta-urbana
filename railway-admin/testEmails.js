@@ -10,7 +10,7 @@ import {
 const targetEmail = 'jl.uli1996@gmail.com';
 
 async function runTests() {
-  console.log(`🚀 Iniciando disparos de teste de e-mail via Resend para: ${targetEmail}`);
+  console.log(`Iniciando disparos de teste de e-mail via Resend para: ${targetEmail}`);
 
   console.log('\n1. Enviando e-mail de Boas-vindas...');
   const res1 = await sendWelcomeEmail({ email: targetEmail, name: 'João Lucas', role: 'Motorista Parceiro' });
@@ -36,7 +36,7 @@ async function runTests() {
   const res6 = await sendContactFormEmail({ name: 'João Lucas', email: targetEmail, phone: '(66) 99647-1003', subject: 'Quero ser motorista parceiro', message: 'Gostaria de tirar dúvidas sobre o plano Rotta Smart.' });
   console.log('Resultado 6:', res6);
 
-  console.log('\n✅ Testes concluídos!');
+console.log('\nTestes concluídos.');
 }
 
 runTests();

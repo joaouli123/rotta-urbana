@@ -1,7 +1,7 @@
 import express from 'express';
 import session from 'express-session';
 import { createClient } from '@supabase/supabase-js';
-import { layout, loginPage, managerLoginPage, esc, brl, fmtDate, fmtPhone, badge, kpiCard, table, pagination, iconBtnApprove, iconBtnSuspend, iconBtnDollar, iconBtnClose, iconBtnTrash, iconBtnWhatsApp, iconBtnEdit, iconBtnKey, iconBtnPlan, iconBtnDocs } from './ui.js';
+import { layout, loginPage, managerLoginPage, esc, brl, fmtDate, fmtPhone, badge, kpiCard, table, pagination, uiIcon, iconBtnApprove, iconBtnSuspend, iconBtnDollar, iconBtnClose, iconBtnTrash, iconBtnWhatsApp, iconBtnEdit, iconBtnKey, iconBtnPlan, iconBtnDocs } from './ui.js';
 import { landingPage } from './landing.js';
 import { privacyPolicyPage, deleteAccountPage } from './policies.js';
 import * as emailService from './emailService.js';
@@ -428,7 +428,7 @@ adminRouter.get('/', requireAuth, async (req, res) => {
           <label style="margin:0;font-size:12px;color:var(--mut);font-weight:600;">Até:</label>
           <input type="date" name="endDate" value="${endDate}" style="padding:7px 10px;font-size:13px;width:145px;">
         </div>
-        <button type="submit" class="act" style="padding:8px 14px;font-size:13px;display:inline-flex;align-items:center;gap:4px;">🔍 Filtrar</button>
+        <button type="submit" class="act" style="padding:8px 14px;font-size:13px;display:inline-flex;align-items:center;gap:6px;">${uiIcon('filter', 15)} Filtrar</button>
       </form>
     </div>
   `;
@@ -437,7 +437,7 @@ adminRouter.get('/', requireAuth, async (req, res) => {
     ${filterBar}
 
     <!-- KPIs do Período Selecionado -->
-    <div style="margin-bottom:12px;"><h3 style="margin:0 0 12px;font-size:14px;color:var(--mut);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;">📊 Métricas do Período (${startDate.split('-').reverse().join('/')} a ${endDate.split('-').reverse().join('/')})</h3></div>
+    <div style="margin-bottom:12px;"><h3 style="display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:14px;color:var(--mut);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;">${uiIcon('analytics', 16)} Métricas do Período (${startDate.split('-').reverse().join('/')} a ${endDate.split('-').reverse().join('/')})</h3></div>
     <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(210px,1fr));">
       ${kpiCard('Corridas no Período', totalRidesPeriod, `${completedRidesPeriod.length} concluídas`)}
       ${kpiCard('Faturamento em Corridas', brl(grossFaresPeriod), `Ticket Médio ${brl(avgTicketPeriod)}`)}
@@ -446,7 +446,7 @@ adminRouter.get('/', requireAuth, async (req, res) => {
     </div>
 
     <!-- KPIs Gerais da Plataforma -->
-    <div style="margin:20px 0 12px;"><h3 style="margin:0 0 12px;font-size:14px;color:var(--mut);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;">🚗 Visão Geral da Plataforma</h3></div>
+    <div style="margin:20px 0 12px;"><h3 style="display:flex;align-items:center;gap:8px;margin:0 0 12px;font-size:14px;color:var(--mut);text-transform:uppercase;letter-spacing:0.05em;font-weight:700;">${uiIcon('car', 16)} Visão Geral da Plataforma</h3></div>
     <div class="grid" style="grid-template-columns:repeat(auto-fill,minmax(190px,1fr));">
       ${kpiCard('Passageiros', kpis.passengers ?? 0)}
       ${kpiCard('Motoristas', kpis.drivers_total ?? 0, `${kpis.drivers_verified ?? 0} verificados`)}
@@ -460,11 +460,11 @@ adminRouter.get('/', requireAuth, async (req, res) => {
     <!-- Gráficos Analíticos -->
     <div style="display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:24px;" class="charts-row">
       <div class="card" style="margin:0;">
-        <h2>📈 Evolução Diária de Corridas &amp; Faturamento</h2>
+        <h2>${uiIcon('chart', 17)} Evolução Diária de Corridas &amp; Faturamento</h2>
         <canvas id="ridesChart" height="120"></canvas>
       </div>
       <div class="card" style="margin:0;">
-        <h2>🚕 Corridas por Categoria</h2>
+        <h2>${uiIcon('activity', 17)} Corridas por Categoria</h2>
         <canvas id="categoryChart" height="180"></canvas>
       </div>
     </div>
@@ -613,7 +613,7 @@ adminRouter.get('/users', requireAuth, async (req, res) => {
     esc(fmtPhone(user.phone)),
     user.is_active === false ? badge('suspended') : badge('active'),
     fmtDate(user.created_at),
-    `<div class="actions"><a class="btn-icon gray" href="/users/${user.id}/edit" title="Editar usuário" aria-label="Editar usuário">✎</a><a class="btn-icon gray" href="/users/${user.id}/reset-password" title="Redefinir senha" aria-label="Redefinir senha">🔑</a></div>`,
+    `<div class="actions">${iconBtnEdit(`/users/${user.id}/edit`, 'Editar usuário')}${iconBtnKey(`/users/${user.id}/reset-password`, 'Redefinir senha')}</div>`,
   ]);
   const body = `
     ${req.query.ok ? '<div class="ok">Operação realizada com sucesso.</div>' : ''}${req.query.error ? `<div class="err">${esc(req.query.error)}</div>` : ''}
@@ -678,7 +678,7 @@ adminRouter.get('/drivers', requireAuth, async (req, res) => {
   const searchQuery = (req.query.q || '').trim().toLowerCase();
   const verificationFilter = req.query.verification || '';
   const planFilter = req.query.plan || '';
-  const okMsg = req.query.ok ? `<div class="ok">✅ Operação realizada com sucesso!</div>` : req.query.error ? `<div class="err">${esc(req.query.error)}</div>` : '';
+  const okMsg = req.query.ok ? `<div class="ok">${uiIcon('check', 16)} Operação realizada com sucesso.</div>` : req.query.error ? `<div class="err">${esc(req.query.error)}</div>` : '';
 
   const [{ data: drivers }, { data: profiles }, { data: subs }, { data: vehicles }, { data: docs }] = await Promise.all([
     admin.from('drivers').select('*'),
@@ -935,7 +935,7 @@ adminRouter.get('/drivers/:id/plan', requireAuth, async (req, res) => {
 
         <div style="margin-top:24px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
           <a href="/drivers" class="act gray" style="padding:10px 18px;border-radius:10px;">Cancelar</a>
-          <button type="submit" class="act" style="padding:10px 24px;border-radius:10px;">💾 Atualizar Plano do Motorista</button>
+          <button type="submit" class="act" style="padding:10px 24px;border-radius:10px;">${uiIcon('save', 16)} Atualizar Plano do Motorista</button>
         </div>
       </form>
     </div>
@@ -1122,7 +1122,7 @@ adminRouter.get('/rides', requireAuth, async (req, res) => {
           <option value="premium" ${rideType === 'premium' ? 'selected' : ''}>Premium</option>
         </select>
         <input type="text" name="q" value="${esc(req.query.q || '')}" placeholder="Buscar passageiro ou motorista..." style="padding:8px 12px;font-size:13px;width:240px;">
-        <button type="submit" class="act" style="padding:8px 14px;font-size:13px;">🔍 Buscar</button>
+        <button type="submit" class="act" style="padding:8px 14px;font-size:13px;">${uiIcon('search', 15)} Buscar</button>
       </form>
     </div>
   `;

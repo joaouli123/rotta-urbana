@@ -28,7 +28,7 @@ const errorRedirect = (res, message) => res.redirect(`/managers?error=${encodeUR
 const managerActions = (manager) => `
   <div class="actions">
     <a class="act" href="/managers/${manager.profile_id}">Acompanhar</a>
-    <a class="btn-icon gray" href="/managers/${manager.profile_id}/edit" title="Editar gerente" aria-label="Editar gerente">✎</a>
+    <a class="btn-icon gray" href="/managers/${manager.profile_id}/edit" title="Editar gerente" aria-label="Editar gerente"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></a>
     <form class="inline" method="post" action="/managers/${manager.profile_id}/toggle" onsubmit="return confirm('${manager.is_active ? 'Desativar o acesso deste gerente?' : 'Reativar o acesso deste gerente?'}')">
       <input type="hidden" name="active" value="${manager.is_active ? '0' : '1'}">
       <button class="btn-icon ${manager.is_active ? 'suspend' : 'approve'}" title="${manager.is_active ? 'Desativar' : 'Ativar'}" aria-label="${manager.is_active ? 'Desativar' : 'Ativar'}">${manager.is_active ? '⏸' : '▶'}</button>
