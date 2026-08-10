@@ -40,11 +40,35 @@ app.disable('x-powered-by');
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+const DEFAULT_ADMIN_PANEL_SLUG = 'console-ru-7f3a9c';
+const ADMIN_PANEL_SLUG = String(process.env.ADMIN_PANEL_SLUG || DEFAULT_ADMIN_PANEL_SLUG)
+  .trim()
+  .replace(/^\/+|\/+$/g, '');
+if (!/^[a-z0-9][a-z0-9-]{10,63}$/.test(ADMIN_PANEL_SLUG)) {
+  console.error('ADMIN_PANEL_SLUG inv?lido: use 11-64 caracteres min?sculos, n?meros e h?fens.');
+  process.exit(1);
+}
+const ADMIN_BASE_PATH = '/' + ADMIN_PANEL_SLUG;
+const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/drivers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
+const adminPath = (value = '') => {
+  const raw = String(value || '');
+  const match = raw.match(/^([^?#]*)(.*)$/);
+  const pathname = match?.[1] || raw;
+  const suffix = match?.[2] || '';
+  if (pathname === '/admin' || pathname === '') return ADMIN_BASE_PATH + suffix;
+  if (ADMIN_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'))) {
+    return ADMIN_BASE_PATH + pathname + suffix;
+  }
+  return raw;
+};
+const adminRouter = express.Router();
+
 // Baseline security headers (no extra deps).
 app.use((req, res, next) => {
   res.set('X-Frame-Options', 'DENY');
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Referrer-Policy', 'same-origin');
+  res.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
   next();
 });
 
@@ -85,13 +109,18 @@ const loginLimiter = (req, res, next) => {
 // Opportunistic cleanup so the Map can't grow unbounded.
 setInterval(() => { const now = Date.now(); for (const [ip, e] of loginHits) if (now > e.resetAt) loginHits.delete(ip); }, LOGIN_WINDOW_MS).unref?.();
 
-const requireAuth = (req, res, next) => (req.session?.userId ? next() : res.redirect('/login'));
+const requireAuth = (req, res, next) => (req.session?.userId ? next() : res.redirect(adminPath('/login')));
+adminRouter.use((req, res, next) => {
+  const originalRedirect = res.redirect.bind(res);
+  res.redirect = (target, ...rest) => originalRedirect(typeof target === 'string' ? adminPath(target) : target, ...rest);
+  next();
+});
 const render = (res, html) => res.set('Content-Type', 'text/html; charset=utf-8').send(html);
 
 // ─── Auth ─────────────────────────────────────────────────────────────────
-app.get('/login', (req, res) => render(res, loginPage()));
+adminRouter.get('/login', (req, res) => render(res, loginPage()));
 
-app.post('/login', loginLimiter, async (req, res) => {
+adminRouter.post('/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body;
   try {
     const authClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY ?? SUPABASE_SECRET_KEY, {
@@ -112,7 +141,7 @@ app.post('/login', loginLimiter, async (req, res) => {
   }
 });
 
-app.post('/logout', (req, res) => req.session.destroy(() => res.redirect('/login')));
+adminRouter.post('/logout', (req, res) => req.session.destroy(() => res.redirect('/login')));
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 // ─── Políticas Públicas (Google Play / App Store) ───────────────────────────
@@ -230,7 +259,7 @@ app.get('/', async (req, res) => {
 });
 
 // ─── Dashboard ──────────────────────────────────────────────────────────────
-app.get('/admin', requireAuth, async (req, res) => {
+adminRouter.get('/', requireAuth, async (req, res) => {
   const preset = req.query.preset || '30d';
   let startDate = req.query.startDate;
   let endDate = req.query.endDate;
@@ -495,7 +524,7 @@ app.get('/admin', requireAuth, async (req, res) => {
 });
 
 // ─── Drivers ──────────────────────────────────────────────────────────────
-app.get('/drivers', requireAuth, async (req, res) => {
+adminRouter.get('/drivers', requireAuth, async (req, res) => {
   const page = Number(req.query.page) || 1;
   const pageSize = 20;
   const searchQuery = (req.query.q || '').trim().toLowerCase();
@@ -632,18 +661,18 @@ app.get('/drivers', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Motoristas', active: '/drivers', email: req.session.email, body }));
 });
 
-app.post('/drivers/:id/verify', requireAuth, async (req, res) => {
+adminRouter.post('/drivers/:id/verify', requireAuth, async (req, res) => {
   await admin.from('drivers').update({ is_verified: true, documents_status: 'approved' }).eq('id', req.params.id);
   res.redirect('/drivers?ok=1');
 });
 
-app.post('/drivers/:id/unverify', requireAuth, async (req, res) => {
+adminRouter.post('/drivers/:id/unverify', requireAuth, async (req, res) => {
   await admin.from('drivers').update({ is_verified: false }).eq('id', req.params.id);
   res.redirect('/drivers?ok=1');
 });
 
 // ─── Driver Profile Edit ───────────────────────────────────────────────────
-app.get('/drivers/:id/edit', requireAuth, async (req, res) => {
+adminRouter.get('/drivers/:id/edit', requireAuth, async (req, res) => {
   const id = req.params.id;
   const [{ data: driver }, { data: profile }, { data: vehicle }] = await Promise.all([
     admin.from('drivers').select('*').eq('id', id).single(),
@@ -695,7 +724,7 @@ app.get('/drivers/:id/edit', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Editar Motorista', active: '/drivers', email: req.session.email, body }));
 });
 
-app.post('/drivers/:id/edit', requireAuth, async (req, res) => {
+adminRouter.post('/drivers/:id/edit', requireAuth, async (req, res) => {
   const id = req.params.id;
   const b = req.body;
 
@@ -721,7 +750,7 @@ app.post('/drivers/:id/edit', requireAuth, async (req, res) => {
 });
 
 // ─── Driver Password Reset ─────────────────────────────────────────────────
-app.get('/drivers/:id/reset-password', requireAuth, async (req, res) => {
+adminRouter.get('/drivers/:id/reset-password', requireAuth, async (req, res) => {
   const id = req.params.id;
   const { data: profile } = await admin.from('profiles').select('*').eq('id', id).single();
   if (!profile) return res.status(404).send('Motorista não encontrado.');
@@ -748,7 +777,7 @@ app.get('/drivers/:id/reset-password', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Redefinir Senha', active: '/drivers', email: req.session.email, body }));
 });
 
-app.post('/drivers/:id/reset-password', requireAuth, async (req, res) => {
+adminRouter.post('/drivers/:id/reset-password', requireAuth, async (req, res) => {
   const id = req.params.id;
   const newPass = req.body.new_password;
 
@@ -772,7 +801,7 @@ app.post('/drivers/:id/reset-password', requireAuth, async (req, res) => {
 });
 
 // ─── Driver Plan / Subscription Change ──────────────────────────────────────
-app.get('/drivers/:id/plan', requireAuth, async (req, res) => {
+adminRouter.get('/drivers/:id/plan', requireAuth, async (req, res) => {
   const id = req.params.id;
   const [{ data: profile }, { data: sub }, { data: settings }] = await Promise.all([
     admin.from('profiles').select('*').eq('id', id).single(),
@@ -829,7 +858,7 @@ app.get('/drivers/:id/plan', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Alterar Plano', active: '/drivers', email: req.session.email, body }));
 });
 
-app.post('/drivers/:id/plan', requireAuth, async (req, res) => {
+adminRouter.post('/drivers/:id/plan', requireAuth, async (req, res) => {
   const id = req.params.id;
   const { plan, status, due_date } = req.body;
 
@@ -852,7 +881,7 @@ app.post('/drivers/:id/plan', requireAuth, async (req, res) => {
 });
 
 // ─── Driver Documents View ─────────────────────────────────────────────────
-app.get('/drivers/:id/documents', requireAuth, async (req, res) => {
+adminRouter.get('/drivers/:id/documents', requireAuth, async (req, res) => {
   const id = req.params.id;
   const [{ data: driver }, { data: profile }, { data: docs }] = await Promise.all([
     admin.from('drivers').select('*').eq('id', id).single(),
@@ -926,7 +955,7 @@ app.get('/drivers/:id/documents', requireAuth, async (req, res) => {
 });
 
 // ─── Rides ────────────────────────────────────────────────────────────────
-app.get('/rides', requireAuth, async (req, res) => {
+adminRouter.get('/rides', requireAuth, async (req, res) => {
   const status = req.query.status || '';
   const rideType = req.query.type || '';
   const searchQuery = (req.query.q || '').trim().toLowerCase();
@@ -1035,14 +1064,14 @@ app.get('/rides', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Corridas', active: '/rides', email: req.session.email, body }));
 });
 
-app.post('/rides/:id/mark-paid', requireAuth, async (req, res) => {
+adminRouter.post('/rides/:id/mark-paid', requireAuth, async (req, res) => {
   // service_role bypasses RLS; only flip completed rides that aren't paid yet.
   await admin.from('rides').update({ fare_paid: true }).eq('id', req.params.id).eq('status', 'completed');
   res.redirect('/rides');
 });
 
 // ─── Subscriptions ──────────────────────────────────────────────────────────
-app.get('/subscriptions', requireAuth, async (req, res) => {
+adminRouter.get('/subscriptions', requireAuth, async (req, res) => {
   const page = Number(req.query.page) || 1;
   const pageSize = 20;
 
@@ -1068,7 +1097,7 @@ app.get('/subscriptions', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Assinaturas', active: '/subscriptions', email: req.session.email, body }));
 });
 
-app.post('/subscriptions/:driverId/activate', requireAuth, async (req, res) => {
+adminRouter.post('/subscriptions/:driverId/activate', requireAuth, async (req, res) => {
   const { data: s } = await admin.from('subscriptions').select('plan,due_date').eq('driver_id', req.params.driverId).single();
   const base = new Date(Math.max(Date.now(), s?.due_date ? new Date(s.due_date).getTime() : Date.now()));
   base.setDate(base.getDate() + (s?.plan === 'daily' ? 1 : 30));
@@ -1079,7 +1108,7 @@ app.post('/subscriptions/:driverId/activate', requireAuth, async (req, res) => {
 });
 
 // ─── Payments ─────────────────────────────────────────────────────────────
-app.get('/payments', requireAuth, async (req, res) => {
+adminRouter.get('/payments', requireAuth, async (req, res) => {
   const page = Number(req.query.page) || 1;
   const pageSize = 20;
 
@@ -1103,13 +1132,13 @@ app.get('/payments', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Pagamentos', active: '/payments', email: req.session.email, body }));
 });
 
-app.post('/payments/:id/confirm', requireAuth, async (req, res) => {
+adminRouter.post('/payments/:id/confirm', requireAuth, async (req, res) => {
   await admin.rpc('confirm_payment', { p_payment_id: req.params.id });
   res.redirect('/payments');
 });
 
 // ─── Leads / Mensagens da Landing Page ──────────────────────────────────────
-app.get('/leads', requireAuth, async (req, res) => {
+adminRouter.get('/leads', requireAuth, async (req, res) => {
   const page = Number(req.query.page) || 1;
   const pageSize = 20;
 
@@ -1168,7 +1197,7 @@ app.get('/leads', requireAuth, async (req, res) => {
 });
 
 // Endpoint de Exportacao CSV para Excel
-app.get('/leads/export.csv', requireAuth, async (req, res) => {
+adminRouter.get('/leads/export.csv', requireAuth, async (req, res) => {
   const leads = await getLeads();
   let csv = 'ID;Data/Hora;Nome;E-mail;Telefone;Assunto;Mensagem;Status\n';
   leads.forEach(l => {
@@ -1180,7 +1209,7 @@ app.get('/leads/export.csv', requireAuth, async (req, res) => {
   res.send('\uFEFF' + csv); // BOM for Excel UTF-8 recognition
 });
 
-app.post('/leads/:id/contacted', requireAuth, async (req, res) => {
+adminRouter.post('/leads/:id/contacted', requireAuth, async (req, res) => {
   const { id } = req.params;
   try {
     await admin.from('leads').update({ status: 'contatado' }).eq('id', id);
@@ -1190,7 +1219,7 @@ app.post('/leads/:id/contacted', requireAuth, async (req, res) => {
   res.redirect('/leads');
 });
 
-app.post('/leads/:id/delete', requireAuth, async (req, res) => {
+adminRouter.post('/leads/:id/delete', requireAuth, async (req, res) => {
   const { id } = req.params;
   try {
     await admin.from('leads').delete().eq('id', id);
@@ -1200,7 +1229,7 @@ app.post('/leads/:id/delete', requireAuth, async (req, res) => {
 });
 
 // ─── Support ──────────────────────────────────────────────────────────────
-app.get('/support', requireAuth, async (req, res) => {
+adminRouter.get('/support', requireAuth, async (req, res) => {
   const page = Number(req.query.page) || 1;
   const pageSize = 20;
 
@@ -1224,13 +1253,13 @@ app.get('/support', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Suporte', active: '/support', email: req.session.email, body }));
 });
 
-app.post('/support/:id/close', requireAuth, async (req, res) => {
+adminRouter.post('/support/:id/close', requireAuth, async (req, res) => {
   await admin.from('support_tickets').update({ status: 'closed' }).eq('id', req.params.id);
   res.redirect('/support');
 });
 
 // ─── Settings ─────────────────────────────────────────────────────────────
-app.get('/settings', requireAuth, async (req, res) => {
+adminRouter.get('/settings', requireAuth, async (req, res) => {
   const { data: s } = await admin.from('app_settings').select('*').eq('id', 1).single();
   const { data: fares } = await admin.from('fare_config').select('*').order('ride_type');
   const set = s ?? {};
@@ -1482,7 +1511,7 @@ app.get('/settings', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Configurações', active: '/settings', email: req.session.email, body }));
 });
 
-app.post('/settings', requireAuth, async (req, res) => {
+adminRouter.post('/settings', requireAuth, async (req, res) => {
   const b = req.body;
   await admin.from('app_settings').update({
     platform_name: b.platform_name,
@@ -1499,7 +1528,7 @@ app.post('/settings', requireAuth, async (req, res) => {
   res.redirect('/settings?tab=plans&ok=1');
 });
 
-app.post('/settings/fares', requireAuth, async (req, res) => {
+adminRouter.post('/settings/fares', requireAuth, async (req, res) => {
   const b = req.body;
   const targetTab = b.tab || 'moto';
   const arr = (s) => String(s ?? '').split(',').map((x) => x.trim().toLowerCase()).filter(Boolean);
@@ -1523,6 +1552,8 @@ app.post('/settings/fares', requireAuth, async (req, res) => {
 // ─── Mercado Pago PIX API Endpoints ─────────────────────────────────────────
 
 // 1. Criar Cobrança PIX em Tempo Real (Gera QR Code + Copia e Cola)
+app.use(ADMIN_BASE_PATH, adminRouter);
+
 app.post('/api/payments/create-pix', async (req, res) => {
   const token = process.env.MERCADOPAGO_ACCESS_TOKEN;
   const { amount, description, email, driver_id } = req.body;
@@ -1680,6 +1711,6 @@ const num = (v) => {
 
 const fmtVal = (n, dec = 2) => Number(n ?? 0).toFixed(dec);
 
-app.use((req, res) => res.redirect(req.session?.userId ? '/admin' : '/login'));
+app.use((req, res) => res.status(404).send('Not found'));
 
 app.listen(PORT, () => console.log(`Rotta Urbana Admin on :${PORT}`));

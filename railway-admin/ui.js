@@ -1,4 +1,24 @@
 // Server-rendered UI helpers for the admin panel (no build step).
+
+const DEFAULT_ADMIN_PANEL_SLUG = 'console-ru-7f3a9c';
+const ADMIN_PANEL_SLUG = String(process.env.ADMIN_PANEL_SLUG || DEFAULT_ADMIN_PANEL_SLUG).trim().replace(/^\/+|\/+$/g, '');
+const ADMIN_BASE_PATH = '/' + ADMIN_PANEL_SLUG;
+const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/drivers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
+const adminHref = (route = '') => {
+  const value = String(route || '');
+  if (!value || value === '/') return ADMIN_BASE_PATH;
+  return ADMIN_BASE_PATH + (value.startsWith('/') ? value : '/' + value);
+};
+const rewriteAdminPath = (value) => {
+  const raw = String(value || '');
+  const match = raw.match(/^([^?#]*)(.*)$/);
+  const pathname = match?.[1] || raw;
+  const suffix = match?.[2] || '';
+  if (pathname === '/admin') return ADMIN_BASE_PATH + suffix;
+  if (ADMIN_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(prefix + '/'))) return ADMIN_BASE_PATH + pathname + suffix;
+  return raw;
+};
+const rewriteAdminLinks = (html) => String(html ?? '').replace(/\b(href|action)="(\/[^"']*)"/g, (_match, attr, value) => attr + '="' + rewriteAdminPath(value) + '"');
 export const esc = (v) =>
   String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -241,6 +261,10 @@ export const layout = ({ title, active, body, email, head = '' }) => `<!doctype 
   .nav a.on,.nav a:hover{background:var(--side-hover);color:#FFFFFF;font-weight:600}
   .nav a.on{background:rgba(16,185,129,0.14);color:#34D399;border-left:3px solid var(--pri)}
   .nav a svg{opacity:0.8;transition:transform 0.15s ease}
+  .side-logout{margin-top:16px;padding-top:16px;border-top:1px solid var(--side-line)}
+  .side-logout button{width:100%;display:flex;align-items:center;gap:12px;padding:11px 14px;border:0;border-radius:12px;background:transparent;color:var(--side-mut);font:500 14px inherit;text-align:left;cursor:pointer;transition:all 0.15s ease}
+  .side-logout button:hover{background:#2A1515;color:#FCA5A5}
+  .side-logout svg{opacity:0.8}
   .nav a:hover svg,.nav a.on svg{opacity:1;transform:scale(1.05)}
   .main{margin-left:240px;flex:1;padding:32px 40px;max-width:1380px}
   .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:28px}
@@ -308,7 +332,13 @@ export const layout = ({ title, active, body, email, head = '' }) => `<!doctype 
   <aside class="side">
     <div>
       <div class="brand" style="padding:0 8px 24px;"><img src="/logo.png" alt="Rotta Urbana" style="height:52px;width:auto;max-width:200px;object-fit:contain;display:block;"></div>
-      <nav class="nav">${NAV.map(([href, lbl, icon]) => `<a href="${href}" class="${active === href ? 'on' : ''}">${icon} ${lbl}</a>`).join('')}</nav>
+      <nav class="nav">${NAV.map(([route, lbl, icon]) => {
+        const href = adminHref(route === '/admin' ? '' : route);
+        return '<a href="' + href + '" class="' + (active === route ? 'on' : '') + '">' + icon + ' ' + lbl + '</a>';
+      }).join('')}</nav>
+      <form class="side-logout" method="post" action="${adminHref('/logout')}">
+        <button type="submit"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg><span>Sair</span></button>
+      </form>
     </div>
     <div style="padding:12px;font-size:11.5px;color:var(--side-mut);border-top:1px solid var(--side-line);margin-top:auto;">
       Rotta Urbana v2.4 Admin
@@ -316,9 +346,9 @@ export const layout = ({ title, active, body, email, head = '' }) => `<!doctype 
   </aside>
   <main class="main">
     <div class="top"><h1>${esc(title)}</h1>
-      <div class="who">${esc(email || '')}<form method="post" action="/logout"><button>Sair</button></form></div>
+      <div class="who">${esc(email || '')}<form method="post" action="${adminHref('/logout')}"><button>Sair</button></form></div>
     </div>
-    ${body}
+    ${rewriteAdminLinks(body)}
   </main>
 </div></body></html>`;
 
@@ -335,7 +365,7 @@ input:focus{outline:none;border-color:#10B981;box-shadow:0 0 0 3px rgba(16,185,1
 button{width:100%;margin-top:22px;background:#10B981;color:#03130c;border:none;border-radius:10px;padding:12px;font-size:15px;font-weight:700;cursor:pointer;transition:all 0.15s ease}
 button:hover{transform:translateY(-1px);box-shadow:0 4px 14px rgba(16,185,129,0.25)}
 .err{background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:11px 14px;border-radius:10px;font-size:13px;margin-bottom:16px;font-weight:500}</style>
-</head><body><form class="login" method="post" action="/login">
+</head><body><form class="login" method="post" action="${adminHref('/login')}">
 <div style="text-align:center;margin-bottom:24px;">
   <img src="/logo.png" alt="Rotta Urbana" style="height:72px;width:auto;object-fit:contain;display:inline-block;filter:brightness(0);">
 </div>
