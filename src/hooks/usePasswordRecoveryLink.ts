@@ -9,6 +9,11 @@ export function usePasswordRecoveryLink() {
 
   useEffect(() => {
     let mounted = true;
+    const readyTimeout = setTimeout(() => {
+      // A platform URL provider can hang while opening the app from a system
+      // notification/link. Recovery must never keep the entire app blank.
+      if (mounted) setReady(true);
+    }, 5_000);
 
     const handleUrl = async (url: string | null) => {
       if (!url) return;
@@ -33,11 +38,15 @@ export function usePasswordRecoveryLink() {
     Linking.getInitialURL()
       .then(handleUrl)
       .catch(() => undefined)
-      .finally(() => { if (mounted) setReady(true); });
+      .finally(() => {
+        clearTimeout(readyTimeout);
+        if (mounted) setReady(true);
+      });
 
     const subscription = Linking.addEventListener('url', ({ url }) => { void handleUrl(url); });
     return () => {
       mounted = false;
+      clearTimeout(readyTimeout);
       subscription.remove();
     };
   }, []);

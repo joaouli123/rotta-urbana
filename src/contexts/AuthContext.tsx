@@ -19,6 +19,7 @@ interface AuthContextValue {
   session: Session | null;
   profile: ProfileRow | null;
   loading: boolean;          // initial session restore
+  profileError: string | null;
   role: Role | null;
   signIn: (email: string, password: string) => Promise<{ error?: string }>;
   resetPasswordForEmail: (email: string) => Promise<{ error?: string }>;
@@ -40,16 +41,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [session, setSession] = useState<Session | null>(null);
   const [profile, setProfile] = useState<ProfileRow | null>(null);
   const [loading, setLoading] = useState(true);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const fetchingFor = useRef<string | null>(null);
+  const sessionUserId = useRef<string | null>(null);
 
   const loadProfile = useCallback(async (userId: string) => {
     fetchingFor.current = userId;
-    const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
-    if (fetchingFor.current !== userId) return; // stale result — user changed mid-flight
-    // Only update on success. On transient errors keep whatever was loaded before so
-    // a network hiccup during token-refresh doesn't flash the auth screen.
-    if (!error && data) setProfile(data as ProfileRow);
-    else if (!error && !data) setProfile(null); // profile truly absent (new user edge case)
+    setProfileError(null);
+    try {
+      const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single();
+      if (fetchingFor.current !== userId) return; // stale result — user changed mid-flight
+      // Keep a previously loaded profile during a transient refresh failure, but
+      // expose the error when there is no profile to render yet.
+      if (error) {
+        setProfileError(error.message || 'Não foi possível carregar seu perfil.');
+        return;
+      }
+      if (data) setProfile(data as ProfileRow);
+      else {
+        setProfile(null);
+        setProfileError('Seu perfil ainda não está disponível.');
+      }
+    } catch (error: any) {
+      if (fetchingFor.current === userId) {
+        setProfileError(error?.message || 'Não foi possível carregar seu perfil.');
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -62,17 +79,41 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     supabase.auth.getSession().then(async ({ data }) => {
       clearTimeout(abort);
       setSession(data.session);
-      if (data.session?.user) await loadProfile(data.session.user.id);
+      if (data.session?.user) {
+        sessionUserId.current = data.session.user.id;
+        await loadProfile(data.session.user.id);
+      } else {
+        sessionUserId.current = null;
+        setProfile(null);
+        setProfileError(null);
+      }
       setLoading(false);
     }).catch(() => {
       clearTimeout(abort);
+      fetchingFor.current = null;
+      sessionUserId.current = null;
+      setSession(null);
+      setProfile(null);
+      setProfileError(null);
       setLoading(false);
     });
 
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      const nextUserId = newSession?.user?.id ?? null;
+      const userChanged = sessionUserId.current !== nextUserId;
+      sessionUserId.current = nextUserId;
       setSession(newSession);
-      if (newSession?.user) await loadProfile(newSession.user.id);
-      else setProfile(null);
+      setProfileError(null);
+      if (newSession?.user) {
+        if (userChanged) setProfile(null);
+        // Do not await Supabase work inside onAuthStateChange. Supabase can
+        // serialize auth operations and awaiting another query here may stall
+        // the whole app during startup or notification resume.
+        void loadProfile(newSession.user.id);
+      } else {
+        fetchingFor.current = null;
+        setProfile(null);
+      }
     });
     return () => sub.subscription.unsubscribe();
   }, [loadProfile]);
@@ -146,7 +187,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signOut = async () => {
     await supabase.auth.signOut();
+    fetchingFor.current = null;
+    sessionUserId.current = null;
     setProfile(null);
+    setProfileError(null);
   };
 
   const refreshProfile = useCallback(async () => {
@@ -155,7 +199,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   return (
     <AuthContext.Provider
-      value={{ session, profile, loading, role: profile?.role ?? null, signIn, resetPasswordForEmail, updatePassword, signUp, signOut, refreshProfile }}
+      value={{ session, profile, loading, profileError, role: profile?.role ?? null, signIn, resetPasswordForEmail, updatePassword, signUp, signOut, refreshProfile }}
     >
       {children}
     </AuthContext.Provider>

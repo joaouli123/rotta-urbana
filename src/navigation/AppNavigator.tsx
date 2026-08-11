@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View, ActivityIndicator, Alert, Linking, Share } from 'react-native';
+import { View, Text, ActivityIndicator, Alert, Linking, Share, TouchableOpacity, StyleSheet } from 'react-native';
 import * as Location from 'expo-location';
 import { useAuth } from '../contexts/AuthContext';
 import { Colors } from '../constants';
@@ -64,11 +64,36 @@ async function getOrigin(): Promise<[number, number]> {
   return SINOP;
 }
 
-const Loading = () => (
-  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.background }}>
+const Loading: React.FC<{ message?: string }> = ({ message = 'Carregando...' }) => (
+  <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.background, padding: 24 }}>
     <ActivityIndicator size="large" color={Colors.primary} />
+    <Text style={bootStyles.loadingText}>{message}</Text>
   </View>
 );
+
+const ProfileRecovery: React.FC<{ error?: string | null; onRetry: () => void; onSignOut: () => void }> = ({ error, onRetry, onSignOut }) => (
+  <View style={bootStyles.container}>
+    <Text style={bootStyles.title}>Não foi possível carregar o app</Text>
+    <Text style={bootStyles.message}>{error || 'Verifique sua conexão e tente novamente.'}</Text>
+    <TouchableOpacity style={bootStyles.primaryButton} onPress={onRetry} activeOpacity={0.85}>
+      <Text style={bootStyles.primaryButtonText}>Tentar novamente</Text>
+    </TouchableOpacity>
+    <TouchableOpacity style={bootStyles.secondaryButton} onPress={onSignOut} activeOpacity={0.75}>
+      <Text style={bootStyles.secondaryButtonText}>Sair da conta</Text>
+    </TouchableOpacity>
+  </View>
+);
+
+const bootStyles = StyleSheet.create({
+  container: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.background, padding: 28 },
+  loadingText: { marginTop: 14, color: Colors.textSecondary, fontSize: 14, fontFamily: 'Poppins_500Medium', textAlign: 'center' },
+  title: { color: Colors.textPrimary, fontSize: 21, fontFamily: 'Poppins_700Bold', textAlign: 'center', marginBottom: 10 },
+  message: { color: Colors.textSecondary, fontSize: 14, fontFamily: 'Poppins_400Regular', textAlign: 'center', lineHeight: 21, marginBottom: 22 },
+  primaryButton: { minWidth: 220, alignItems: 'center', backgroundColor: Colors.primary, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 22 },
+  primaryButtonText: { color: Colors.textPrimary, fontSize: 14, fontFamily: 'Poppins_700Bold' },
+  secondaryButton: { paddingVertical: 14, paddingHorizontal: 22 },
+  secondaryButtonText: { color: Colors.textSecondary, fontSize: 14, fontFamily: 'Poppins_500Medium' },
+});
 
 // ─── Auth flow (logged out) ──────────────────────────────────────────────────
 const AuthFlow: React.FC = () => {
@@ -386,7 +411,7 @@ const PassengerFlow: React.FC = () => {
     case 'support':
       return <SupportScreen onBack={() => setScreen('passenger_profile')} onSubmit={() => setScreen('passenger_home')} />;
     default:
-      return null;
+      return <Loading message="Abrindo a tela inicial..." />;
   }
 };
 
@@ -607,7 +632,7 @@ const DriverFlow: React.FC = () => {
 
   const openMenu = () => setScreen('driver_profile');
 
-  if (planType === 'loading') return <ActivityIndicator style={{ flex: 1 }} color={Colors.primary} />;
+  if (planType === 'loading') return <Loading message="Carregando sua conta de motorista..." />;
   if (planType === null) {
     return (
       <PlanSelectionScreen
@@ -698,13 +723,13 @@ const DriverFlow: React.FC = () => {
     case 'driver_ratings':
       return <DriverRatingsScreen onBack={() => setScreen('driver_profile')} />;
     default:
-      return null;
+      return <Loading message="Abrindo a tela inicial..." />;
   }
 };
 
 // ─── Root: route by auth + role ──────────────────────────────────────────────
 const AppNavigator: React.FC = () => {
-  const { session, profile, loading, signOut } = useAuth();
+  const { session, profile, loading, profileError, signOut, refreshProfile } = useAuth();
   const [splashDone, setSplashDone] = useState(false);
   const { ready: recoveryReady, active: passwordRecovery, clear: clearPasswordRecovery } = usePasswordRecoveryLink();
 
@@ -715,11 +740,14 @@ const AppNavigator: React.FC = () => {
   }, [session?.user.id, profile?.role]);
 
   if (!splashDone) return <SplashScreen onFinish={() => setSplashDone(true)} />;
-  if (!recoveryReady) return <Loading />;
+  if (!recoveryReady) return <Loading message="Preparando o app..." />;
   if (passwordRecovery) return <ResetPasswordScreen onFinished={clearPasswordRecovery} />;
-  if (loading) return <Loading />;
+  if (loading) return <Loading message="Restaurando sua sessão..." />;
   if (!session) return <AuthFlow />;   // truly signed out
-  if (!profile) return <Loading />;    // signed in but profile still fetching — never flash AuthFlow
+  if (!profile) {
+    if (profileError) return <ProfileRecovery error={profileError} onRetry={() => { void refreshProfile(); }} onSignOut={() => { void signOut(); }} />;
+    return <Loading message="Carregando seu perfil..." />;
+  }
   if (profile.role === 'driver') return <DriverFlow />;
   if (profile.role === 'passenger') return <PassengerFlow />;
   return <Loading />; // administradores e gerentes acessam somente os painéis web
