@@ -8,7 +8,7 @@ import { parsePasswordRecoveryUrl } from '../services/authRecovery';
 import { usePasswordRecoveryLink } from '../hooks/usePasswordRecoveryLink';
 import type { RideRow, RideTypeDb } from '../types/db';
 import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide, relaxFemalePreference, getRideCounterpart } from '../services/rides';
-import { getSearchingRides, subscribeSearchingRides, setStatus, updateLocation, getMyDriver } from '../services/drivers';
+import { getSearchingRides, subscribeSearchingRides, declineRide, hasDeclinedRide, setStatus, updateLocation, getMyDriver } from '../services/drivers';
 import { playSound, stopSound } from '../lib/sounds';
 import { registerForPushNotifications, clearPushToken } from '../services/push';
 import { showSearchingNotification, showDriverFoundNotification, clearRideNotification, ensureNotificationPermission } from '../services/localNotifications';
@@ -108,6 +108,8 @@ const PassengerFlow: React.FC = () => {
   const [ride, setRide] = useState<RideRow | null>(null);
   const [originCoords, setOriginCoords] = useState<[number, number] | null>(null);
   const [destCoords, setDestCoords] = useState<[number, number] | null>(null);
+  const [passengerCancelling, setPassengerCancelling] = useState(false);
+  const rideStateRef = useRef<{ id: string | null; status: string | null }>({ id: null, status: null });
 
   // Ask for notification permission once, register a push token (so we can push
   // "motorista a caminho" even with the app fully closed), and clear any leftover
@@ -116,6 +118,23 @@ const PassengerFlow: React.FC = () => {
     ensureNotificationPermission();
     registerForPushNotifications();
     return () => { clearRideNotification(); };
+  }, []);
+
+  // Restore a live ride after the app is reopened. Without this, a passenger
+  // could be blocked by an active ride but had no screen/action to cancel it.
+  useEffect(() => {
+    let active = true;
+    getActiveRide().then(async (current) => {
+      if (!active || !current) return;
+      setRide(current);
+      setScreen(['driver_on_way', 'driver_arrived', 'in_progress'].includes(current.status) ? 'ride_tracking' : 'ride_matching');
+      const points = await getRidePoints(current.id).catch(() => null);
+      if (active && points) {
+        setOriginCoords([points.originLng, points.originLat]);
+        setDestCoords([points.destLng, points.destLat]);
+      }
+    }).catch(() => {});
+    return () => { active = false; };
   }, []);
 
   // Ongoing "Procurando motorista..." tray notification while searching, so the
@@ -130,8 +149,16 @@ const PassengerFlow: React.FC = () => {
   // Realtime: advance the UI as the ride's status changes server-side.
   useEffect(() => {
     if (!ride || (screen !== 'ride_matching' && screen !== 'ride_tracking')) return;
+    if (rideStateRef.current.id !== ride.id) {
+      rideStateRef.current = { id: ride.id, status: ride.status };
+    }
     const apply = (r: RideRow) => {
+      const changed = rideStateRef.current.id !== r.id || rideStateRef.current.status !== r.status;
+      rideStateRef.current = { id: r.id, status: r.status };
       setRide(r);
+      // Realtime and polling can deliver the same row. Only a real status
+      // transition may play sounds, alert, navigate, or schedule a local notification.
+      if (!changed) return;
       if (['driver_on_way', 'driver_arrived', 'in_progress'].includes(r.status)) {
         if (screen === 'ride_matching') {
           stopSound('searching'); playSound('found');
@@ -271,12 +298,22 @@ const PassengerFlow: React.FC = () => {
     }
   };
 
-  const handleCancel = async () => {
+  const handleCancel = async (reason = 'Passageiro cancelou pelo app') => {
+    if (passengerCancelling) return false;
+    setPassengerCancelling(true);
     clearRideNotification();
     stopSound('searching');
-    try { if (ride) await cancelRide(ride.id); } catch { /* ignore */ }
-    setRide(null);
-    setScreen('passenger_home');
+    try {
+      if (ride) await cancelRide(ride.id, reason);
+      setRide(null);
+      setScreen('passenger_home');
+      return true;
+    } catch (e: any) {
+      Alert.alert('Não foi possível cancelar', friendlyError(e?.message));
+      return false;
+    } finally {
+      setPassengerCancelling(false);
+    }
   };
 
   // No female driver available → passenger chooses to accept a male driver.
@@ -324,7 +361,7 @@ const PassengerFlow: React.FC = () => {
         onAcceptMale={handleAcceptMale}
       />;
     case 'ride_tracking':
-      return <RideTrackingScreen rideId={ride?.id} status={ride?.status} origin={originCoords ?? undefined} destination={destCoords ?? undefined} price={ride?.price} distanceKm={ride?.distance_km} durationMin={ride?.duration_min} destinationAddress={ride?.destination_address} onRideCompleted={() => setScreen('ride_completed')} onPanic={() => Alert.alert('Emergência', 'Deseja ligar para a emergência (190)?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Ligar 190', style: 'destructive', onPress: () => Linking.openURL('tel:190') }])} />;
+      return <RideTrackingScreen rideId={ride?.id} status={ride?.status} origin={originCoords ?? undefined} destination={destCoords ?? undefined} price={ride?.price} distanceKm={ride?.distance_km} durationMin={ride?.duration_min} destinationAddress={ride?.destination_address} onCancel={handleCancel} onRideCompleted={() => setScreen('ride_completed')} onPanic={() => Alert.alert('Emergência', 'Deseja ligar para a emergência (190)?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Ligar 190', style: 'destructive', onPress: () => Linking.openURL('tel:190') }])} />;
     case 'ride_completed':
       return (
         <RideCompletedScreen
@@ -382,12 +419,15 @@ const DriverFlow: React.FC = () => {
   // New ride requests push the driver to the notification screen (when free).
   useEffect(() => {
     const unsub = subscribeSearchingRides((r) => {
-      if (!online || activeRide || rejectedIdsRef.current.has(r.id)) return;
-      setPendingRequest((cur) => cur ?? r);
-      if (screenRef.current === 'driver_home') setScreen('ride_notification');
+      void (async () => {
+        if (!online || activeRide || rejectedIdsRef.current.has(r.id)) return;
+        if (await hasDeclinedRide(r.id)) return;
+        setPendingRequest((cur) => cur ?? r);
+        if (screenRef.current === 'driver_home') setScreen('ride_notification');
+      })().catch(() => {});
     });
     return unsub;
-  }, [online, activeRide]);
+  }, [online, activeRide?.id]);
 
   // Poll fallback: realtime push can be missed (app was backgrounded when the
   // ride was created, a dropped socket, or a female-only ride later relaxed via
@@ -421,11 +461,45 @@ const DriverFlow: React.FC = () => {
     return unsub;
   }, [pendingRequest?.id]);
 
+  // Reconnect to the driver's active ride after a process restart and follow
+  // passenger/admin cancellation while the driver is on the road.
+  useEffect(() => {
+    if (!activeRide) return;
+    let currentStatus = activeRide.status;
+    let currentUpdatedAt = activeRide.updated_at;
+    const apply = (r: RideRow) => {
+      if (r.status === currentStatus && r.updated_at === currentUpdatedAt) return;
+      currentStatus = r.status;
+      currentUpdatedAt = r.updated_at;
+      if (r.status === 'cancelled') {
+        stopSound('request');
+        setActiveRide(null);
+        setScreen('driver_home');
+        Alert.alert('Corrida cancelada', r.cancel_reason || 'O passageiro cancelou a corrida.');
+        return;
+      }
+      setActiveRide(r);
+    };
+    const unsub = subscribeToRide(activeRide.id, apply);
+    const iv = setInterval(async () => {
+      const r = await getRide(activeRide.id);
+      if (r) apply(r);
+    }, 5000);
+    return () => { unsub(); clearInterval(iv); };
+  }, [activeRide?.id]);
+
   // Register for push (ride alerts even with the app closed) and restore the
   // online state if the server still has us online — e.g. reopened from a push.
   useEffect(() => {
     registerForPushNotifications();
-    getMyDriver().then((d) => { if (d?.status === 'online') setOnline(true); }).catch(() => {});
+    Promise.all([getMyDriver(), getActiveRide()]).then(([d, current]) => {
+      if (current?.driver_id && current.driver_id === d?.id) {
+        setActiveRide(current);
+        setScreen('driver_active_ride');
+      } else if (d?.status === 'online') {
+        setOnline(true);
+      }
+    }).catch(() => {});
   }, []);
 
   // Stop the GPS watch when leaving the driver area.
@@ -566,7 +640,10 @@ const DriverFlow: React.FC = () => {
               driverCoords={driverCoords ?? undefined}
               onAccept={handleAccept}
               onReject={() => {
-                if (pendingRequest) rejectedIdsRef.current.add(pendingRequest.id);
+                if (pendingRequest) {
+                  rejectedIdsRef.current.add(pendingRequest.id);
+                  declineRide(pendingRequest.id).catch(() => {});
+                }
                 setPendingRequest(null);
                 setScreen('driver_home');
               }}

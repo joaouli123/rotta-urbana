@@ -60,8 +60,19 @@ export async function getRide(rideId: string): Promise<RideRow | null> {
 
 /** Current active ride for the logged-in user (RLS scopes to passenger or driver). */
 export async function getActiveRide(): Promise<RideRow | null> {
+  // Best-effort cleanup prevents an old searching ride from blocking a new
+  // request after the app has been closed for a while.
+  try {
+    await supabase.rpc('expire_stale_rides', { p_max_age_minutes: 5 });
+  } catch {
+    // Older builds may reach the API before this migration is deployed.
+  }
+  const { data: userData } = await supabase.auth.getUser();
+  const userId = userData.user?.id;
+  if (!userId) return null;
   const { data, error } = await supabase
     .from('rides').select('*').in('status', ACTIVE)
+    .or(`passenger_id.eq.${userId},driver_id.eq.${userId}`)
     .order('requested_at', { ascending: false }).limit(1);
   if (error) throw error;
   return first<RideRow>(data);

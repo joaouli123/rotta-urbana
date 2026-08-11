@@ -45,6 +45,7 @@ import { subscribeMessages, currentUserId } from '../../services/chat';
 
 interface RideTrackingScreenProps {
   onRideCompleted: () => void;
+  onCancel: (reason?: string) => Promise<boolean> | void;
   onPanic: () => void;
   origin?: [number, number];
   destination?: [number, number];
@@ -79,7 +80,15 @@ const REPORT_REASONS = [
   'Outro motivo',
 ];
 
-const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted, onPanic, origin, destination, rideId, status, price, distanceKm, durationMin, destinationAddress }) => {
+const CANCEL_REASONS = [
+  'Desisti da corrida',
+  'Motorista demorou muito',
+  'Encontrei outro transporte',
+  'Preciso alterar o destino',
+  'Outro motivo',
+];
+
+const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted, onCancel, onPanic, origin, destination, rideId, status, price, distanceKm, durationMin, destinationAddress }) => {
   const insets = useSafeAreaInsets();
   const [rideStatus, setRideStatus] = useState<RideStatus>('on_way');
   const [route, setRoute] = useState<{ type: 'LineString'; coordinates: [number, number][] } | null>(null);
@@ -148,6 +157,10 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
   const [selectedReason, setSelectedReason] = useState('');
   const [reportSent, setReportSent] = useState(false);
   const [reportSending, setReportSending] = useState(false);
+  const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState('');
+  const [cancelDescription, setCancelDescription] = useState('');
+  const [cancelling, setCancelling] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const chatOpenRef = useRef(false);
   chatOpenRef.current = chatOpen;
@@ -196,6 +209,21 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
       Alert.alert('Erro ao enviar', e?.message ?? 'Não foi possível registrar a denúncia. Tente novamente.');
     } finally {
       setReportSending(false);
+    }
+  };
+
+  const confirmCancel = async () => {
+    if (!cancelReason || !cancelDescription.trim() || cancelling) return;
+    setCancelling(true);
+    try {
+      const result = await onCancel(`[${cancelReason}] ${cancelDescription.trim()}`);
+      if (result !== false) {
+        setCancelOpen(false);
+        setCancelReason('');
+        setCancelDescription('');
+      }
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -312,12 +340,68 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
           </View>
         )}
 
+        {rideId && (
+          <TouchableOpacity style={styles.cancelRideBtn} onPress={() => setCancelOpen(true)} activeOpacity={0.8}>
+            <X size={15} color={Colors.danger} />
+            <Text style={styles.cancelRideTxt}>Cancelar corrida</Text>
+          </TouchableOpacity>
+        )}
+
       </View>
 
       {/* ── CHAT (in-app, realtime) ───────────────────────────── */}
       <ChatModal visible={chatOpen} onClose={() => setChatOpen(false)} rideId={rideId} title={driverName} />
 
       {/* ── REPORT MODAL ──────────────────────────────────────── */}
+      <Modal visible={cancelOpen} animationType="slide" transparent statusBarTranslucent>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalWrap}>
+          <View style={styles.modalOverlay} />
+          <View style={[styles.cancelSheet, { paddingBottom: insets.bottom + 16 }]}>
+            <View style={styles.reportHeader}>
+              <Text style={styles.reportTitle}>Cancelar corrida</Text>
+              <TouchableOpacity onPress={() => setCancelOpen(false)} disabled={cancelling} style={styles.closeBtn}>
+                <X size={20} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.cancelWarning}>
+              <AlertTriangle size={16} color={Colors.warning} />
+              <Text style={styles.cancelWarningTxt}>O cancelamento será registrado no histórico da corrida.</Text>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false} style={{ maxHeight: 300 }}>
+              <Text style={styles.reportSub}>Por que você quer cancelar?</Text>
+              {CANCEL_REASONS.map((reason) => (
+                <TouchableOpacity key={reason} style={[styles.reasonItem, cancelReason === reason && styles.reasonSelected]} onPress={() => setCancelReason(reason)}>
+                  <View style={[styles.reasonRadio, cancelReason === reason && styles.reasonRadioFilled]} />
+                  <Text style={[styles.reasonTxt, cancelReason === reason && { color: Colors.danger, fontFamily: 'Poppins_600SemiBold' }]}>{reason}</Text>
+                </TouchableOpacity>
+              ))}
+              <Text style={[styles.reportSub, { marginTop: 14 }]}>Detalhe o motivo *</Text>
+              <TextInput
+                style={styles.cancelInput}
+                placeholder="Explique brevemente..."
+                placeholderTextColor={Colors.textMuted}
+                value={cancelDescription}
+                onChangeText={setCancelDescription}
+                multiline
+                maxLength={300}
+              />
+            </ScrollView>
+            <View style={styles.cancelActions}>
+              <TouchableOpacity style={styles.dismissCancelBtn} onPress={() => setCancelOpen(false)} disabled={cancelling}>
+                <Text style={styles.dismissCancelTxt}>Voltar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.confirmCancelBtn, (!cancelReason || !cancelDescription.trim() || cancelling) && styles.confirmCancelDisabled]}
+                onPress={confirmCancel}
+                disabled={!cancelReason || !cancelDescription.trim() || cancelling}
+              >
+                <Text style={styles.confirmCancelTxt}>{cancelling ? 'Cancelando...' : 'Confirmar cancelamento'}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
+
       <Modal visible={reportOpen} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <View style={styles.reportSheet}>
@@ -597,6 +681,12 @@ const styles = StyleSheet.create({
   tripStatVal: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
   tripStatLbl: { fontSize: 10, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 1 },
   tripStatDiv: { width: 1, height: 24, backgroundColor: Colors.border },
+  cancelRideBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    paddingVertical: 11, marginTop: 10, borderRadius: Radius.md,
+    borderWidth: 1, borderColor: Colors.danger + '35', backgroundColor: Colors.danger + '08',
+  },
+  cancelRideTxt: { fontSize: 13, fontFamily: 'Poppins_600SemiBold', color: Colors.danger },
 
   simulateBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
@@ -605,6 +695,7 @@ const styles = StyleSheet.create({
   simulateTxt: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: Colors.textMuted },
 
   // ── Modals ──────────────────────────────────────────────────
+  modalWrap: { flex: 1, justifyContent: 'flex-end' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'flex-end' },
 
   // Chat
@@ -651,6 +742,27 @@ const styles = StyleSheet.create({
   reportHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: Colors.border },
   reportTitle: { fontSize: 17, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
   reportSub: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary, marginTop: 12, marginBottom: 8 },
+  cancelSheet: {
+    backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 20, paddingTop: 4, maxHeight: '82%',
+  },
+  cancelWarning: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    backgroundColor: Colors.warning + '12', borderRadius: Radius.md,
+    padding: 11, marginTop: 12,
+  },
+  cancelWarningTxt: { flex: 1, fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary },
+  cancelInput: {
+    minHeight: 82, borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md,
+    padding: 12, fontSize: 13, fontFamily: 'Poppins_400Regular', color: Colors.textPrimary,
+    textAlignVertical: 'top', marginBottom: 4,
+  },
+  cancelActions: { flexDirection: 'row', gap: 10, marginTop: 14 },
+  dismissCancelBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 13, borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border },
+  dismissCancelTxt: { fontSize: 13, fontFamily: 'Poppins_600SemiBold', color: Colors.textSecondary },
+  confirmCancelBtn: { flex: 2, alignItems: 'center', justifyContent: 'center', paddingVertical: 13, borderRadius: Radius.md, backgroundColor: Colors.danger },
+  confirmCancelDisabled: { opacity: 0.45 },
+  confirmCancelTxt: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: '#FFF' },
   reasonItem: {
     flexDirection: 'row', alignItems: 'center', gap: 12,
     paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: Colors.borderLight,

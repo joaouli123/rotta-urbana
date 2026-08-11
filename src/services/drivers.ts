@@ -78,11 +78,22 @@ export async function nearbyDrivers(lat: number, lng: number, radiusM = 5000): P
 
 /** Open ride requests a verified driver can accept (RLS gates this to drivers). */
 export async function getSearchingRides(): Promise<RideRow[]> {
-  const { data, error } = await supabase
-    .from('rides').select('*').eq('status', 'searching')
-    .order('requested_at', { ascending: true }).limit(20);
+  const { data, error } = await supabase.rpc('get_searching_rides', { p_limit: 20 });
   if (error) throw error;
   return (data as RideRow[]) ?? [];
+}
+
+/** Persist a driver's decision so a declined request never reappears. */
+export async function declineRide(rideId: string): Promise<void> {
+  const { error } = await supabase.rpc('decline_ride', { p_ride_id: rideId });
+  if (error) throw error;
+}
+
+/** Realtime is broadcast to all drivers; filter out requests declined before. */
+export async function hasDeclinedRide(rideId: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('has_declined_ride', { p_ride_id: rideId });
+  if (error) return false;
+  return data === true;
 }
 
 /** Realtime feed of new ride requests for drivers. */

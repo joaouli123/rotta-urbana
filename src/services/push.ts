@@ -7,14 +7,20 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 import { supabase } from '../lib/supabase';
 
-// Show the alert + play sound even when the app is foregrounded.
+// Remote ride pushes are useful when the app is backgrounded. When the app is
+// already open, the ride card/realtime flow is the source of truth; showing the
+// remote push as well would produce a duplicate alert and sound.
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldPlaySound: true,
+  handleNotification: async (notification) => {
+    const type = notification.request.content.data?.type;
+    const isRideFlow = type === 'new_ride' || type === 'ride_accepted';
+    return {
+    shouldPlaySound: !isRideFlow,
     shouldSetBadge: false,
-    shouldShowBanner: true,
-    shouldShowList: true,
-  }),
+    shouldShowBanner: !isRideFlow,
+    shouldShowList: !isRideFlow,
+    };
+  },
 });
 
 function resolveProjectId(): string | undefined {
