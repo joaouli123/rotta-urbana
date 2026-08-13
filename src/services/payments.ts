@@ -4,6 +4,11 @@ import type { PaymentRow, SubscriptionRow, AppSettings } from '../types/db';
 
 export type PlanType = 'commission' | 'daily' | 'weekly' | 'monthly';
 
+export function isSubscriptionCurrent(subscription: SubscriptionRow | null | undefined): boolean {
+  if (!subscription || subscription.status !== 'active' || !subscription.due_date) return false;
+  return String(subscription.due_date).slice(0, 10) >= new Date().toISOString().slice(0, 10);
+}
+
 const PAYMENTS_API = (process.env.EXPO_PUBLIC_API_URL || 'https://rottaurbana.com.br').replace(/\/$/, '');
 
 export interface SubscriptionCheckout {

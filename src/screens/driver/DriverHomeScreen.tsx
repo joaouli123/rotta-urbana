@@ -85,14 +85,16 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
   const rating = profile?.rating ?? 5;
 
   // Subscription status: derive badge from real status + due date.
-  const subActive = sub?.status === 'active';
+  const subActive = sub?.status === 'active' && !!sub?.due_date && String(sub.due_date).slice(0, 10) >= new Date().toISOString().slice(0, 10);
   const subDue = sub?.due_date ? new Date(sub.due_date) : null;
   const subOverdue = subDue ? subDue < new Date() && !subActive : sub?.status === 'expired';
   const subBadge = subOverdue
     ? { label: 'Vencida', variant: 'danger' as const }
     : sub?.status === 'suspended'
       ? { label: 'Suspensa', variant: 'warning' as const }
-      : { label: subActive ? 'Em dia' : '—', variant: 'success' as const };
+      : sub?.status === 'pending'
+        ? { label: 'Pendente', variant: 'warning' as const }
+        : { label: subActive ? 'Em dia' : '—', variant: 'success' as const };
 
   return (
     <View style={styles.container}>

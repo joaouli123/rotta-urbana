@@ -20,6 +20,7 @@ const FIXED_PLANS = new Set(Object.keys(PLAN_DAYS));
 const localStatusFromProvider = (status) => {
   const normalized = String(status || '').toLowerCase();
   if (normalized === 'authorized' || normalized === 'active') return 'active';
+  if (['pending', 'paused_pending', 'in_process'].includes(normalized)) return 'pending';
   if (normalized === 'paused') return 'suspended';
   return 'expired';
 };
@@ -48,6 +49,26 @@ function dateOnly(value, fallbackDays = 30) {
   const date = value ? new Date(value) : null;
   if (date && !Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
   return new Date(Date.now() + fallbackDays * 864e5).toISOString().slice(0, 10);
+}
+
+function dateOnlyOrNull(value) {
+  const date = value ? new Date(value) : null;
+  return date && !Number.isNaN(date.getTime()) ? date.toISOString().slice(0, 10) : null;
+}
+
+function planDays(plan) { return PLAN_DAYS[plan] || 30; }
+
+function dueDateForProvider(provider, existing, plan, providerStatus) {
+  const normalized = String(providerStatus || '').toLowerCase();
+  const providerDue = dateOnlyOrNull(provider?.next_payment_date);
+  const existingDue = dateOnlyOrNull(existing?.due_date);
+  if (normalized === 'authorized' || normalized === 'active') {
+    return providerDue || existingDue || dateOnly(null, planDays(plan));
+  }
+  // Pending/cancelled/paused subscriptions never grant access. Keeping a
+  // historical due date is useful for the admin ledger, but the status itself
+  // is what blocks access in the database.
+  return existingDue || new Date().toISOString().slice(0, 10);
 }
 
 function dateTime(value) {
@@ -127,7 +148,7 @@ async function syncSubscription(admin, provider, existing, driverId) {
     plan,
     amount: Number.isFinite(amount) ? amount : Number(existing?.amount || 0),
     status: localStatusFromProvider(providerStatus),
-    due_date: dateOnly(provider?.next_payment_date, PLAN_DAYS[plan]),
+    due_date: dueDateForProvider(provider, existing, plan, providerStatus),
     provider: 'mercadopago',
     provider_subscription_id: String(provider.id),
     provider_status: providerStatus,
@@ -140,9 +161,39 @@ async function syncSubscription(admin, provider, existing, driverId) {
       init_point: provider.init_point || existing?.provider_metadata?.init_point || null,
       sandbox_init_point: provider.sandbox_init_point || existing?.provider_metadata?.sandbox_init_point || null,
     },
+    paid_at: existing?.paid_at || null,
   }, { onConflict: 'driver_id' }).select('*').single();
   if (error) throw error;
   return data;
+}
+
+export async function syncSubscriptionForDriver(admin, driverId) {
+  const local = await getSubscription(admin, driverId);
+  if (!local?.provider_subscription_id) return local;
+  const provider = await getPreapproval(local.provider_subscription_id);
+  return syncSubscription(admin, provider, local, driverId);
+}
+
+export async function expireOverdueSubscriptions(admin) {
+  const { error } = await admin.rpc('expire_overdue_subscriptions');
+  if (error) throw error;
+}
+
+async function saveProviderPayment(admin, row, lookupColumn, lookupValue) {
+  const { data: existing } = await admin.from('payments').select('id,status,paid_at')
+    .eq('provider', 'mercadopago').eq(lookupColumn, String(lookupValue)).maybeSingle();
+  const nextRow = {
+    ...row,
+    paid_at: row.status === 'approved' ? (existing?.paid_at || new Date().toISOString()) : (existing?.paid_at || null),
+  };
+  if (existing?.id) {
+    const { error } = await admin.from('payments').update(nextRow).eq('id', existing.id);
+    if (error) throw error;
+    return { id: existing.id, wasApproved: existing.status === 'approved' };
+  }
+  const { data: inserted, error } = await admin.from('payments').insert(nextRow).select('id,status').single();
+  if (error) throw error;
+  return { id: inserted.id, wasApproved: false };
 }
 
 async function applyPreapprovalWebhook(admin, provider) {
@@ -187,19 +238,23 @@ async function applyAuthorizedPaymentWebhook(admin, provider) {
       summarized: provider.summarized || null,
     },
   };
-  const { data: existing } = await admin.from('payments').select('id').eq('provider', 'mercadopago')
-    .eq('provider_authorized_payment_id', String(provider.id)).maybeSingle();
-  if (existing?.id) await admin.from('payments').update(row).eq('id', existing.id);
-  else await admin.from('payments').insert(row);
+  const saved = await saveProviderPayment(admin, row, 'provider_authorized_payment_id', provider.id);
 
-  if (status === 'approved') {
-    const nextDate = local.next_payment_at && new Date(local.next_payment_at) > new Date()
-      ? new Date(local.next_payment_at).toISOString().slice(0, 10)
-      : dateOnly(null, PLAN_DAYS[local.plan] || 30);
-    await admin.from('subscriptions').update({
-      status: 'active', paid_at: row.paid_at, due_date: nextDate,
-      provider_last_synced_at: new Date().toISOString(),
-    }).eq('id', local.id);
+  if (status === 'approved' && !saved.wasApproved) {
+    const providerNextDate = dateOnlyOrNull(local.next_payment_at);
+    if (providerNextDate && providerNextDate >= new Date().toISOString().slice(0, 10)) {
+      const { error } = await admin.from('subscriptions').update({
+        status: 'active', due_date: providerNextDate, paid_at: row.paid_at,
+        provider_last_synced_at: new Date().toISOString(),
+      }).eq('id', local.id);
+      if (error) throw error;
+    } else {
+      const { error } = await admin.rpc('confirm_payment', {
+        p_payment_id: saved.id,
+        p_provider_payment_id: payment.id ? String(payment.id) : null,
+      });
+      if (error) throw error;
+    }
   }
   return { driverId, paymentStatus: status };
 }
@@ -228,20 +283,36 @@ async function applyPaymentWebhook(admin, provider) {
     paid_at: status === 'approved' ? new Date().toISOString() : null,
     provider_metadata: safeProviderMetadata(provider),
   };
-  const { data: existing } = await admin.from('payments').select('id').eq('provider', 'mercadopago')
-    .eq('provider_payment_id', String(provider.id)).maybeSingle();
-  if (existing?.id) await admin.from('payments').update(row).eq('id', existing.id);
-  else await admin.from('payments').insert(row);
-  if (status === 'approved' && local) {
-    await admin.from('subscriptions').update({
-      status: 'active', due_date: dateOnly(null, PLAN_DAYS[local.plan] || 30), paid_at: row.paid_at,
-    }).eq('id', local.id);
+  const saved = await saveProviderPayment(admin, row, 'provider_payment_id', provider.id);
+  if (status === 'approved' && local && !saved.wasApproved) {
+    const { error } = await admin.rpc('confirm_payment', {
+      p_payment_id: saved.id,
+      p_provider_payment_id: String(provider.id),
+    });
+    if (error) throw error;
   }
   return { driverId, paymentStatus: status };
 }
 
+export async function syncPaymentForAdmin(admin, paymentId) {
+  const { data: row, error } = await admin.from('payments').select('provider_payment_id,provider_authorized_payment_id').eq('id', paymentId).maybeSingle();
+  if (error) throw error;
+  if (!row) throw new MercadoPagoError('Pagamento não encontrado.', 404);
+  if (row.provider_authorized_payment_id) {
+    return applyAuthorizedPaymentWebhook(admin, await getAuthorizedPayment(row.provider_authorized_payment_id));
+  }
+  if (row.provider_payment_id) {
+    return applyPaymentWebhook(admin, await getPayment(row.provider_payment_id));
+  }
+  throw new MercadoPagoError('Este pagamento não possui identificador do Mercado Pago.', 400);
+}
+
 export function registerMercadoPagoRoutes({ app, admin, isProd }) {
   const requireDriver = bearerMiddleware(admin);
+
+  // Reconcile rows left overdue while the service was asleep. This is best
+  // effort at boot; every payment/status webhook also remains idempotent.
+  void expireOverdueSubscriptions(admin).catch((error) => console.warn('[MercadoPago] overdue reconciliation:', error.message));
 
   app.get('/pagamento/retorno', (_req, res) => res.status(200).send(`<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Pagamento Rotta Urbana</title><body style="font-family:Arial,sans-serif;padding:40px;max-width:680px;margin:auto"><h1>Pagamento recebido</h1><p>Volte ao aplicativo para acompanhar a confirmação. A assinatura é atualizada automaticamente pelo Mercado Pago.</p></body></html>`));
 

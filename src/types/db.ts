@@ -6,7 +6,7 @@ export type RideStatusDb =
   | 'in_progress' | 'completed' | 'cancelled';
 export type RideTypeDb = 'economy' | 'comfort' | 'premium' | 'moto';
 export type PaymentMethodDb = 'pix' | 'card' | 'boleto' | 'cash';
-export type SubscriptionStatus = 'active' | 'expired' | 'suspended';
+export type SubscriptionStatus = 'pending' | 'active' | 'expired' | 'suspended';
 export type Gender = 'female' | 'male' | 'other';
 
 export interface ProfileRow {

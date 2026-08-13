@@ -81,6 +81,7 @@ const PLAN_LABELS: Record<PlanType, string> = {
 };
 
 const STATUS_CONFIG: Record<string, { label: string; color: string; Icon: React.ElementType }> = {
+  pending:   { label: 'Aguardando pagamento', color: Colors.warning, Icon: Clock },
   active:    { label: 'Ativo',    color: Colors.success, Icon: CheckCircle },
   expired:   { label: 'Vencido', color: Colors.danger,  Icon: AlertCircle },
   suspended: { label: 'Suspenso',color: Colors.warning,  Icon: Clock },
@@ -181,7 +182,9 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   };
 
   // ── Status card helpers ──────────────────────────────────────────────────────
-  const stKey   = sub?.status ?? 'inactive';
+  const stKey   = sub?.status === 'active' && sub?.due_date && String(sub.due_date).slice(0, 10) < new Date().toISOString().slice(0, 10)
+    ? 'expired'
+    : (sub?.status ?? 'inactive');
   const stConf  = STATUS_CONFIG[stKey] ?? STATUS_CONFIG.inactive;
   const days    = daysUntil(sub?.due_date);
   const isOverdue  = days !== null && days < 0;

@@ -12,7 +12,7 @@ import { getSearchingRides, subscribeSearchingRides, declineRide, hasDeclinedRid
 import { playSound, stopSound } from '../lib/sounds';
 import { registerForPushNotifications, clearPushToken } from '../services/push';
 import { showSearchingNotification, showDriverFoundNotification, clearRideNotification, ensureNotificationPermission } from '../services/localNotifications';
-import { selectPlan, createSubscriptionCheckout, buildRideFarePix } from '../services/payments';
+import { selectPlan, createSubscriptionCheckout, buildRideFarePix, getSubscription, syncSubscriptionStatus, isSubscriptionCurrent } from '../services/payments';
 import { friendlyError } from '../lib/errors';
 
 // Auth
@@ -68,6 +68,19 @@ const Loading: React.FC<{ message?: string }> = ({ message = 'Carregando...' }) 
   <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors.background, padding: 24 }}>
     <ActivityIndicator size="large" color={Colors.primary} />
     <Text style={bootStyles.loadingText}>{message}</Text>
+  </View>
+);
+
+const SubscriptionBlockedScreen: React.FC<{ onOpen: () => void; onLogout: () => void }> = ({ onOpen, onLogout }) => (
+  <View style={bootStyles.container}>
+    <Text style={bootStyles.title}>Assinatura necessária</Text>
+    <Text style={bootStyles.message}>A assinatura está pendente, vencida ou suspensa. Regularize o pagamento para ficar online, receber corridas e acessar os recursos de trabalho.</Text>
+    <TouchableOpacity style={bootStyles.primaryButton} onPress={onOpen} activeOpacity={0.85}>
+      <Text style={bootStyles.primaryButtonText}>Ver assinatura e pagar</Text>
+    </TouchableOpacity>
+    <TouchableOpacity style={bootStyles.secondaryButton} onPress={onLogout} activeOpacity={0.75}>
+      <Text style={bootStyles.secondaryButtonText}>Sair da conta</Text>
+    </TouchableOpacity>
   </View>
 );
 
@@ -433,6 +446,7 @@ const DriverFlow: React.FC = () => {
   const [pendingRequest, setPendingRequest] = useState<RideRow | null>(null);
   const [activeRide, setActiveRide] = useState<RideRow | null>(null);
   const [ratingRide, setRatingRide] = useState<RideRow | null>(null);
+  const [subscriptionAccess, setSubscriptionAccess] = useState<'loading' | 'active' | 'blocked'>('loading');
   const [activePoints, setActivePoints] = useState<{ origin: [number, number]; dest: [number, number] } | null>(null);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
   const screenRef = useRef(screen);
@@ -440,6 +454,28 @@ const DriverFlow: React.FC = () => {
   // Rides this driver has already declined — kept out of the poll/realtime
   // feed so a decline doesn't keep resurfacing the same ride every few seconds.
   const rejectedIdsRef = useRef<Set<string>>(new Set());
+
+  const refreshSubscriptionAccess = useCallback(async (): Promise<boolean> => {
+    const loaded = await getSubscription();
+    const current = loaded?.provider_subscription_id
+      ? await syncSubscriptionStatus().catch(() => loaded)
+      : loaded;
+    setSubscriptionAccess(isSubscriptionCurrent(current) ? 'active' : 'blocked');
+    if (!isSubscriptionCurrent(current)) {
+      watchRef.current?.remove();
+      watchRef.current = null;
+      setOnline(false);
+      setPendingRequest(null);
+      await setStatus('offline').catch(() => {});
+    }
+    return isSubscriptionCurrent(current);
+  }, []);
+
+  useEffect(() => {
+    refreshSubscriptionAccess().catch(() => setSubscriptionAccess('blocked'));
+    const iv = setInterval(() => { refreshSubscriptionAccess().catch(() => {}); }, 60_000);
+    return () => clearInterval(iv);
+  }, [refreshSubscriptionAccess]);
 
   // New ride requests push the driver to the notification screen (when free).
   useEffect(() => {
@@ -631,6 +667,10 @@ const DriverFlow: React.FC = () => {
   };
 
   const openMenu = () => setScreen('driver_profile');
+  const closeSubscription = async () => {
+    const current = await refreshSubscriptionAccess().catch(() => false);
+    setScreen(current ? 'driver_profile' : 'driver_subscription');
+  };
 
   if (planType === 'loading') return <Loading message="Carregando sua conta de motorista..." />;
   if (planType === null) {
@@ -641,6 +681,10 @@ const DriverFlow: React.FC = () => {
         }}
       />
     );
+  }
+  if (subscriptionAccess === 'loading') return <Loading message="Verificando a assinatura..." />;
+  if (subscriptionAccess === 'blocked' && !activeRide && !ratingRide && screen !== 'driver_subscription') {
+    return <SubscriptionBlockedScreen onOpen={() => setScreen('driver_subscription')} onLogout={handleLogout} />;
   }
 
   switch (screen) {
@@ -719,7 +763,7 @@ const DriverFlow: React.FC = () => {
     case 'driver_rides':
       return <DriverRidesScreen onBack={() => setScreen('driver_profile')} />;
     case 'driver_subscription':
-      return <DriverSubscriptionScreen onBack={() => setScreen('driver_profile')} />;
+      return <DriverSubscriptionScreen onBack={closeSubscription} />;
     case 'driver_ratings':
       return <DriverRatingsScreen onBack={() => setScreen('driver_profile')} />;
     default:

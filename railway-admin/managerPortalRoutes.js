@@ -13,6 +13,11 @@ const scopeLabel = (manager) => manager.manager_type === 'network'
   ? 'Toda a rede'
   : manager.cities?.map((city) => `${city.city}${city.state ? `/${city.state}` : ''}`).join(', ') || 'Cidades e vínculos diretos';
 
+const effectiveSubscriptionStatus = (subscription) => {
+  if (!subscription) return 'pending';
+  if (subscription.status === 'active' && subscription.due_date && String(subscription.due_date).slice(0, 10) < new Date().toISOString().slice(0, 10)) return 'expired';
+  return subscription.status || 'pending';
+};
 const managerKpi = (label, value, detail = '') => `<div class="kpi"><div class="kpi-val">${esc(value)}</div><div class="kpi-lbl">${esc(label)}</div>${detail ? `<div class="kpi-sub">${esc(detail)}</div>` : ''}</div>`;
 const card = (title, content, extra = '') => `<section class="card"><h2>${esc(title)}</h2>${extra}${content}</section>`;
 const managerContext = (req, portal) => ({
@@ -241,6 +246,21 @@ export function registerManagerPortalRoutes({ managerRouter, requireManagerAuth,
     const rows = driverRows(portal.drivers, stats, query);
     const body = `${req.query.ok ? '<div class="ok">Dados do motorista atualizados com sucesso.</div>' : ''}${req.query.error ? `<div class="err">${esc(req.query.error)}</div>` : ''}<div class="notice"><strong>${portal.drivers.length} motorista(s) dentro do seu escopo.</strong> Esta lista é atualizada diretamente do cadastro e mostra status, verificação, veículo e desempenho recente. O gerente pode editar dados cadastrais e veículo, mas não permissões, aprovação ou vínculo.</div><div class="card"><form method="get" action="/drivers" style="display:flex;gap:10px;margin-bottom:18px"><input name="q" value="${esc(query)}" placeholder="Buscar nome, e-mail, cidade ou placa..."><button class="act" type="submit">Buscar</button></form>${table(['Motorista', 'Contato / cidade', 'Veículo', 'Status / verificação', 'Desempenho', 'Ações'], rows)}</div>`;
     render(res, managerLayout({ title: 'Motoristas', active: '/drivers', ...managerContext(req, portal), body }));
+  });
+
+  managerRouter.get('/subscriptions', requireManagerAuth, async (req, res) => {
+    const portal = await getPortal(req, res, render, '/subscriptions', 'Assinaturas da rede', admin);
+    if (!portal) return;
+    const rows = portal.drivers.slice().sort((a, b) => driverName(a).localeCompare(driverName(b), 'pt-BR')).map((driver) => [
+      `<strong>${esc(driverName(driver))}</strong><br><small class="muted">${esc(driver.profile?.email || '')}</small>`,
+      esc(driverCity(driver)), badge(effectiveSubscriptionStatus(driver.subscription)), brl(driver.subscription?.amount || 0), esc(driver.subscription?.due_date || '—'),
+      esc(driver.subscription?.provider_status || '—'), driver.subscription?.paid_at ? fmtDate(driver.subscription.paid_at) : '—',
+    ]);
+    const current = portal.drivers.filter((driver) => effectiveSubscriptionStatus(driver.subscription) === 'active').length;
+    const pending = portal.drivers.filter((driver) => effectiveSubscriptionStatus(driver.subscription) === 'pending').length;
+    const expired = portal.drivers.filter((driver) => effectiveSubscriptionStatus(driver.subscription) === 'expired').length;
+    const body = `<div class="notice"><strong>VisÃ£o somente leitura.</strong> Esta pÃ¡gina mostra as assinaturas dos motoristas que pertencem ao seu escopo. AlteraÃ§Ãµes financeiras, sincronizaÃ§Ã£o e liberaÃ§Ãµes continuam exclusivas do administrador.</div><div class="grid">${managerKpi('Assinaturas ativas', current)}${managerKpi('Pendentes', pending)}${managerKpi('Vencidas', expired)}</div>${card('Assinaturas dos motoristas da rede', table(['Motorista', 'Cidade', 'Status', 'Valor', 'Vencimento', 'Mercado Pago', 'Pago em'], rows))}`;
+    render(res, managerLayout({ title: 'Assinaturas da rede', active: '/subscriptions', ...managerContext(req, portal), body }));
   });
 
   managerRouter.get('/users', requireManagerAuth, async (req, res) => {

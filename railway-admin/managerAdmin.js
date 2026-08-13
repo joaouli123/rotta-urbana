@@ -39,7 +39,7 @@ const driverCity = (driver) => driver.operating_city || driver.profile?.address_
 export const citiesToInput = (cities = []) => cities.map((item) => `${item.city}${item.state ? `|${item.state}` : ''}`).join(', ');
 
 export async function loadManagerWorkspace(admin) {
-  const [managersResult, profilesResult, driversResult, vehiclesResult, citiesResult, linksResult, auditResult, ridesResult] = await Promise.all([
+  const [managersResult, profilesResult, driversResult, vehiclesResult, citiesResult, linksResult, auditResult, ridesResult, subscriptionsResult] = await Promise.all([
     admin.from('managers').select('*').order('created_at', { ascending: false }),
     admin.from('profiles').select('*'),
     admin.from('drivers').select('*'),
@@ -48,6 +48,7 @@ export async function loadManagerWorkspace(admin) {
     admin.from('manager_drivers').select('*'),
     admin.from('manager_audit_log').select('*').order('created_at', { ascending: false }).limit(2000),
     admin.from('rides').select('driver_id,passenger_id,status,price,requested_at').gte('requested_at', new Date(Date.now() - 30 * 864e5).toISOString()).limit(10000),
+    admin.from('subscriptions').select('*'),
   ]);
 
   const managersRaw = throwOnError(managersResult, 'Gerentes');
@@ -58,6 +59,7 @@ export async function loadManagerWorkspace(admin) {
   const links = throwOnError(linksResult, 'Vínculos dos gerentes');
   const audits = throwOnError(auditResult, 'Auditoria dos gerentes');
   const rides = throwOnError(ridesResult, 'Corridas');
+  const subscriptions = throwOnError(subscriptionsResult, 'Assinaturas');
 
   const profileMap = Object.fromEntries(profiles.map((profile) => [profile.id, profile]));
   const vehicleMap = {};
@@ -70,6 +72,8 @@ export async function loadManagerWorkspace(admin) {
     profile: profileMap[driver.id] || {},
     vehicle: (vehicleMap[driver.id] || []).sort((a, b) => Number(b.is_primary) - Number(a.is_primary))[0] || {},
   }));
+  const subscriptionMap = Object.fromEntries(subscriptions.map((subscription) => [subscription.driver_id, subscription]));
+  for (const driver of drivers) driver.subscription = subscriptionMap[driver.id] || null;
   const driverMap = Object.fromEntries(drivers.map((driver) => [driver.id, driver]));
   const citiesMap = {};
   for (const city of cities.filter((item) => item.is_active !== false)) {
@@ -142,7 +146,7 @@ export async function loadManagerWorkspace(admin) {
     rides30d: rides.length,
   };
 
-  return { managers, drivers, profiles, rides, summary };
+  return { managers, drivers, profiles, rides, subscriptions, summary };
 }
 
 export async function loadManagerPortal(admin, profileId) {

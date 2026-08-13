@@ -7,7 +7,7 @@ import { privacyPolicyPage, deleteAccountPage } from './policies.js';
 import * as emailService from './emailService.js';
 import { registerManagerRoutes } from './managerRoutes.js';
 import { registerManagerPortalRoutes } from './managerPortalRoutes.js';
-import { registerMercadoPagoRoutes } from './paymentRoutes.js';
+import { expireOverdueSubscriptions, registerMercadoPagoRoutes, syncPaymentForAdmin, syncSubscriptionForDriver } from './paymentRoutes.js';
 import { loadUserBundle, resetUserPassword, updateDriverProfile, updateUserProfile } from './userAdmin.js';
 
 const {
@@ -63,7 +63,7 @@ if (!/^[a-z0-9][a-z0-9-]{10,63}$/.test(MANAGER_PANEL_SLUG)) {
 }
 const MANAGER_BASE_PATH = '/' + MANAGER_PANEL_SLUG;
 const ADMIN_ROUTE_PREFIXES = ['/admin', '/login', '/logout', '/users', '/drivers', '/managers', '/rides', '/subscriptions', '/payments', '/leads', '/support', '/settings'];
-const MANAGER_ROUTE_PREFIXES = ['/login', '/logout', '/drivers', '/users', '/rides', '/reports', '/support'];
+const MANAGER_ROUTE_PREFIXES = ['/login', '/logout', '/drivers', '/users', '/rides', '/reports', '/support', '/subscriptions'];
 const adminPath = (value = '') => {
   const raw = String(value || '');
   const match = raw.match(/^([^?#]*)(.*)$/);
@@ -151,6 +151,19 @@ managerRouter.use((req, res, next) => {
   next();
 });
 const render = (res, html) => res.set('Content-Type', 'text/html; charset=utf-8').send(html);
+
+const SUBSCRIPTION_PLAN_DAYS = { daily: 1, weekly: 7, monthly: 30 };
+const SUBSCRIPTION_PLAN_LABELS = {
+  commission: 'Por corrida', daily: 'Diária', weekly: 'Semanal', monthly: 'Mensal',
+};
+const todayIso = () => new Date().toISOString().slice(0, 10);
+const effectiveSubscriptionStatus = (subscription) => {
+  if (!subscription) return 'pending';
+  if (subscription.status === 'active' && subscription.due_date && String(subscription.due_date).slice(0, 10) < todayIso()) return 'expired';
+  return subscription.status || 'pending';
+};
+const planLabel = (plan) => SUBSCRIPTION_PLAN_LABELS[plan] || plan || 'Não definido';
+const safeActionError = (error) => encodeURIComponent(error?.message || 'Não foi possível concluir a ação.');
 
 // ─── Auth ─────────────────────────────────────────────────────────────────
 adminRouter.get('/login', (req, res) => render(res, loginPage()));
@@ -912,15 +925,16 @@ adminRouter.get('/drivers/:id/plan', requireAuth, async (req, res) => {
           <div>
             <label>Selecione o Plano</label>
             <select name="plan" style="font-weight:600;">
-              <option value="eco" ${s.plan === 'eco' ? 'selected' : ''}>ECO Flex (${set.commission_pct ?? 15}% por corrida)</option>
-              <option value="smart" ${s.plan === 'smart' ? 'selected' : ''}>Rotta Smart (R$ ${Number(set.subscription_daily_amount || 3).toFixed(2)} por corrida)</option>
-              <option value="pro" ${s.plan === 'pro' ? 'selected' : ''}>Rotta Pro (Semanal - R$ ${Number(set.plan_weekly_price || 12.5).toFixed(2)})</option>
-              <option value="vip" ${s.plan === 'vip' || !s.plan ? 'selected' : ''}>Rotta VIP (Mensal - R$ ${Number(set.subscription_monthly_amount || 49.9).toFixed(2)})</option>
+              <option value="commission" ${s.plan === 'commission' ? 'selected' : ''}>Por corrida (${set.commission_pct ?? 15}% por corrida)</option>
+              <option value="daily" ${s.plan === 'daily' ? 'selected' : ''}>Diária (R$ ${Number(set.plan_daily_price ?? set.subscription_daily_amount ?? 3).toFixed(2)})</option>
+              <option value="weekly" ${s.plan === 'weekly' ? 'selected' : ''}>Semanal (R$ ${Number(set.plan_weekly_price || 12.5).toFixed(2)})</option>
+              <option value="monthly" ${s.plan === 'monthly' || !s.plan ? 'selected' : ''}>Mensal (R$ ${Number(set.subscription_monthly_amount || 49.9).toFixed(2)})</option>
             </select>
           </div>
           <div>
             <label>Status da Assinatura</label>
             <select name="status" style="font-weight:600;">
+              <option value="pending" ${s.status === 'pending' ? 'selected' : ''}>Pendente (aguardando pagamento)</option>
               <option value="active" ${s.status === 'active' || !s.status ? 'selected' : ''}>Ativo (Liberado)</option>
               <option value="expired" ${s.status === 'expired' ? 'selected' : ''}>Expirado</option>
               <option value="suspended" ${s.status === 'suspended' ? 'selected' : ''}>Suspenso</option>
@@ -948,21 +962,27 @@ adminRouter.post('/drivers/:id/plan', requireAuth, async (req, res) => {
   const { plan, status, due_date } = req.body;
 
   const { data: set } = await admin.from('app_settings').select('*').eq('id', 1).single();
-  let amount = 49.9;
-  if (plan === 'pro') amount = set?.plan_weekly_price ?? 12.5;
-  else if (plan === 'smart') amount = set?.subscription_daily_amount ?? 3.0;
-  else if (plan === 'vip') amount = set?.subscription_monthly_amount ?? 49.9;
-
-  await admin.from('subscriptions').upsert({
+  const validPlans = new Set(['commission', 'daily', 'weekly', 'monthly']);
+  const validStatuses = new Set(['pending', 'active', 'expired', 'suspended']);
+  if (!validPlans.has(String(plan)) || !validStatuses.has(String(status))) {
+    return res.redirect(`/drivers/${id}/plan?error=${encodeURIComponent('Plano ou status inválido.')}`);
+  }
+  const amount = plan === 'commission'
+    ? 0
+    : plan === 'daily'
+      ? Number(set?.plan_daily_price ?? set?.subscription_daily_amount ?? 0)
+      : plan === 'weekly'
+        ? Number(set?.plan_weekly_price ?? 0)
+        : Number(set?.subscription_monthly_amount ?? 0);
+  const { error } = await admin.from('subscriptions').upsert({
     driver_id: id,
     plan,
     status,
     amount,
-    due_date: due_date || new Date(Date.now() + 30*864e5).toISOString().slice(0,10),
-    paid_at: status === 'active' ? new Date().toISOString() : null
+    due_date: due_date || todayIso(),
+    paid_at: status === 'active' ? new Date().toISOString() : null,
   });
-
-  res.redirect('/drivers?ok=1');
+  res.redirect(error ? `/drivers/${id}/plan?error=${safeActionError(error)}` : '/drivers?ok=1');
 });
 
 // ─── Driver Documents View ─────────────────────────────────────────────────
@@ -1157,6 +1177,45 @@ adminRouter.post('/rides/:id/mark-paid', requireAuth, async (req, res) => {
 
 // ─── Subscriptions ──────────────────────────────────────────────────────────
 adminRouter.get('/subscriptions', requireAuth, async (req, res) => {
+  await expireOverdueSubscriptions(admin).catch((error) => console.warn('[Admin subscriptions] reconcile:', error.message));
+  const page = Number(req.query.page) || 1;
+  const pageSize = 20;
+  const statusFilter = String(req.query.status || 'all');
+  const search = String(req.query.q || '').trim().toLowerCase();
+  const [{ data: subs }, { data: profiles }] = await Promise.all([
+    admin.from('subscriptions').select('*').order('due_date', { ascending: true }),
+    admin.from('profiles').select('id,full_name').eq('role', 'driver'),
+  ]);
+  const allSubs = subs ?? [];
+  const pMap = Object.fromEntries((profiles ?? []).map((p) => [p.id, p.full_name]));
+  const filtered = allSubs.filter((s) => {
+    const state = effectiveSubscriptionStatus(s);
+    const statusOk = statusFilter === 'all' || state === statusFilter;
+    const searchOk = !search || `${pMap[s.driver_id] || ''} ${s.driver_id} ${s.provider_subscription_id || ''}`.toLowerCase().includes(search);
+    return statusOk && searchOk;
+  });
+  const count = (state) => allSubs.filter((s) => effectiveSubscriptionStatus(s) === state).length;
+  const notice = req.query.error ? `<div class="err">${esc(String(req.query.error))}</div>` : req.query.ok ? '<div class="ok">Operação concluída.</div>' : '';
+  const pageSubs = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const rows = pageSubs.map((s) => {
+    const state = effectiveSubscriptionStatus(s);
+    return [
+      `<strong>${esc(pMap[s.driver_id] ?? '—')}</strong><br><span class="muted">${esc(s.driver_id)}</span>`,
+      esc(planLabel(s.plan)), badge(state), brl(s.amount), s.due_date ?? '—', esc(s.provider_status || '—'),
+      s.next_payment_at ? fmtDate(s.next_payment_at) : '—', fmtDate(s.paid_at),
+      `<div class="filters">${s.provider_subscription_id ? `<form class="inline" method="post" action="/subscriptions/${s.driver_id}/sync">${iconBtnApprove('Sincronizar')}</form>` : ''}<form class="inline" method="post" action="/subscriptions/${s.driver_id}/activate">${iconBtnApprove('Liberar / renovar')}</form>${state === 'active' ? `<form class="inline" method="post" action="/subscriptions/${s.driver_id}/suspend" onsubmit="return confirm('Suspender esta assinatura?')">${iconBtnSuspend('Suspender')}</form>` : ''}${state !== 'expired' ? `<form class="inline" method="post" action="/subscriptions/${s.driver_id}/expire" onsubmit="return confirm('Vencer esta assinatura e retirar o acesso?')">${iconBtnClose('Vencer')}</form>` : ''}</div>`,
+    ];
+  });
+  const href = (state) => `/subscriptions?status=${encodeURIComponent(state)}&q=${encodeURIComponent(req.query.q || '')}`;
+  const filters = `<div class="card"><div class="filters"><a class="${statusFilter === 'all' ? 'on' : ''}" href="${href('all')}">Todas (${allSubs.length})</a><a class="${statusFilter === 'active' ? 'on' : ''}" href="${href('active')}">Ativas (${count('active')})</a><a class="${statusFilter === 'pending' ? 'on' : ''}" href="${href('pending')}">Pendentes (${count('pending')})</a><a class="${statusFilter === 'expired' ? 'on' : ''}" href="${href('expired')}">Vencidas (${count('expired')})</a><a class="${statusFilter === 'suspended' ? 'on' : ''}" href="${href('suspended')}">Suspensas (${count('suspended')})</a><form method="get" action="/subscriptions" style="display:flex;gap:8px;margin-left:auto"><input name="q" value="${esc(req.query.q || '')}" placeholder="Buscar motorista ou ID" style="width:230px"><input type="hidden" name="status" value="${esc(statusFilter)}"><button class="act gray" type="submit">Pesquisar</button></form></div></div>`;
+  const kpis = `<div class="grid">${kpiCard('Assinaturas ativas', count('active'))}${kpiCard('Assinaturas pendentes', count('pending'))}${kpiCard('Assinaturas vencidas', count('expired'))}${kpiCard('Assinaturas suspensas', count('suspended'))}</div>`;
+  const body = `${notice}${kpis}${filters}<div class="card"><h2>Assinaturas dos motoristas (${filtered.length})</h2><p class="muted">O motorista só recebe corridas quando a assinatura está ativa e dentro da validade. Sincronize para consultar o Mercado Pago.</p>${table(['Motorista', 'Plano', 'Status efetivo', 'Valor', 'Vence em', 'Status Mercado Pago', 'Próxima cobrança', 'Pago em', 'Ações'], rows)}${pagination(filtered.length, page, pageSize, req.originalUrl)}</div>`;
+  return render(res, layout({ title: 'Assinaturas', active: '/subscriptions', email: req.session.email, body }));
+});
+
+// Legacy renderer kept below for compatibility with old links; the guarded
+// route above handles the request first.
+adminRouter.get('/subscriptions-legacy', requireAuth, async (req, res) => {
   const page = Number(req.query.page) || 1;
   const pageSize = 20;
 
@@ -1182,18 +1241,72 @@ adminRouter.get('/subscriptions', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Assinaturas', active: '/subscriptions', email: req.session.email, body }));
 });
 
+adminRouter.post('/subscriptions/:driverId/sync', requireAuth, async (req, res) => {
+  try { await syncSubscriptionForDriver(admin, req.params.driverId); res.redirect('/subscriptions?ok=1'); }
+  catch (error) { res.redirect(`/subscriptions?error=${safeActionError(error)}`); }
+});
+
+async function forceDriverOfflineIfFree(driverId) {
+  const { data: activeRide } = await admin.from('rides').select('id').eq('driver_id', driverId).in('status', ['driver_on_way', 'driver_arrived', 'in_progress']).limit(1).maybeSingle();
+  if (!activeRide) await admin.from('drivers').update({ status: 'offline', updated_at: new Date().toISOString() }).eq('id', driverId).eq('status', 'online');
+}
+
+adminRouter.post('/subscriptions/:driverId/suspend', requireAuth, async (req, res) => {
+  try {
+    const { error } = await admin.from('subscriptions').update({ status: 'suspended', updated_at: new Date().toISOString() }).eq('driver_id', req.params.driverId);
+    if (error) throw error;
+    await forceDriverOfflineIfFree(req.params.driverId);
+    res.redirect('/subscriptions?ok=1');
+  } catch (error) { res.redirect(`/subscriptions?error=${safeActionError(error)}`); }
+});
+
+adminRouter.post('/subscriptions/:driverId/expire', requireAuth, async (req, res) => {
+  try {
+    const { error } = await admin.from('subscriptions').update({ status: 'expired', updated_at: new Date().toISOString() }).eq('driver_id', req.params.driverId);
+    if (error) throw error;
+    await forceDriverOfflineIfFree(req.params.driverId);
+    res.redirect('/subscriptions?ok=1');
+  } catch (error) { res.redirect(`/subscriptions?error=${safeActionError(error)}`); }
+});
+
 adminRouter.post('/subscriptions/:driverId/activate', requireAuth, async (req, res) => {
-  const { data: s } = await admin.from('subscriptions').select('plan,due_date').eq('driver_id', req.params.driverId).single();
-  const base = new Date(Math.max(Date.now(), s?.due_date ? new Date(s.due_date).getTime() : Date.now()));
-  base.setDate(base.getDate() + (s?.plan === 'daily' ? 1 : 30));
-  await admin.from('subscriptions').update({
-    status: 'active', due_date: base.toISOString().slice(0, 10), paid_at: new Date().toISOString(),
-  }).eq('driver_id', req.params.driverId);
-  res.redirect('/subscriptions');
+  try {
+    const { data: s, error: readError } = await admin.from('subscriptions').select('plan,due_date').eq('driver_id', req.params.driverId).maybeSingle();
+    if (readError) throw readError;
+    if (!s) throw new Error('Assinatura não encontrada.');
+    const base = new Date(Math.max(Date.now(), s.due_date ? new Date(s.due_date).getTime() : Date.now()));
+    base.setDate(base.getDate() + (SUBSCRIPTION_PLAN_DAYS[s.plan] || 30));
+    const { error } = await admin.from('subscriptions').update({ status: 'active', due_date: base.toISOString().slice(0, 10), paid_at: new Date().toISOString(), provider_status: 'manual_admin', updated_at: new Date().toISOString() }).eq('driver_id', req.params.driverId);
+    if (error) throw error;
+    res.redirect('/subscriptions?ok=1');
+  } catch (error) { res.redirect(`/subscriptions?error=${safeActionError(error)}`); }
 });
 
 // ─── Payments ─────────────────────────────────────────────────────────────
 adminRouter.get('/payments', requireAuth, async (req, res) => {
+  await expireOverdueSubscriptions(admin).catch((error) => console.warn('[Admin payments] reconcile:', error.message));
+  const page = Number(req.query.page) || 1;
+  const pageSize = 20;
+  const statusFilter = String(req.query.status || 'all');
+  const { data: payments } = await admin.from('payments').select('*').order('created_at', { ascending: false }).limit(300);
+  const source = payments ?? [];
+  const allPayments = source.filter((p) => statusFilter === 'all' || p.status === statusFilter);
+  const pagePayments = allPayments.slice((page - 1) * pageSize, page * pageSize);
+  const names = await profileNames(pagePayments.map((p) => p.driver_id));
+  const count = (status) => source.filter((p) => p.status === status).length;
+  const notice = req.query.error ? `<div class="err">${esc(String(req.query.error))}</div>` : req.query.ok ? '<div class="ok">Operação concluída.</div>' : '';
+  const rows = pagePayments.map((p) => [
+    `<strong>${esc(names[p.driver_id] ?? '—')}</strong><br><span class="muted">${esc(p.driver_id || '')}</span>`, brl(p.amount), esc(p.method || '—'), esc(p.provider || '—'), badge(p.status), esc(p.provider_status || '—'), p.paid_at ? fmtDate(p.paid_at) : '—', fmtDate(p.created_at),
+    `<div class="filters">${(p.provider_payment_id || p.provider_authorized_payment_id) ? `<form class="inline" method="post" action="/payments/${p.id}/sync">${iconBtnApprove('Sincronizar')}</form>` : ''}${p.status === 'pending' ? `<form class="inline" method="post" action="/payments/${p.id}/confirm" onsubmit="return confirm('Confirmar manualmente este pagamento?')">${iconBtnDollar('Confirmar')}</form><form class="inline" method="post" action="/payments/${p.id}/reject" onsubmit="return confirm('Marcar este pagamento como recusado?')">${iconBtnClose('Recusar')}</form>` : ''}</div>`,
+  ]);
+  const href = (status) => `/payments?status=${encodeURIComponent(status)}`;
+  const filters = `<div class="card"><div class="filters"><a class="${statusFilter === 'all' ? 'on' : ''}" href="${href('all')}">Todos (${source.length})</a><a class="${statusFilter === 'pending' ? 'on' : ''}" href="${href('pending')}">Pendentes (${count('pending')})</a><a class="${statusFilter === 'approved' ? 'on' : ''}" href="${href('approved')}">Aprovados (${count('approved')})</a><a class="${statusFilter === 'rejected' ? 'on' : ''}" href="${href('rejected')}">Recusados (${count('rejected')})</a><a class="${statusFilter === 'refunded' ? 'on' : ''}" href="${href('refunded')}">Estornados (${count('refunded')})</a></div></div>`;
+  const kpis = `<div class="grid">${kpiCard('Pagamentos pendentes', count('pending'))}${kpiCard('Pagamentos aprovados', count('approved'))}${kpiCard('Receita aprovada', brl(source.filter((p) => p.status === 'approved').reduce((sum, p) => sum + Number(p.amount || 0), 0)))}</div>`;
+  const body = `${notice}${kpis}${filters}<div class="card"><h2>Pagamentos de assinatura (${allPayments.length})</h2><p class="muted">Sincronizar consulta o status diretamente no Mercado Pago. Confirmar manualmente é uma exceção administrativa e também libera o período conforme o plano.</p>${table(['Motorista', 'Valor', 'Método', 'Provedor', 'Status local', 'Status Mercado Pago', 'Pago em', 'Criado', 'Ações'], rows)}${pagination(allPayments.length, page, pageSize, req.originalUrl)}</div>`;
+  return render(res, layout({ title: 'Pagamentos', active: '/payments', email: req.session.email, body }));
+});
+
+adminRouter.get('/payments-legacy', requireAuth, async (req, res) => {
   const page = Number(req.query.page) || 1;
   const pageSize = 20;
 
@@ -1217,9 +1330,19 @@ adminRouter.get('/payments', requireAuth, async (req, res) => {
   render(res, layout({ title: 'Pagamentos', active: '/payments', email: req.session.email, body }));
 });
 
+adminRouter.post('/payments/:id/sync', requireAuth, async (req, res) => {
+  try { await syncPaymentForAdmin(admin, req.params.id); res.redirect('/payments?ok=1'); }
+  catch (error) { res.redirect(`/payments?error=${safeActionError(error)}`); }
+});
+
+adminRouter.post('/payments/:id/reject', requireAuth, async (req, res) => {
+  const { error } = await admin.from('payments').update({ status: 'rejected', provider_status: 'manual_rejected' }).eq('id', req.params.id).eq('status', 'pending');
+  res.redirect(error ? `/payments?error=${safeActionError(error)}` : '/payments?ok=1');
+});
+
 adminRouter.post('/payments/:id/confirm', requireAuth, async (req, res) => {
-  await admin.rpc('confirm_payment', { p_payment_id: req.params.id });
-  res.redirect('/payments');
+  const { error } = await admin.rpc('confirm_payment', { p_payment_id: req.params.id });
+  res.redirect(error ? `/payments?error=${safeActionError(error)}` : '/payments?ok=1');
 });
 
 // ─── Leads / Mensagens da Landing Page ──────────────────────────────────────
