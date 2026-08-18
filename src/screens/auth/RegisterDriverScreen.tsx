@@ -27,7 +27,6 @@ import {
   Eye,
   EyeOff,
   ChevronLeft,
-  MapPin,
 } from 'lucide-react-native';
 import { Colors, Radius } from '../../constants';
 import { useAuth } from '../../contexts/AuthContext';
@@ -35,6 +34,8 @@ import { friendlyError } from '../../lib/errors';
 import { addVehicle, updateDriverPix, updateMyOperatingCity } from '../../services/drivers';
 import { uploadDocument, type DocType } from '../../services/documents';
 import FipePicker from '../../components/FipePicker';
+import CityAutocomplete from '../../components/CityAutocomplete';
+import type { CityOption } from '../../services/locations';
 import type { Gender } from '../../types/db';
 import {
   AUTH_DARK,
@@ -95,6 +96,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
   const [vehicleColor, setVehicleColor] = useState('');
   const [vehicleSeats, setVehicleSeats] = useState('4');
   const [operatingCity, setOperatingCity] = useState('');
+  const [operatingState, setOperatingState] = useState('');
   const [brand, setBrand] = useState('');
   const [fipeValue, setFipeValue] = useState<number | undefined>(undefined);
   const [fipeCode, setFipeCode] = useState('');
@@ -148,7 +150,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
         fipeZeroKm,
         seats: vehicleType === 'moto' ? 1 : Math.min(9, Math.max(1, parseInt(vehicleSeats, 10) || 4)),
       });
-      await updateMyOperatingCity(operatingCity);
+      await updateMyOperatingCity(operatingCity, operatingState);
       if (pixKey.trim()) await updateDriverPix(pixKey, inferPixType(pixKey));
     } catch {
       // non-fatal: the driver can add/edit the vehicle/PIX later
@@ -314,9 +316,11 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
               })}
             </View>
 
-            <AuthField label="Cidade de atuacao" value={operatingCity} onChangeText={setOperatingCity}
-              placeholder="Ex.: Sinop" autoCapitalize="words"
-              leftIcon={<MapPin size={18} color="#999" />} />
+            <CityAutocomplete
+              value={operatingCity}
+              onChangeText={(value) => { setOperatingCity(value); setOperatingState(''); }}
+              onSelect={(city: CityOption) => { setOperatingCity(city.name); setOperatingState(city.state); }}
+            />
             <FipePicker
               key={vehicleType}
               kind={vehicleType === 'moto' ? 'motorcycles' : 'cars'}

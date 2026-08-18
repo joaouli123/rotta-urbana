@@ -3,6 +3,7 @@
 // which feed the per-category eligibility rules (comfort/premium thresholds).
 // Docs: https://fipe.parallelum.com.br/api/v2
 const BASE = 'https://fipe.parallelum.com.br/api/v2';
+const LEGACY_BASE = 'https://parallelum.com.br/fipe/api/v1';
 
 export interface FipeItem { code: string; name: string }
 export interface FipeResult {
@@ -26,24 +27,61 @@ export interface FipeResult {
 // FIPE has separate tables for cars and motorcycles; pick by vehicle kind.
 export type FipeKind = 'cars' | 'motorcycles';
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`);
-  if (!res.ok) throw new Error(`FIPE ${res.status}`);
-  return res.json() as Promise<T>;
+async function getFrom<T>(base: string, path: string): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  try {
+    const res = await fetch(`${base}${path}`, { signal: controller.signal });
+    if (!res.ok) throw new Error(`FIPE ${res.status}`);
+    return res.json() as Promise<T>;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+const get = <T,>(path: string) => getFrom<T>(BASE, path);
+
+function legacyKind(kind: FipeKind): string {
+  return kind === 'motorcycles' ? 'motos' : 'carros';
 }
 
 export const fipeBrands = (kind: FipeKind = 'cars') => get<FipeItem[]>(`/${kind}/brands`);
 export const fipeModels = (brandId: string, kind: FipeKind = 'cars') =>
   get<FipeItem[]>(`/${kind}/brands/${brandId}/models`);
-export const fipeYears = (brandId: string, modelId: string, kind: FipeKind = 'cars') =>
-  get<FipeItem[]>(`/${kind}/brands/${brandId}/models/${modelId}/years`);
+export const fipeYears = async (brandId: string, modelId: string, kind: FipeKind = 'cars') => {
+  let items = await get<FipeItem[]>(`/${kind}/brands/${brandId}/models/${modelId}/years`);
+
+  // The v2 endpoint occasionally omits the 0-km/fuel variants for a model.
+  // Merge the legacy response when necessary so Yamaha and other brands do
+  // not lose valid years just because one FIPE endpoint is incomplete.
+  if (!items.some((item) => getFipeYearInfo(item).isZeroKm)) {
+    try {
+      const legacy = await getFrom<Array<{ codigo: string | number; nome: string }>>(
+        LEGACY_BASE,
+        `/${legacyKind(kind)}/marcas/${brandId}/modelos/${modelId}/anos`,
+      );
+      const merged = [...items, ...legacy.map((item) => ({ code: String(item.codigo), name: String(item.nome) }))];
+      items = Array.from(new Map(merged.map((item) => [item.code, item])).values());
+    } catch {
+      // Keep the v2 response when the compatibility endpoint is unavailable.
+    }
+  }
+
+  return items.sort((a, b) => {
+    const aInfo = getFipeYearInfo(a);
+    const bInfo = getFipeYearInfo(b);
+    if (aInfo.isZeroKm !== bInfo.isZeroKm) return aInfo.isZeroKm ? -1 : 1;
+    return bInfo.rawYear - aInfo.rawYear || String(a.code).localeCompare(String(b.code));
+  });
+};
 
 export function getFipeYearInfo(item: FipeItem) {
   const name = String(item.name ?? '').trim();
+  const code = String(item.code ?? '').trim();
   const match = name.match(/^(\d{4,5})(?:\s+(.+))?$/);
   const rawYear = Number(match?.[1] ?? name.match(/\d{4,5}/)?.[0] ?? 0);
   const fuel = String(match?.[2] ?? '').trim();
-  const isZeroKm = rawYear === 32000;
+  const isZeroKm = rawYear === 32000 || /^32000(?:-|$)/.test(code) || /\b(?:0\s*km|zero[- ]?km)\b/i.test(name);
 
   return {
     rawYear,
@@ -59,9 +97,26 @@ function parseBRL(s: string): number {
 }
 
 export async function fipePrice(brandId: string, modelId: string, yearId: string, kind: FipeKind = 'cars'): Promise<FipeResult> {
-  const d = await get<any>(`/${kind}/brands/${brandId}/models/${modelId}/years/${yearId}`);
+  let d: any;
+  try {
+    d = await get<any>(`/${kind}/brands/${brandId}/models/${modelId}/years/${yearId}`);
+  } catch {
+    const legacy = await getFrom<any>(
+      LEGACY_BASE,
+      `/${legacyKind(kind)}/marcas/${brandId}/modelos/${modelId}/anos/${yearId}`,
+    );
+    d = {
+      price: legacy.Valor,
+      brand: legacy.Marca,
+      model: legacy.Modelo,
+      modelYear: legacy.AnoModelo,
+      fuel: legacy.Combustivel,
+      codeFipe: legacy.CodigoFipe,
+      referenceMonth: legacy.MesReferencia,
+    };
+  }
   const rawModelYear = Number(d.modelYear) || 0;
-  const isZeroKm = rawModelYear === 32000;
+  const isZeroKm = rawModelYear === 32000 || /^32000(?:-|$)/.test(String(yearId));
   const currentYear = new Date().getFullYear();
   const fuel = String(d.fuel ?? '').trim();
   const effectiveYear = isZeroKm ? currentYear : rawModelYear;
@@ -72,7 +127,7 @@ export async function fipePrice(brandId: string, modelId: string, yearId: string
     brand: d.brand ?? '',
     model: d.model ?? '',
     year: effectiveYear,
-    fipeModelYear: rawModelYear,
+    fipeModelYear: isZeroKm ? 32000 : rawModelYear,
     fipeYearCode: yearId,
     yearLabel: `${isZeroKm ? '0 km' : rawModelYear || 'Ano nao informado'}${fuel ? ` - ${fuel}` : ''}`,
     fuel,

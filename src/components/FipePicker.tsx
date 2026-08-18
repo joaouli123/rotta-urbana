@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, Modal, FlatList, TextInput, ActivityIndicator,
 } from 'react-native';
@@ -24,10 +24,19 @@ export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
   const [year, setYear] = useState<FipeItem | null>(null);
   const [list, setList] = useState<FipeItem[]>([]);
   const [result, setResult] = useState<FipeResult | null>(null);
+  const requestId = useRef(0);
 
   const load = async (fn: () => Promise<FipeItem[]>) => {
+    const currentRequest = ++requestId.current;
     setLoading(true); setList([]);
-    try { setList(await fn()); } catch { setList([]); } finally { setLoading(false); }
+    try {
+      const items = await fn();
+      if (currentRequest === requestId.current) setList(items);
+    } catch {
+      if (currentRequest === requestId.current) setList([]);
+    } finally {
+      if (currentRequest === requestId.current) setLoading(false);
+    }
   };
 
   const openLevel = (lvl: Level) => {
@@ -115,6 +124,7 @@ export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
                 data={filtered}
                 keyExtractor={(i) => i.code}
                 keyboardShouldPersistTaps="handled"
+                ListHeaderComponent={filtered.length > 0 ? <Text style={styles.listHint}>{filtered.length} opções FIPE encontradas</Text> : null}
                 renderItem={({ item }) => (
                   <TouchableOpacity style={styles.row} onPress={() => pick(item)} activeOpacity={0.7}>
                     <Text style={styles.rowText}>
@@ -158,4 +168,5 @@ const styles = StyleSheet.create({
   row: { paddingVertical: 13, borderBottomWidth: 1, borderBottomColor: Colors.border },
   rowText: { fontSize: 14, fontFamily: 'Poppins_400Regular', color: Colors.textPrimary },
   empty: { textAlign: 'center', color: Colors.textMuted, marginTop: 24, fontFamily: 'Poppins_400Regular' },
+  listHint: { color: Colors.textMuted, fontFamily: 'Poppins_500Medium', fontSize: 11, paddingVertical: 4 },
 });
