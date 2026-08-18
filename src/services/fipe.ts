@@ -49,23 +49,30 @@ export const fipeBrands = (kind: FipeKind = 'cars') => get<FipeItem[]>(`/${kind}
 export const fipeModels = (brandId: string, kind: FipeKind = 'cars') =>
   get<FipeItem[]>(`/${kind}/brands/${brandId}/models`);
 export const fipeYears = async (brandId: string, modelId: string, kind: FipeKind = 'cars') => {
-  let items = await get<FipeItem[]>(`/${kind}/brands/${brandId}/models/${modelId}/years`);
+  let items: FipeItem[] = [];
+  let v2Error: unknown = null;
 
-  // The v2 endpoint occasionally omits the 0-km/fuel variants for a model.
-  // Merge the legacy response when necessary so Yamaha and other brands do
-  // not lose valid years just because one FIPE endpoint is incomplete.
-  if (!items.some((item) => getFipeYearInfo(item).isZeroKm)) {
-    try {
-      const legacy = await getFrom<Array<{ codigo: string | number; nome: string }>>(
-        LEGACY_BASE,
-        `/${legacyKind(kind)}/marcas/${brandId}/modelos/${modelId}/anos`,
-      );
-      const merged = [...items, ...legacy.map((item) => ({ code: String(item.codigo), name: String(item.nome) }))];
-      items = Array.from(new Map(merged.map((item) => [item.code, item])).values());
-    } catch {
-      // Keep the v2 response when the compatibility endpoint is unavailable.
-    }
+  try {
+    items = await get<FipeItem[]>(`/${kind}/brands/${brandId}/models/${modelId}/years`);
+  } catch (error) {
+    v2Error = error;
   }
+
+  // The v2 endpoint can return only the latest years for some models. Always
+  // merge the compatibility response so older valid Yamaha (and other brand)
+  // years are not lost just because v2 already includes a 0-km entry.
+  try {
+    const legacy = await getFrom<Array<{ codigo: string | number; nome: string }>>(
+      LEGACY_BASE,
+      `/${legacyKind(kind)}/marcas/${brandId}/modelos/${modelId}/anos`,
+    );
+    const merged = [...items, ...legacy.map((item) => ({ code: String(item.codigo), name: String(item.nome) }))];
+    items = Array.from(new Map(merged.map((item) => [item.code, item])).values());
+  } catch {
+    // Keep the v2 response when the compatibility endpoint is unavailable.
+  }
+
+  if (items.length === 0 && v2Error) throw v2Error;
 
   return items.sort((a, b) => {
     const aInfo = getFipeYearInfo(a);

@@ -193,6 +193,21 @@ adminRouter.post('/login', loginLimiter, async (req, res) => {
 adminRouter.post('/logout', (req, res) => req.session.destroy(() => res.redirect('/login')));
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
+// The driver registration flow reads these rules before the user has an
+// authenticated Supabase session. Expose only the eligibility fields needed
+// by the FIPE picker; never expose pricing secrets or admin credentials.
+app.get('/api/public/vehicle-rules', async (_req, res) => {
+  const { data, error } = await admin
+    .from('fare_config')
+    .select('ride_type,min_year,min_fipe_value,allowed_vehicle_types,min_seats,require_colors,active')
+    .in('ride_type', ['moto', 'economy', 'comfort', 'premium'])
+    .order('ride_type');
+
+  if (error) return res.status(503).json({ error: 'Regras de veículos indisponíveis.' });
+  res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+  return res.json(data ?? []);
+});
+
 // ─── Políticas Públicas (Google Play / App Store) ───────────────────────────
 app.get('/politica-de-privacidade', (req, res) => render(res, privacyPolicyPage()));
 app.get('/privacy', (req, res) => render(res, privacyPolicyPage()));

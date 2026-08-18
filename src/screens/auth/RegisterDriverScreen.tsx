@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -36,6 +36,7 @@ import { uploadDocument, type DocType } from '../../services/documents';
 import FipePicker from '../../components/FipePicker';
 import CityAutocomplete from '../../components/CityAutocomplete';
 import type { CityOption } from '../../services/locations';
+import { getRegistrationMinYear } from '../../services/vehicleRules';
 import type { Gender } from '../../types/db';
 import {
   AUTH_DARK,
@@ -95,6 +96,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
   const [vehicleYear, setVehicleYear] = useState('');
   const [vehicleColor, setVehicleColor] = useState('');
   const [vehicleSeats, setVehicleSeats] = useState('4');
+  const [vehicleMinYear, setVehicleMinYear] = useState<number | null>(null);
   const [operatingCity, setOperatingCity] = useState('');
   const [operatingState, setOperatingState] = useState('');
   const [brand, setBrand] = useState('');
@@ -109,6 +111,15 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
   // Documents picked during signup. Uploaded right after the account is created,
   // since Storage needs an authenticated session.
   const [docImages, setDocImages] = useState<Partial<Record<DocType, PickedFile>>>({});
+
+  useEffect(() => {
+    let active = true;
+    setVehicleMinYear(null);
+    getRegistrationMinYear(vehicleType === 'moto' ? 'moto' : 'car')
+      .then((year) => { if (active) setVehicleMinYear(year); })
+      .catch(() => { if (active) setVehicleMinYear(null); });
+    return () => { active = false; };
+  }, [vehicleType]);
 
   // Selfie → camera only. Documents → choose camera / gallery / files (PDF).
   const pickDoc = async (type: DocType) => {
@@ -206,8 +217,9 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
     if (step === 1) {
       const year = parseInt(vehicleYear, 10);
       const maxYear = new Date().getFullYear() + 1;
-      if (!Number.isInteger(year) || year < 1980 || year > maxYear) {
-        Alert.alert('Ano invalido', `Informe um ano entre 1980 e ${maxYear}. Para veiculo zero-km, selecione a opcao "0 km" na FIPE.`);
+      const minimumYear = vehicleMinYear ?? 1980;
+      if (!Number.isInteger(year) || year < minimumYear || year > maxYear) {
+        Alert.alert('Ano inválido', `Para ${vehicleType === 'moto' ? 'motos' : 'carros'}, informe um ano entre ${minimumYear} e ${maxYear}. Para veículo zero-km, selecione a opção "0 km" na FIPE.`);
         return;
       }
     }
@@ -324,6 +336,7 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
             <FipePicker
               key={vehicleType}
               kind={vehicleType === 'moto' ? 'motorcycles' : 'cars'}
+              minYear={vehicleMinYear}
               onSelected={(r) => {
                 setVehicleModel(`${r.brand} ${r.model}`.trim());
                 setVehicleYear(String(r.year));

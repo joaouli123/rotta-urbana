@@ -10,11 +10,13 @@ interface Props {
   onSelected: (r: FipeResult) => void;
   /** Which FIPE table to query — cars (default) or motorcycles. */
   kind?: FipeKind;
+  /** Minimum configured calendar year; FIPE's 0-km entry is always allowed. */
+  minYear?: number | null;
 }
 
 type Level = 'brand' | 'model' | 'year';
 
-export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
+export default function FipePicker({ onSelected, kind = 'cars', minYear }: Props) {
   const [open, setOpen] = useState<Level | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
@@ -62,7 +64,9 @@ export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
 
   const filtered = list.filter((i) => {
     const displayName = open === 'year' ? getFipeYearInfo(i).label : i.name;
-    return `${i.name} ${displayName}`.toLowerCase().includes(search.toLowerCase());
+    const yearInfo = open === 'year' ? getFipeYearInfo(i) : null;
+    const meetsConfiguredYear = !yearInfo || yearInfo.isZeroKm || !minYear || yearInfo.rawYear >= minYear;
+    return meetsConfiguredYear && `${i.name} ${displayName}`.toLowerCase().includes(search.toLowerCase());
   });
 
   const Field = ({ lvl, label, value, disabled }: { lvl: Level; label: string; value?: string; disabled?: boolean }) => (
@@ -117,6 +121,11 @@ export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
                 placeholder="Buscar..." placeholderTextColor={Colors.textMuted} autoCorrect={false}
               />
             </View>
+            {open === 'year' && minYear && (
+              <Text style={styles.ruleHint}>
+                Exibindo anos a partir de {minYear}; a opção 0 km permanece disponível.
+              </Text>
+            )}
             {loading ? (
               <ActivityIndicator color={Colors.primary} style={{ marginTop: 24 }} />
             ) : (
@@ -132,7 +141,11 @@ export default function FipePicker({ onSelected, kind = 'cars' }: Props) {
                     </Text>
                   </TouchableOpacity>
                 )}
-                ListEmptyComponent={<Text style={styles.empty}>Nada encontrado</Text>}
+                ListEmptyComponent={<Text style={styles.empty}>
+                  {open === 'year' && minYear
+                    ? `Nenhum ano a partir de ${minYear} encontrado para este modelo.`
+                    : 'Nada encontrado'}
+                </Text>}
               />
             )}
           </View>
@@ -169,4 +182,5 @@ const styles = StyleSheet.create({
   rowText: { fontSize: 14, fontFamily: 'Poppins_400Regular', color: Colors.textPrimary },
   empty: { textAlign: 'center', color: Colors.textMuted, marginTop: 24, fontFamily: 'Poppins_400Regular' },
   listHint: { color: Colors.textMuted, fontFamily: 'Poppins_500Medium', fontSize: 11, paddingVertical: 4 },
+  ruleHint: { color: Colors.textSecondary, fontFamily: 'Poppins_400Regular', fontSize: 12, marginBottom: 4 },
 });
