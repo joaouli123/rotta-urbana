@@ -5,7 +5,7 @@
     "scheme": "rotta-urbana",
     "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon-filled.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
@@ -21,7 +21,7 @@
       "package": "com.rottaurbana.app",
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/icon-filled.png",
         "backgroundColor": "#1A1A1A"
       },
       "edgeToEdgeEnabled": true,
@@ -46,10 +46,10 @@
       ],
       "expo-font"
     ],
-    "owner": "cleipytt49app2",
+    "owner": "joaouli1234",
     "extra": {
       "eas": {
-        "projectId": "a9ff15b3-6403-4c01-8cec-a2d0f9deea13"
+        "projectId": "bbcecab6-1204-49cf-922b-0bc3b749d070"
       }
     }
   }
