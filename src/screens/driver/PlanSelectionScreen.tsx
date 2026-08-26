@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, StatusBar, Dimensions, Linking,
+  ActivityIndicator, Alert, StatusBar, Linking,
 } from 'react-native';
 import { Check } from 'lucide-react-native';
 import { Colors } from '../../constants';
 import {
   getAppSettings, selectPlan, createSubscriptionCheckout, type PlanType,
 } from '../../services/payments';
-import type { AppSettings } from '../../types/db';
-
-const { width: W } = Dimensions.get('window');
+import { getMyPrimaryVehicleSegment } from '../../services/drivers';
+import type { AppSettings, PlanSegment } from '../../types/db';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtBRL(val: number): string {
@@ -29,59 +28,93 @@ interface PlanDef {
   badgeColor: string;
   accentColor: string;
   immediate: boolean;
+  segment: PlanSegment;
 }
 
-function buildPlans(settings: AppSettings | null): PlanDef[] {
+function buildPlans(settings: AppSettings | null, segment: PlanSegment): PlanDef[] {
   const daily   = settings?.plan_daily_price   ?? settings?.subscription_daily_amount   ?? 10;
   const weekly  = settings?.plan_weekly_price  ?? (settings?.subscription_monthly_amount ?? 120) / 4;
   const monthly = settings?.subscription_monthly_amount ?? 120;
   const pct     = settings?.commission_pct ?? 15;
+
+  if (segment !== 'moto') {
+    const carMonthly = {
+      economy: settings?.car_economy_monthly_price ?? 350,
+      comfort: settings?.car_comfort_monthly_price ?? 380,
+      premium: settings?.car_premium_monthly_price ?? 450,
+    } as const;
+    return (Object.keys(carMonthly) as Array<'economy' | 'comfort' | 'premium'>).map((carSegment) => ({
+      id: 'monthly' as const,
+      segment: carSegment,
+      title: carSegment === 'economy' ? 'Econômico' : carSegment === 'comfort' ? 'Conforto' : 'Prêmio',
+      description: carSegment === 'economy'
+        ? 'Plano mensal para corridas econômicas.'
+        : carSegment === 'comfort'
+          ? 'Plano mensal para oferecer mais conforto.'
+          : 'Plano mensal para a categoria premium.',
+      priceMain: 'R$ ' + fmtBRL(carMonthly[carSegment]),
+      priceUnit: 'por mês',
+      badge: carSegment === 'comfort' ? 'MAIS POPULAR' : undefined,
+      badgeColor: carSegment === 'comfort' ? '#7C3AED' : '#3B82F6',
+      accentColor: carSegment === 'premium' ? '#8B5CF6' : carSegment === 'comfort' ? '#F59E0B' : '#3B82F6',
+      immediate: false,
+    }));
+  }
+
+  const motoDaily = settings?.moto_daily_price ?? daily;
+  const motoWeekly = settings?.moto_weekly_price ?? weekly;
+  const motoMonthly = settings?.moto_monthly_price ?? monthly;
+  const motoPct = settings?.moto_commission_pct ?? pct;
 
   return [
     {
       id: 'commission',
       title: 'Por Corrida',
       description: 'Sem mensalidade fixa. Pague uma comissão só quando trabalhar.',
-      priceMain: pct + '%',
+      priceMain: motoPct + '%',
       priceUnit: 'de comissao por corrida',
       badge: 'ACESSO IMEDIATO',
       badgeColor: '#6DC228',
       accentColor: '#6DC228',
       immediate: true,
+      segment: 'moto',
     },
     {
       id: 'daily',
       title: 'Diário',
       description: 'Pague hoje e trabalhe o dia todo sem limites.',
-      priceMain: 'R$ ' + fmtBRL(daily),
+      priceMain: 'R$ ' + fmtBRL(motoDaily),
       priceUnit: 'por dia',
       badgeColor: '#3B82F6',
       accentColor: '#3B82F6',
       immediate: false,
+      segment: 'moto',
     },
     {
       id: 'weekly',
       title: 'Semanal',
       description: 'Melhor custo-benefício para quem trabalha toda semana.',
-      priceMain: 'R$ ' + fmtBRL(weekly),
+      priceMain: 'R$ ' + fmtBRL(motoWeekly),
       priceUnit: 'por semana',
-      priceStrike: 'R$ ' + fmtBRL(daily * 7) + '/semana',
+      priceStrike: 'R$ ' + fmtBRL(motoDaily * 7) + '/semana',
       badge: 'MAIS POPULAR',
       badgeColor: '#7C3AED',
       accentColor: '#7C3AED',
       immediate: false,
+      segment: 'moto',
     },
     {
       id: 'monthly',
       title: 'Mensal',
       description: 'Para motoristas dedicados. Maior economia no mês.',
-      priceMain: 'R$ ' + fmtBRL(monthly),
+      priceMain: 'R$ ' + fmtBRL(motoMonthly),
       priceUnit: 'por mes',
-      priceStrike: 'R$ ' + fmtBRL(weekly * 4) + '/mes',
+      priceStrike: 'R$ ' + fmtBRL(motoWeekly * 4) + '/mes',
       badge: 'MAIOR ECONOMIA',
       badgeColor: '#F59E0B',
       accentColor: '#F59E0B',
       immediate: false,
+      segment: 'moto',
     },
   ];
 }
@@ -273,27 +306,28 @@ interface PlanSelectionScreenProps {
 const PlanSelectionScreen: React.FC<PlanSelectionScreenProps> = ({ onDone }) => {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<PlanType | null>(null);
+  const [segment, setSegment] = useState<'moto' | 'car'>('car');
+  const [selected, setSelected] = useState<{ id: PlanType; segment: PlanSegment } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [pixCode, setPixCode] = useState<string | null>(null);
   const [pixAmount, setPixAmount] = useState(0);
 
   useEffect(() => {
-    getAppSettings()
-      .then(setSettings)
+    Promise.all([getAppSettings(), getMyPrimaryVehicleSegment()])
+      .then(([cfg, vehicle]) => { setSettings(cfg); setSegment(vehicle); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
-  const plans = buildPlans(settings);
+  const plans = buildPlans(settings, segment === 'moto' ? 'moto' : 'economy');
 
   const handleConfirm = async () => {
     if (!selected) { Alert.alert('Escolha um plano', 'Selecione uma opção antes de continuar.'); return; }
     setSubmitting(true);
     try {
-      await selectPlan(selected);
-      if (selected === 'commission') { onDone(); return; }
-      const result = await createSubscriptionCheckout(selected);
+      await selectPlan(selected.id, selected.segment);
+      if (selected.id === 'commission') { onDone(); return; }
+      const result = await createSubscriptionCheckout(selected.id, selected.segment);
       setPixCode(result.init_point);
       setPixAmount(result.amount);
     } catch (err: unknown) {
@@ -324,19 +358,21 @@ const PlanSelectionScreen: React.FC<PlanSelectionScreenProps> = ({ onDone }) => 
         {/* Header */}
         <View style={s.header}>
           <Text style={s.eyebrow}>Rotta Urbana</Text>
-          <Text style={s.title}>Escolha seu plano</Text>
+          <Text style={s.title}>{segment === 'moto' ? 'Planos para sua moto' : 'Plano para seu carro'}</Text>
           <Text style={s.subtitle}>
-            Selecione como quer trabalhar. Você pode trocar depois.
+            {segment === 'moto'
+              ? 'Escolha entre comissão, diária, semanal ou mensal.'
+              : 'Escolha a categoria mensal que combina com seu veículo.'}
           </Text>
         </View>
 
         {/* Plan cards */}
         {plans.map((plan) => (
           <PlanCard
-            key={plan.id}
+            key={`${plan.id}-${plan.segment}`}
             plan={plan}
-            selected={selected === plan.id}
-            onPress={() => { setSelected(plan.id); setPixCode(null); }}
+            selected={selected?.id === plan.id && selected.segment === plan.segment}
+            onPress={() => { setSelected({ id: plan.id, segment: plan.segment }); setPixCode(null); }}
             disabled={submitting}
           />
         ))}
@@ -358,7 +394,7 @@ const PlanSelectionScreen: React.FC<PlanSelectionScreenProps> = ({ onDone }) => 
               ? <ActivityIndicator color="#fff" size="small" />
               : <Text style={s.btnTxt}>
                   {selected
-                    ? ('Continuar com ' + (plans.find(p => p.id === selected)?.title ?? ''))
+                    ? ('Continuar com ' + (plans.find(p => p.id === selected.id && p.segment === selected.segment)?.title ?? ''))
                     : 'Selecione um plano'}
                 </Text>
             }

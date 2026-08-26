@@ -941,7 +941,7 @@ adminRouter.get('/drivers/:id/plan', requireAuth, async (req, res) => {
             <label>Selecione o Plano</label>
             <select name="plan" style="font-weight:600;">
               <option value="commission" ${s.plan === 'commission' ? 'selected' : ''}>Por corrida (${set.commission_pct ?? 15}% por corrida)</option>
-              <option value="daily" ${s.plan === 'daily' ? 'selected' : ''}>Diária (R$ ${Number(set.plan_daily_price ?? set.subscription_daily_amount ?? 3).toFixed(2)})</option>
+              <option value="daily" ${s.plan === 'daily' ? 'selected' : ''}>Diária (R$ ${Number(set.subscription_daily_amount ?? 3).toFixed(2)})</option>
               <option value="weekly" ${s.plan === 'weekly' ? 'selected' : ''}>Semanal (R$ ${Number(set.plan_weekly_price || 12.5).toFixed(2)})</option>
               <option value="monthly" ${s.plan === 'monthly' || !s.plan ? 'selected' : ''}>Mensal (R$ ${Number(set.subscription_monthly_amount || 49.9).toFixed(2)})</option>
             </select>
@@ -985,7 +985,7 @@ adminRouter.post('/drivers/:id/plan', requireAuth, async (req, res) => {
   const amount = plan === 'commission'
     ? 0
     : plan === 'daily'
-      ? Number(set?.plan_daily_price ?? set?.subscription_daily_amount ?? 0)
+      ? Number(set?.subscription_daily_amount ?? 0)
       : plan === 'weekly'
         ? Number(set?.plan_weekly_price ?? 0)
         : Number(set?.subscription_monthly_amount ?? 0);
@@ -1582,6 +1582,46 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
           </div>
         </div>
 
+        <!-- 2b. Segmentos de veículo -->
+        <div class="card" style="border-left:4px solid #10B981;">
+          <h2 style="margin:0 0 6px 0;">Planos por tipo de veículo</h2>
+          <p style="margin:0 0 16px 0;color:var(--mut);font-size:13.5px;">Os valores abaixo aparecem no App conforme o veículo principal cadastrado. As motos têm diária, semanal e mensal próprios; os carros têm mensalidades por categoria.</p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;">
+            <div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:14px;padding:16px;">
+              <div style="font-weight:800;color:#047857;font-size:15px;margin-bottom:8px;">Moto</div>
+              <label>Comissão (%)</label>
+              <input name="moto_commission_pct" value="${fmtVal(set.moto_commission_pct ?? 15)}">
+              <label>Diária (R$)</label>
+              <input name="moto_daily_price" value="${fmtVal(set.moto_daily_price ?? 10)}">
+              <label>Semanal (R$)</label>
+              <input name="moto_weekly_price" value="${fmtVal(set.moto_weekly_price ?? 40)}">
+              <label>Mensal (R$)</label>
+              <input name="moto_monthly_price" value="${fmtVal(set.moto_monthly_price ?? 150)}">
+            </div>
+            <div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:14px;padding:16px;">
+              <div style="font-weight:800;color:#1D4ED8;font-size:15px;margin-bottom:8px;">Carros — mensal</div>
+              <label>Econômico (R$)</label>
+              <input name="car_economy_monthly_price" value="${fmtVal(set.car_economy_monthly_price ?? 350)}">
+              <label>Conforto (R$)</label>
+              <input name="car_comfort_monthly_price" value="${fmtVal(set.car_comfort_monthly_price ?? 380)}">
+              <label>Prêmio (R$)</label>
+              <input name="car_premium_monthly_price" value="${fmtVal(set.car_premium_monthly_price ?? 450)}">
+            </div>
+          </div>
+        </div>
+
+        <!-- 2c. Tarifa noturna -->
+        <div class="card" style="border-left:4px solid #7C3AED;">
+          <h2 style="margin:0 0 6px 0;">Tarifa noturna automática</h2>
+          <p style="margin:0 0 16px 0;color:var(--mut);font-size:13.5px;">A regra é aplicada no servidor no horário de São Paulo. Por padrão: 19:00 às 06:00 com multiplicador de 1,15x.</p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">
+            <div><label>Ativar tarifa noturna</label><select name="night_fare_enabled"><option value="1" ${set.night_fare_enabled !== false ? 'selected' : ''}>Sim</option><option value="0" ${set.night_fare_enabled === false ? 'selected' : ''}>Não</option></select></div>
+            <div><label>Início</label><input type="time" name="night_start" value="${esc(String(set.night_start || '19:00').slice(0, 5))}"></div>
+            <div><label>Fim</label><input type="time" name="night_end" value="${esc(String(set.night_end || '06:00').slice(0, 5))}"></div>
+            <div><label>Multiplicador</label><input name="night_multiplier" value="${fmtVal(set.night_multiplier ?? 1.15)}" placeholder="1,15"></div>
+          </div>
+        </div>
+
         <!-- 3. Dados PIX -->
         <div class="card" style="border-left:4px solid #F59E0B;">
           <h2 style="margin:0 0 6px 0;">Dados de Recebimento PIX da Plataforma</h2>
@@ -1748,6 +1788,17 @@ adminRouter.post('/settings', requireAuth, async (req, res) => {
     subscription_daily_amount: num(b.subscription_daily_amount),
     plan_weekly_price: num(b.plan_weekly_price),
     subscription_monthly_amount: num(b.subscription_monthly_amount),
+    moto_commission_pct: num(b.moto_commission_pct),
+    moto_daily_price: num(b.moto_daily_price),
+    moto_weekly_price: num(b.moto_weekly_price),
+    moto_monthly_price: num(b.moto_monthly_price),
+    car_economy_monthly_price: num(b.car_economy_monthly_price),
+    car_comfort_monthly_price: num(b.car_comfort_monthly_price),
+    car_premium_monthly_price: num(b.car_premium_monthly_price),
+    night_fare_enabled: b.night_fare_enabled === '1',
+    night_start: b.night_start || '19:00',
+    night_end: b.night_end || '06:00',
+    night_multiplier: num(b.night_multiplier),
     platform_pix_key: b.platform_pix_key ?? '',
     platform_pix_name: b.platform_pix_name ?? '',
     platform_pix_city: b.platform_pix_city ?? '',

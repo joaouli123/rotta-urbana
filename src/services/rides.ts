@@ -102,12 +102,12 @@ export async function getDriverCompletedRides(limit = 500): Promise<RideRow[]> {
 /** Estimated fare per ride category for a given distance/duration. */
 export async function estimateFares(distanceKm: number, durationMin: number): Promise<Record<string, number>> {
   const types = ['moto', 'economy', 'comfort', 'premium'] as const;
-  const entries = await Promise.all(types.map(async (t) => {
-    const { data } = await supabase.rpc('fare_estimate', {
-      p_ride_type: t, p_distance_km: distanceKm, p_duration_min: durationMin,
-    });
-    return [t, Number(data) || 0] as const;
-  }));
+  const results = await Promise.allSettled(types.map((t) => supabase.rpc('fare_estimate', {
+    p_ride_type: t, p_distance_km: distanceKm, p_duration_min: durationMin,
+  })));
+  const entries = results.map((result, index) => [
+    types[index], result.status === 'fulfilled' ? Number(result.value.data) || 0 : 0,
+  ] as const);
   return Object.fromEntries(entries);
 }
 

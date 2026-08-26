@@ -83,6 +83,13 @@ export async function getSearchingRides(): Promise<RideRow[]> {
   return (data as RideRow[]) ?? [];
 }
 
+export async function getMyPrimaryVehicleSegment(): Promise<'moto' | 'car'> {
+  const { data: u } = await supabase.auth.getUser();
+  if (!u?.user) return 'car';
+  const { data } = await supabase.from('vehicles').select('type').eq('driver_id', u.user.id).eq('is_primary', true).order('created_at').limit(1).maybeSingle();
+  return data?.type === 'moto' ? 'moto' : 'car';
+}
+
 /** Persist a driver's decision so a declined request never reappears. */
 export async function declineRide(rideId: string): Promise<void> {
   const { error } = await supabase.rpc('decline_ride', { p_ride_id: rideId });

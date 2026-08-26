@@ -48,7 +48,7 @@ import DriverRatePassengerScreen from '../screens/driver/DriverRatePassengerScre
 
 // Plan selection (shown once after driver registration)
 import PlanSelectionScreen from '../screens/driver/PlanSelectionScreen';
-import { getDriverPlanType, type PlanType } from '../services/payments';
+import { getDriverPlanType, getDriverPlanSegment, type PlanType } from '../services/payments';
 
 // Sinop, MT center — fallback when GPS is unavailable. [lng, lat]
 const SINOP: [number, number] = [-55.5024, -11.8642];
@@ -647,8 +647,9 @@ const DriverFlow: React.FC = () => {
 
   const startSubPayment = async (plan: 'daily' | 'weekly' | 'monthly') => {
     try {
-      await selectPlan(plan);
-      const checkout = await createSubscriptionCheckout(plan);
+      const segment = await getDriverPlanSegment() ?? 'economy';
+      await selectPlan(plan, segment);
+      const checkout = await createSubscriptionCheckout(plan, segment);
       const label = plan === 'daily' ? 'Diária' : plan === 'weekly' ? 'Semanal' : 'Mensal';
       await Linking.openURL(checkout.init_point);
       Alert.alert('Checkout aberto', `Pague com cartão ou Pix para ativar a assinatura ${label}. A cobrança recorrente será gerenciada pelo Mercado Pago.`);

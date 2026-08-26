@@ -8,7 +8,7 @@ import {
   ScrollView,
   Image,
   TextInput,
-  Dimensions,
+  useWindowDimensions,
   Switch,
   Modal,
   Alert,
@@ -123,10 +123,10 @@ interface RideRequestScreenProps {
 }
 
 const SINOP: [number, number] = [-55.5024, -11.8642];
-const { height: SCREEN_H } = Dimensions.get('window');
 
 const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '', onConfirm, onBack }) => {
   const insets = useSafeAreaInsets();
+  const { height: SCREEN_H } = useWindowDimensions();
   const { profile } = useAuth();
   const isFemale = profile?.gender === 'female';
   const [selectedDest, setSelectedDest] = useState(destination);
@@ -188,7 +188,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
         if (status !== 'granted') { setOrigin(SINOP); return; }
         const last = await Location.getLastKnownPositionAsync();
         if (last) setOrigin([last.coords.longitude, last.coords.latitude]);
-        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         setOrigin([pos.coords.longitude, pos.coords.latitude]);
       } catch { setOrigin(SINOP); }
     })();
@@ -252,14 +252,19 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
   // Real geocoding search (debounced), biased to the user's location.
   useEffect(() => {
     if (step !== 'search' || query.trim().length < 2 || !origin) { setSuggestions([]); return; }
+    let cancelled = false;
     setSearching(true);
     const t = setTimeout(async () => {
       try {
         const places = await geocode(query, origin);
-        setSuggestions(places.map((p, i) => ({ id: String(i), name: p.name, address: p.address, lng: p.lng, lat: p.lat })));
-      } catch { setSuggestions([]); } finally { setSearching(false); }
+        if (!cancelled) setSuggestions(places.map((p, i) => ({ id: String(i), name: p.name, address: p.address, lng: p.lng, lat: p.lat })));
+      } catch {
+        if (!cancelled) setSuggestions([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
     }, 180);
-    return () => clearTimeout(t);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [query, step, origin]);
 
   // Recent destinations (history) for the empty state.

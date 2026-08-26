@@ -10,7 +10,6 @@ import {
   StatusBar,
   Alert,
   Image,
-  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
@@ -23,16 +22,12 @@ import {
   Lock,
   ChevronLeft,
   CheckCircle,
-  FileText,
   Camera,
-  MapPin,
-  Home,
 } from 'lucide-react-native';
 import { useAuth } from '../../contexts/AuthContext';
 import { friendlyError } from '../../lib/errors';
-import { pickFromCamera, chooseAndPickDocument, type PickedFile } from '../../lib/filePick';
-import { uploadDocument, type DocType } from '../../services/documents';
-import { supabase } from '../../lib/supabase';
+import { pickFromCamera, type PickedFile } from '../../lib/filePick';
+import { uploadPassengerSelfie } from '../../services/documents';
 import type { Gender } from '../../types/db';
 import {
   AUTH_DARK,
@@ -47,6 +42,32 @@ const GENDER_OPTIONS: { value: Gender; label: string }[] = [
   { value: 'other', label: 'Outro' },
 ];
 
+function onlyDigits(value: string): string {
+  return value.replace(/\D/g, '').slice(0, 11);
+}
+
+function formatCpf(value: string): string {
+  return onlyDigits(value)
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d)/, '$1.$2')
+    .replace(/(\d{3})(\d{1,2})$/, '$1-$2');
+}
+
+function isValidCpf(value: string): boolean {
+  const cpf = onlyDigits(value);
+  if (cpf.length !== 11 || /^(\d)\1{10}$/.test(cpf)) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i += 1) sum += Number(cpf[i]) * (10 - i);
+  let digit = (sum * 10) % 11;
+  if (digit === 10) digit = 0;
+  if (digit !== Number(cpf[9])) return false;
+  sum = 0;
+  for (let i = 0; i < 10; i += 1) sum += Number(cpf[i]) * (11 - i);
+  digit = (sum * 10) % 11;
+  if (digit === 10) digit = 0;
+  return digit === Number(cpf[10]);
+}
+
 interface RegisterPassengerScreenProps {
   onBack: () => void;
 }
@@ -55,11 +76,12 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
   const insets = useSafeAreaInsets();
   const { signUp } = useAuth();
   const [step, setStep] = useState(0);
-  const steps = ['Dados pessoais', 'Endereço', 'Documentos'];
+  const steps = ['Dados pessoais', 'Verificação'];
   const [loading, setLoading] = useState(false);
 
   // ── Step 0: Dados Pessoais ──
   const [name, setName] = useState('');
+  const [cpf, setCpf] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [gender, setGender] = useState<Gender | null>(null);
@@ -68,65 +90,26 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
   const [showPw, setShowPw] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
 
-  // ── Step 1: Endereço ──
-  const [cep, setCep] = useState('');
-  const [street, setStreet] = useState('');
-  const [number, setNumber] = useState('');
-  const [neighborhood, setNeighborhood] = useState('');
-  const [city, setCity] = useState('');
-  const [state, setState] = useState('');
-  const [complement, setComplement] = useState('');
-  const [cepLoading, setCepLoading] = useState(false);
+  // ── Step 1: Selfie ──
+  const [selfie, setSelfie] = useState<PickedFile | null>(null);
 
-  // ── Step 2: Documentos ──
-  const [docImages, setDocImages] = useState<{
-    rg: PickedFile | null;
-    selfie: PickedFile | null;
-  }>({ rg: null, selfie: null });
-
-  // CEP Change handler (look up via ViaCEP)
-  const handleCepChange = async (val: string) => {
-    const cleaned = val.replace(/\D/g, '').substring(0, 8);
-    setCep(cleaned);
-    if (cleaned.length === 8) {
-      setCepLoading(true);
-      try {
-        const res = await fetch(`https://viacep.com.br/ws/${cleaned}/json/`);
-        const data = await res.json();
-        if (data.erro) {
-          Alert.alert('Atenção', 'CEP não encontrado.');
-        } else {
-          setStreet(data.logradouro || '');
-          setNeighborhood(data.bairro || '');
-          setCity(data.localidade || '');
-          setState(data.uf || '');
-        }
-      } catch {
-        Alert.alert('Erro', 'Não foi possível buscar o CEP automaticamente.');
-      } finally {
-        setCepLoading(false);
-      }
-    }
-  };
-
-  const handlePickDoc = async (type: 'rg' | 'selfie') => {
+  const handlePickSelfie = async () => {
     try {
-      if (type === 'selfie') {
-        const picked = await pickFromCamera(true);
-        if (picked) setDocImages((prev) => ({ ...prev, selfie: picked }));
-      } else {
-        const picked = await chooseAndPickDocument();
-        if (picked) setDocImages((prev) => ({ ...prev, rg: picked }));
-      }
+      const picked = await pickFromCamera(true);
+      if (picked) setSelfie(picked);
     } catch (e: any) {
-      Alert.alert('Erro', e?.message || 'Erro ao selecionar arquivo.');
+      Alert.alert('Erro', e?.message || 'Não foi possível capturar a selfie.');
     }
   };
 
   const validateStep = () => {
     if (step === 0) {
-      if (!name.trim() || !email.trim() || !phone.trim() || !password || !confirmPassword) {
+      if (!name.trim() || !cpf.trim() || !email.trim() || !phone.trim() || !password || !confirmPassword) {
         Alert.alert('Atenção', 'Preencha todos os campos pessoais.');
+        return false;
+      }
+      if (!isValidCpf(cpf)) {
+        Alert.alert('Atenção', 'Informe um CPF válido.');
         return false;
       }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
@@ -146,16 +129,7 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
         return false;
       }
     } else if (step === 1) {
-      if (!cep.trim() || !street.trim() || !number.trim() || !neighborhood.trim() || !city.trim() || !state.trim()) {
-        Alert.alert('Atenção', 'Preencha o CEP e todos os campos obrigatórios do endereço.');
-        return false;
-      }
-    } else if (step === 2) {
-      if (!docImages.rg) {
-        Alert.alert('Atenção', 'Envie a foto do seu documento (RG ou CPF) para prosseguir.');
-        return false;
-      }
-      if (!docImages.selfie) {
+      if (!selfie) {
         Alert.alert('Atenção', 'Tire a selfie de verificação para concluir.');
         return false;
       }
@@ -190,15 +164,7 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
       password,
       role: 'passenger',
       gender: gender ?? undefined,
-      metadata: {
-        address_cep: cep,
-        address_street: street,
-        address_number: number,
-        address_neighborhood: neighborhood,
-        address_city: city,
-        address_state: state,
-        address_complement: complement,
-      },
+      cpf: onlyDigits(cpf),
     });
 
     if (error) {
@@ -207,34 +173,17 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
       return;
     }
 
-    // 2. Upload documents after session is created
+    // 2. Upload only the selfie after the session is created. Passenger
+    // registration never asks for or persists an RG/document photo.
     try {
-      const { data: u } = await supabase.auth.getUser();
-      const uid = u?.user?.id;
-      if (uid) {
-        if (docImages.rg) {
-          await uploadDocument('rg', docImages.rg.base64, {
-            contentType: docImages.rg.contentType,
-            ext: docImages.rg.ext,
-          });
-        }
-        if (docImages.selfie) {
-          await uploadDocument('selfie', docImages.selfie.base64, {
-            contentType: docImages.selfie.contentType,
-            ext: docImages.selfie.ext,
-          });
-        }
-
-        // 3. Save document paths to user metadata
-        await supabase.auth.updateUser({
-          data: {
-            doc_rg_path: `${uid}/rg.${docImages.rg?.ext || 'jpg'}`,
-            doc_selfie_path: `${uid}/selfie.${docImages.selfie?.ext || 'jpg'}`,
-          },
-        });
-      }
+      if (selfie) await uploadPassengerSelfie(selfie.base64, {
+        contentType: selfie.contentType,
+        ext: selfie.ext,
+      });
+      Alert.alert('Cadastro concluído', 'Sua conta foi criada. A selfie será usada na validação do cadastro.');
     } catch (uploadErr) {
-      console.warn('Silent document upload failure:', uploadErr);
+      console.warn('Passenger selfie upload failure:', uploadErr);
+      Alert.alert('Cadastro criado', 'A conta foi criada, mas a selfie não foi enviada. Tente novamente pelo suporte.');
     } finally {
       setLoading(false);
     }
@@ -252,6 +201,13 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
               placeholder="Seu nome"
               autoCapitalize="words"
               leftIcon={<User size={18} color="#999" />}
+            />
+            <AuthField
+              label="CPF"
+              value={formatCpf(cpf)}
+              onChangeText={(value) => setCpf(onlyDigits(value))}
+              placeholder="000.000.000-00"
+              keyboardType="numeric"
             />
             <AuthField
               label="E-mail"
@@ -319,114 +275,15 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
       case 1:
         return (
           <>
-            <AuthField
-              label="CEP"
-              value={cep}
-              onChangeText={handleCepChange}
-              placeholder="00000-000"
-              keyboardType="numeric"
-              leftIcon={<MapPin size={18} color="#999" />}
-              rightElement={cepLoading ? <ActivityIndicator size="small" color={AUTH_GREEN} /> : undefined}
-            />
-            <AuthField
-              label="Rua / Avenida"
-              value={street}
-              onChangeText={setStreet}
-              placeholder="Nome da rua"
-              leftIcon={<Home size={18} color="#999" />}
-            />
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <View style={{ flex: 1 }}>
-                <AuthField
-                  label="Número"
-                  value={number}
-                  onChangeText={setNumber}
-                  placeholder="123"
-                  keyboardType="numeric"
-                />
-              </View>
-              <View style={{ flex: 2 }}>
-                <AuthField
-                  label="Complemento (Opcional)"
-                  value={complement}
-                  onChangeText={setComplement}
-                  placeholder="Apt 402 / Casa"
-                />
-              </View>
-            </View>
-            <AuthField
-              label="Bairro"
-              value={neighborhood}
-              onChangeText={setNeighborhood}
-              placeholder="Bairro"
-            />
-            <View style={{ flexDirection: 'row', gap: 12 }}>
-              <View style={{ flex: 3 }}>
-                <AuthField
-                  label="Cidade"
-                  value={city}
-                  onChangeText={setCity}
-                  placeholder="Cidade"
-                />
-              </View>
-              <View style={{ flex: 1 }}>
-                <AuthField
-                  label="Estado"
-                  value={state}
-                  onChangeText={setState}
-                  placeholder="UF"
-                  autoCapitalize="characters"
-                  maxLength={2}
-                />
-              </View>
-            </View>
-          </>
-        );
-      case 2:
-        return (
-          <>
-            <Text style={s.stepDesc}>Envie fotos ou arquivos de identificação e selfie de segurança. Seus dados são protegidos.</Text>
-            
-            {/* RG Document Card */}
+            <Text style={s.stepDesc}>Informe o CPF e tire uma selfie para validar sua conta. Não é necessário enviar foto de RG ou CPF.</Text>
             <TouchableOpacity
               style={s.docCard}
               activeOpacity={0.8}
-              onPress={() => handlePickDoc('rg')}
+              onPress={handlePickSelfie}
             >
-              {docImages.rg && docImages.rg.contentType.startsWith('image') ? (
+              {selfie ? (
                 <Image
-                  source={{ uri: `data:${docImages.rg.contentType};base64,${docImages.rg.base64}` }}
-                  style={s.docThumb}
-                />
-              ) : (
-                <View style={s.docIconWrap}>
-                  <FileText size={20} color={AUTH_GREEN} strokeWidth={2} />
-                </View>
-              )}
-              <View style={{ flex: 1 }}>
-                <Text style={s.docLabel}>Documento de Identidade</Text>
-                <Text style={s.docHint}>
-                  {docImages.rg ? 'Selecionado — toque para trocar' : 'Foto do RG ou CPF'}
-                </Text>
-              </View>
-              <View style={[s.docAction, docImages.rg && s.docActionDone]}>
-                {docImages.rg ? (
-                  <CheckCircle size={16} color="#FFFFFF" strokeWidth={2.5} />
-                ) : (
-                  <Text style={s.docActionText}>Enviar</Text>
-                )}
-              </View>
-            </TouchableOpacity>
-
-            {/* Selfie Verification Card */}
-            <TouchableOpacity
-              style={s.docCard}
-              activeOpacity={0.8}
-              onPress={() => handlePickDoc('selfie')}
-            >
-              {docImages.selfie ? (
-                <Image
-                  source={{ uri: `data:${docImages.selfie.contentType};base64,${docImages.selfie.base64}` }}
+                  source={{ uri: `data:${selfie.contentType};base64,${selfie.base64}` }}
                   style={s.docThumb}
                 />
               ) : (
@@ -435,13 +292,13 @@ const RegisterPassengerScreen: React.FC<RegisterPassengerScreenProps> = ({ onBac
                 </View>
               )}
               <View style={{ flex: 1 }}>
-                <Text style={s.docLabel}>Selfie de Verificação</Text>
+                <Text style={s.docLabel}>Selfie de verificação</Text>
                 <Text style={s.docHint}>
-                  {docImages.selfie ? 'Selfie capturada ✓' : 'Tirar selfie agora'}
+                  {selfie ? 'Selfie capturada ✓' : 'Tirar selfie agora'}
                 </Text>
               </View>
-              <View style={[s.docAction, docImages.selfie && s.docActionDone]}>
-                {docImages.selfie ? (
+              <View style={[s.docAction, selfie && s.docActionDone]}>
+                {selfie ? (
                   <CheckCircle size={16} color="#FFFFFF" strokeWidth={2.5} />
                 ) : (
                   <Text style={s.docActionText}>Tirar</Text>

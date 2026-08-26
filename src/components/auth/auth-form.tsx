@@ -27,14 +27,14 @@ interface AuthHeaderProps {
 
 export function AuthHeader({ title, onBack }: AuthHeaderProps) {
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
 
   return (
     <ImageBackground
       source={require('../../../assets/auth-city-curve-v3.png')}
       resizeMode="cover"
       imageStyle={styles.heroImage}
-      style={[styles.header, { height: width * 0.52 }]}
+      style={[styles.header, { height: Math.min(width * 0.52, Math.max(190, height * 0.34)) }]}
     >
       <TouchableOpacity
         accessibilityRole="button"

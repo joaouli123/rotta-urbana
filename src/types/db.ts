@@ -8,6 +8,7 @@ export type RideTypeDb = 'economy' | 'comfort' | 'premium' | 'moto';
 export type PaymentMethodDb = 'pix' | 'card' | 'boleto' | 'cash';
 export type SubscriptionStatus = 'pending' | 'active' | 'expired' | 'suspended';
 export type Gender = 'female' | 'male' | 'other';
+export type PlanSegment = 'moto' | 'economy' | 'comfort' | 'premium';
 
 export interface ProfileRow {
   id: string;
@@ -90,6 +91,7 @@ export interface SubscriptionRow {
   driver_id: string;
   status: SubscriptionStatus;
   plan?: 'commission' | 'daily' | 'weekly' | 'monthly';
+  plan_segment?: PlanSegment | null;
   amount: number;
   due_date: string;
   paid_at: string | null;
@@ -115,6 +117,17 @@ export interface AppSettings {
   commission_pct: number | null;
   plan_daily_price: number | null;
   plan_weekly_price: number | null;
+  moto_commission_pct?: number | null;
+  moto_daily_price?: number | null;
+  moto_weekly_price?: number | null;
+  moto_monthly_price?: number | null;
+  car_economy_monthly_price?: number | null;
+  car_comfort_monthly_price?: number | null;
+  car_premium_monthly_price?: number | null;
+  night_fare_enabled?: boolean;
+  night_start?: string | null;
+  night_end?: string | null;
+  night_multiplier?: number | null;
 }
 
 export interface PaymentRow {

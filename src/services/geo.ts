@@ -2,6 +2,7 @@
 // only the native map RENDERING (@rnmapbox/maps) needs a dev build.
 // Free tier (per month): Directions 100k req, Geocoding 100k req, Maps SDK 25k MAU.
 const TOKEN = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN ?? '';
+const REQUEST_TIMEOUT_MS = 12_000;
 
 export type LngLat = [number, number]; // [lng, lat] — Mapbox order
 
@@ -18,15 +19,28 @@ export interface Place {
   lat: number;
 }
 
+async function fetchJson<T>(url: string): Promise<T | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return null;
+    return await res.json() as T;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Driving route geometry + distance/duration between two points. */
 export async function getRoute(from: LngLat, to: LngLat): Promise<RouteResult | null> {
   if (!TOKEN) return null;
   const coords = `${from[0]},${from[1]};${to[0]},${to[1]}`;
   const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}` +
     `?geometries=geojson&overview=full&access_token=${TOKEN}`;
-  const res = await fetch(url);
-  if (!res.ok) return null;
-  const data = await res.json();
+  const data = await fetchJson<{ routes?: any[] }>(url);
+  if (!data) return null;
   const route = data.routes?.[0];
   if (!route) return null;
   return {
@@ -43,9 +57,8 @@ export async function geocode(query: string, proximity?: LngLat): Promise<Place[
     q: query, access_token: TOKEN, country: 'br', language: 'pt', limit: '6',
   });
   if (proximity) params.set('proximity', `${proximity[0]},${proximity[1]}`);
-  const res = await fetch(`https://api.mapbox.com/search/geocode/v6/forward?${params}`);
-  if (!res.ok) return [];
-  const data = await res.json();
+  const data = await fetchJson<{ features?: any[] }>(`https://api.mapbox.com/search/geocode/v6/forward?${params}`);
+  if (!data) return [];
   return (data.features ?? []).map((f: any) => ({
     name: f.properties?.name ?? f.properties?.name_preferred ?? query,
     address: f.properties?.full_address ?? f.properties?.place_formatted ?? '',
@@ -61,9 +74,8 @@ export async function reverseGeocode(lng: number, lat: number): Promise<string> 
     longitude: String(lng), latitude: String(lat),
     access_token: TOKEN, language: 'pt', limit: '1',
   });
-  const res = await fetch(`https://api.mapbox.com/search/geocode/v6/reverse?${params}`);
-  if (!res.ok) return '';
-  const data = await res.json();
+  const data = await fetchJson<{ features?: any[] }>(`https://api.mapbox.com/search/geocode/v6/reverse?${params}`);
+  if (!data) return '';
   return data.features?.[0]?.properties?.full_address ??
          data.features?.[0]?.properties?.place_formatted ?? '';
 }

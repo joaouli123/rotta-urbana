@@ -77,3 +77,30 @@ export async function uploadDocument(
     );
   if (dbErr) throw dbErr;
 }
+
+/** Upload the passenger selfie without creating a driver_documents row. */
+export async function uploadPassengerSelfie(
+  base64: string,
+  opts?: { contentType?: string; ext?: string },
+): Promise<string> {
+  if (!base64 || base64.length < 100) {
+    throw new Error('Selfie inválida ou incompleta. Tire a foto novamente.');
+  }
+  const contentType = opts?.contentType || 'image/jpeg';
+  const ext = (opts?.ext || 'jpg').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'jpg';
+  const { data: u } = await supabase.auth.getUser();
+  if (!u?.user) throw new Error('Sessão não encontrada. Entre novamente.');
+
+  const path = `${u.user.id}/passenger-selfie.${ext}`;
+  const { error: uploadError } = await supabase.storage
+    .from(BUCKET)
+    .upload(path, decode(base64), { contentType, upsert: true });
+  if (uploadError) throw uploadError;
+
+  const { error: profileError } = await supabase
+    .from('profiles')
+    .update({ doc_selfie_path: path })
+    .eq('id', u.user.id);
+  if (profileError) throw profileError;
+  return path;
+}

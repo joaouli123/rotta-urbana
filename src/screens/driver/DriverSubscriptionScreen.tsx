@@ -11,9 +11,9 @@ import {
 import { Colors, Radius } from '../../constants';
 import {
   getSubscription, getAppSettings, selectPlan, createSubscriptionCheckout, syncSubscriptionStatus,
-  getDriverPlanType, type PlanType,
+  getDriverPlanType, getDriverPlanSegment, type PlanType,
 } from '../../services/payments';
-import type { SubscriptionRow, AppSettings } from '../../types/db';
+import type { SubscriptionRow, AppSettings, PlanSegment } from '../../types/db';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtBRL(v: number) { return 'R$ ' + Number(v).toFixed(2).replace('.', ','); }
@@ -40,11 +40,15 @@ interface PlanDef {
   immediate: boolean;
 }
 
-function buildPlans(settings: AppSettings | null): PlanDef[] {
-  const daily   = settings?.plan_daily_price   ?? settings?.subscription_daily_amount   ?? 10;
-  const weekly  = settings?.plan_weekly_price  ?? (settings?.subscription_monthly_amount ?? 120) / 4;
-  const monthly = settings?.subscription_monthly_amount ?? 120;
-  const pct     = settings?.commission_pct ?? 15;
+function buildPlans(settings: AppSettings | null, segment: PlanSegment | null): PlanDef[] {
+  const isMoto = segment === 'moto';
+  const daily   = isMoto ? (settings?.moto_daily_price ?? settings?.subscription_daily_amount ?? 10) : (settings?.subscription_daily_amount ?? 10);
+  const weekly  = isMoto ? (settings?.moto_weekly_price ?? settings?.plan_weekly_price ?? 40) : (settings?.plan_weekly_price ?? (settings?.subscription_monthly_amount ?? 120) / 4);
+  const monthly = isMoto ? (settings?.moto_monthly_price ?? settings?.subscription_monthly_amount ?? 150)
+    : segment === 'comfort' ? (settings?.car_comfort_monthly_price ?? 380)
+      : segment === 'premium' ? (settings?.car_premium_monthly_price ?? 450)
+        : (settings?.car_economy_monthly_price ?? settings?.subscription_monthly_amount ?? 350);
+  const pct     = isMoto ? (settings?.moto_commission_pct ?? settings?.commission_pct ?? 15) : (settings?.commission_pct ?? 15);
 
   return [
     {
@@ -100,6 +104,7 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   const [sub, setSub]           = useState<SubscriptionRow | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [currentPlan, setCurrentPlan] = useState<PlanType | null>(null);
+  const [currentSegment, setCurrentSegment] = useState<PlanSegment | null>(null);
   const [loading, setLoading]   = useState(true);
 
   // Plan-change flow
@@ -111,10 +116,11 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [loadedSub, cfg, pt] = await Promise.all([
+      const [loadedSub, cfg, pt, segment] = await Promise.all([
         getSubscription(),
         getAppSettings(),
         getDriverPlanType(),
+        getDriverPlanSegment(),
       ]);
       const s = loadedSub?.provider_subscription_id
         ? await syncSubscriptionStatus().catch(() => loadedSub)
@@ -122,6 +128,7 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
       setSub(s);
       setSettings(cfg);
       setCurrentPlan(pt);
+      setCurrentSegment(segment ?? (loadedSub?.plan_segment ?? 'economy'));
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
@@ -134,7 +141,7 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
     return () => listener.remove();
   }, [load]);
 
-  const plans = buildPlans(settings);
+  const plans = buildPlans(settings, currentSegment);
 
   // ── Plan change ──────────────────────────────────────────────────────────────
   const handleSelectPlan = (plan: PlanType) => {
@@ -156,7 +163,8 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
     setPendingPlan(plan);
     setPixCode(null);
     try {
-      await selectPlan(plan);
+      const segment = currentSegment ?? 'economy';
+      await selectPlan(plan, segment);
       setCurrentPlan(plan);
       if (plan === 'commission') {
         Alert.alert('Plano atualizado!', 'Você está no plano Por Corrida. Acesso imediato.');
@@ -164,7 +172,7 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
         load();
         return;
       }
-      const result = await createSubscriptionCheckout(plan);
+      const result = await createSubscriptionCheckout(plan, segment);
       setPixCode(result.init_point);
       setPixAmount(result.amount);
     } catch (err: unknown) {

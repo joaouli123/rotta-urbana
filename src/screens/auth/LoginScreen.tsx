@@ -74,7 +74,7 @@ const HERO_HEIGHT_RATIO = 0.58;
 const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver, onForgotPassword }) => {
   const { signIn } = useAuth();
   const insets = useSafeAreaInsets();
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPw, setShowPw] = useState(false);
@@ -100,7 +100,10 @@ const LoginScreen: React.FC<LoginScreenProps> = ({ onRegister, onRegisterDriver,
           imageStyle={s.heroImage}
           style={[
           s.header,
-          { height: width * HERO_HEIGHT_RATIO },
+          // Keep the form reachable on short notebook screens as well as on
+          // narrow phones. The old width-only height could push the whole
+          // login sheet below the viewport at 1280x720.
+          { height: Math.min(width * HERO_HEIGHT_RATIO, Math.max(210, height * 0.44)) },
         ]}
         >
           <Image

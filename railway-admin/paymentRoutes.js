@@ -84,8 +84,16 @@ function planFromProvider(provider, fallback = 'monthly') {
   return FIXED_PLANS.has(fallback) ? fallback : 'monthly';
 }
 
-function amountFromSettings(settings, plan) {
-  if (plan === 'daily') return Number(settings.plan_daily_price ?? settings.subscription_daily_amount ?? 0);
+function amountFromSettings(settings, plan, segment = 'economy') {
+  if (segment === 'moto') {
+    if (plan === 'daily') return Number(settings.moto_daily_price ?? settings.subscription_daily_amount ?? 0);
+    if (plan === 'weekly') return Number(settings.moto_weekly_price ?? settings.plan_weekly_price ?? 0);
+    if (plan === 'monthly') return Number(settings.moto_monthly_price ?? settings.subscription_monthly_amount ?? 0);
+  }
+  if (plan === 'monthly' && segment === 'economy') return Number(settings.car_economy_monthly_price ?? settings.subscription_monthly_amount ?? 0);
+  if (plan === 'monthly' && segment === 'comfort') return Number(settings.car_comfort_monthly_price ?? settings.subscription_monthly_amount ?? 0);
+  if (plan === 'monthly' && segment === 'premium') return Number(settings.car_premium_monthly_price ?? settings.subscription_monthly_amount ?? 0);
+  if (plan === 'daily') return Number(settings.subscription_daily_amount ?? 0);
   if (plan === 'weekly') return Number(settings.plan_weekly_price ?? (Number(settings.subscription_monthly_amount || 0) / 4));
   if (plan === 'monthly') return Number(settings.subscription_monthly_amount || 0);
   return 0;
@@ -99,7 +107,7 @@ async function driverFromBearer(req, admin) {
 
   const [{ data: profile }, { data: driver }] = await Promise.all([
     admin.from('profiles').select('id,full_name,email,role,is_active').eq('id', data.user.id).maybeSingle(),
-    admin.from('drivers').select('id,plan_type').eq('id', data.user.id).maybeSingle(),
+    admin.from('drivers').select('id,plan_type,plan_segment').eq('id', data.user.id).maybeSingle(),
   ]);
   if (!driver || profile?.role !== 'driver' || profile?.is_active === false) {
     throw new MercadoPagoError('Apenas motoristas podem contratar uma assinatura.', 403);
@@ -121,7 +129,7 @@ function bearerMiddleware(admin) {
 
 async function getSettings(admin) {
   const { data, error } = await admin.from('app_settings')
-    .select('subscription_daily_amount,subscription_monthly_amount,plan_daily_price,plan_weekly_price,updated_at')
+    .select('subscription_daily_amount,subscription_monthly_amount,plan_weekly_price,moto_daily_price,moto_weekly_price,moto_monthly_price,car_economy_monthly_price,car_comfort_monthly_price,car_premium_monthly_price,updated_at')
     .eq('id', 1).single();
   if (error) throw error;
   return data || {};
@@ -139,13 +147,14 @@ async function getSubscriptionByProviderId(admin, providerId) {
   return data;
 }
 
-async function syncSubscription(admin, provider, existing, driverId) {
+async function syncSubscription(admin, provider, existing, driverId, segment = existing?.plan_segment || null) {
   const plan = planFromProvider(provider, existing?.plan);
   const amount = Number(provider?.auto_recurring?.transaction_amount ?? existing?.amount ?? 0);
   const providerStatus = String(provider?.status || 'pending');
   const { data, error } = await admin.from('subscriptions').upsert({
     driver_id: driverId,
     plan,
+    plan_segment: segment,
     amount: Number.isFinite(amount) ? amount : Number(existing?.amount || 0),
     status: localStatusFromProvider(providerStatus),
     due_date: dueDateForProvider(provider, existing, plan, providerStatus),
@@ -318,13 +327,16 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
 
   app.post('/api/subscriptions/create-checkout', requireDriver, async (req, res) => {
     const plan = String(req.body?.plan || '').toLowerCase();
+    const segment = String(req.body?.segment || req.driverAuth.driver.plan_segment || 'economy').toLowerCase();
+    const validSegments = new Set(['moto', 'economy', 'comfort', 'premium']);
     if (!FIXED_PLANS.has(plan)) return res.status(400).json({ error: 'Plano recorrente inválido.' });
+    if (!validSegments.has(segment)) return res.status(400).json({ error: 'Categoria de plano inválida.' });
     if (!mercadopagoConfigured()) return res.status(503).json({ error: 'Mercado Pago ainda não está configurado no servidor.' });
 
     try {
       const { profile, user, driver } = req.driverAuth;
       const settings = await getSettings(admin);
-      const amount = amountFromSettings(settings, plan);
+      const amount = amountFromSettings(settings, plan, segment);
       if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'O valor do plano não está configurado no painel.' });
 
       let local = await getSubscription(admin, driver.id);
@@ -333,11 +345,12 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
         try { current = await getPreapproval(local.provider_subscription_id); }
         catch (error) { console.warn('[MercadoPago] consulta da assinatura atual:', error.message); }
         const currentPlan = local.plan || plan;
+        const currentSegment = local.plan_segment || segment;
         const currentStatus = String(current?.status || local.provider_status || '').toLowerCase();
-        if (current && currentPlan === plan && ['pending', 'authorized', 'active'].includes(currentStatus)) {
+        if (current && currentPlan === plan && currentSegment === segment && ['pending', 'authorized', 'active'].includes(currentStatus)) {
           const checkoutUrl = current.init_point || current.sandbox_init_point || local.provider_metadata?.init_point || null;
-          local = await syncSubscription(admin, current, local, driver.id);
-          return res.json({ provider: 'mercadopago', subscription_id: String(current.id), status: current.status, plan, amount, init_point: checkoutUrl, local_subscription_id: local.id });
+          local = await syncSubscription(admin, current, local, driver.id, segment);
+          return res.json({ provider: 'mercadopago', subscription_id: String(current.id), status: current.status, plan, plan_segment: segment, amount, init_point: checkoutUrl, local_subscription_id: local.id });
         }
         if (current && !['cancelled', 'canceled'].includes(currentStatus)) {
           await cancelPreapproval(local.provider_subscription_id);
@@ -353,15 +366,15 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
         amount,
         backUrl: `${host}/pagamento/retorno`,
         notificationUrl: `${host}/api/mercadopago/webhook`,
-        idempotencyKey: `subscription:${driver.id}:${plan}:${settings.updated_at || 'current'}:${local?.provider_subscription_id || 'new'}`,
+        idempotencyKey: `subscription:${driver.id}:${plan}:${segment}:${settings.updated_at || 'current'}:${local?.provider_subscription_id || 'new'}`,
       });
       const initPoint = checkout?.init_point || checkout?.sandbox_init_point;
       if (!checkout?.id || !initPoint) throw new MercadoPagoError('O Mercado Pago não retornou o link de checkout.', 502, checkout);
 
-      local = await syncSubscription(admin, checkout, local, driver.id);
+      local = await syncSubscription(admin, checkout, local, driver.id, segment);
       return res.json({
         provider: 'mercadopago', subscription_id: String(checkout.id), status: checkout.status || 'pending',
-        plan, amount, init_point: initPoint, sandbox_init_point: checkout.sandbox_init_point || null,
+        plan, plan_segment: segment, amount, init_point: initPoint, sandbox_init_point: checkout.sandbox_init_point || null,
         local_subscription_id: local.id,
       });
     } catch (error) {

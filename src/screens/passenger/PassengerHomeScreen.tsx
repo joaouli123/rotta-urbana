@@ -7,7 +7,7 @@ import {
   TextInput,
   ScrollView,
   StatusBar,
-  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
@@ -31,8 +31,6 @@ import { nearbyDrivers } from '../../services/drivers';
 import { getRideHistory } from '../../services/rides';
 import { useAuth } from '../../contexts/AuthContext';
 
-const { height } = Dimensions.get('window');
-
 const RECENT_PLACES = [
   { id: '1', name: 'Shopping Sinop', address: 'Av. Cel. João Ponce de Arruda, 1065', icon: Clock },
   { id: '2', name: 'Hospital Regional', address: 'Av. das Figueiras, 940', icon: Clock },
@@ -51,6 +49,7 @@ const PassengerHomeScreen: React.FC<PassengerHomeProps> = ({
   onProfile,
 }) => {
   const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   const { profile } = useAuth();
   const [searchFocused, setSearchFocused] = useState(false);
   const [coords, setCoords] = useState<[number, number] | null>(null);
@@ -80,7 +79,7 @@ const PassengerHomeScreen: React.FC<PassengerHomeProps> = ({
         const last = await Location.getLastKnownPositionAsync();
         if (active && last) setCoords([last.coords.longitude, last.coords.latitude]);
         // 2) posição precisa
-        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+        const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         if (!active) return;
         const c: [number, number] = [pos.coords.longitude, pos.coords.latitude];
         setCoords(c);
@@ -212,7 +211,7 @@ const styles = StyleSheet.create({
     borderColor: '#76C442',
     paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32,
     shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.5, shadowRadius: 16, elevation: 20,
-    maxHeight: height * 0.58,
+    maxHeight: '58%',
   },
   handle: { width: 40, height: 4, backgroundColor: Colors.border, borderRadius: 2, alignSelf: 'center', marginBottom: 16 },
   greeting: { ...Typography.h4, color: Colors.textPrimary, marginBottom: 14, marginLeft: 12 },
