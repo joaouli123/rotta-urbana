@@ -11,9 +11,11 @@ import {
 import { Colors, Radius } from '../../constants';
 import {
   getSubscription, getAppSettings, selectPlan, createSubscriptionCheckout, syncSubscriptionStatus,
-  getDriverPlanType, getDriverPlanSegment, type PlanType,
+  getDriverPlanType, getDriverPlanSegment, getMercadoPagoConnectionStatus, startMercadoPagoConnection,
+  disconnectMercadoPago, type PlanType,
 } from '../../services/payments';
 import type { SubscriptionRow, AppSettings, PlanSegment } from '../../types/db';
+import type { MercadoPagoConnectionStatus } from '../../services/payments';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtBRL(v: number) { return 'R$ ' + Number(v).toFixed(2).replace('.', ','); }
@@ -106,6 +108,8 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   const [currentPlan, setCurrentPlan] = useState<PlanType | null>(null);
   const [currentSegment, setCurrentSegment] = useState<PlanSegment | null>(null);
   const [loading, setLoading]   = useState(true);
+  const [mpConnection, setMpConnection] = useState<MercadoPagoConnectionStatus | null>(null);
+  const [connectingMp, setConnectingMp] = useState(false);
 
   // Plan-change flow
   const [pendingPlan, setPendingPlan]   = useState<PlanType | null>(null);
@@ -116,11 +120,12 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [loadedSub, cfg, pt, segment] = await Promise.all([
+      const [loadedSub, cfg, pt, segment, connection] = await Promise.all([
         getSubscription(),
         getAppSettings(),
         getDriverPlanType(),
         getDriverPlanSegment(),
+        getMercadoPagoConnectionStatus().catch(() => null),
       ]);
       const s = loadedSub?.provider_subscription_id
         ? await syncSubscriptionStatus().catch(() => loadedSub)
@@ -129,9 +134,32 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
       setSettings(cfg);
       setCurrentPlan(pt);
       setCurrentSegment(segment ?? (loadedSub?.plan_segment ?? 'economy'));
+      setMpConnection(connection);
     } catch { /* ignore */ }
     finally { setLoading(false); }
   }, []);
+
+  const connectMercadoPago = async () => {
+    if (connectingMp) return;
+    setConnectingMp(true);
+    try {
+      const url = await startMercadoPagoConnection();
+      await Linking.openURL(url);
+      Alert.alert('Conexão iniciada', 'Autorize sua conta Mercado Pago no navegador. Ao voltar para o app, toque em atualizar para confirmar.');
+    } catch (error) {
+      Alert.alert('Não foi possível conectar', error instanceof Error ? error.message : 'Tente novamente.');
+    } finally {
+      setConnectingMp(false);
+    }
+  };
+
+  const disconnect = () => Alert.alert('Desconectar Mercado Pago?', 'Sem essa conexão, o repasse automático das corridas pelo app ficará indisponível.', [
+    { text: 'Cancelar', style: 'cancel' },
+    { text: 'Desconectar', style: 'destructive', onPress: async () => {
+      try { await disconnectMercadoPago(); setMpConnection(null); }
+      catch (error) { Alert.alert('Erro', error instanceof Error ? error.message : 'Tente novamente.'); }
+    } },
+  ]);
 
   useEffect(() => {
     load();
@@ -281,6 +309,35 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
           </View>
         )}
 
+        <View style={[s.mpCard, mpConnection?.connected && s.mpCardConnected]}>
+          <View style={s.mpTopRow}>
+            <View style={s.mpIcon}><Zap size={18} color={mpConnection?.connected ? Colors.success : Colors.primary} /></View>
+            <View style={{ flex: 1 }}>
+              <Text style={s.mpTitle}>Repasse automático</Text>
+              <Text style={s.mpSub}>
+                {mpConnection?.connected
+                  ? 'Mercado Pago conectado e pronto para receber corridas.'
+                  : 'Conecte sua conta para receber automaticamente após cada pagamento.'}
+              </Text>
+            </View>
+            <View style={[s.mpStatus, { backgroundColor: (mpConnection?.connected ? Colors.success : Colors.warning) + '18' }]}>
+              <Text style={[s.mpStatusText, { color: mpConnection?.connected ? Colors.success : Colors.warning }]}>
+                {mpConnection?.connected ? 'CONECTADO' : 'PENDENTE'}
+              </Text>
+            </View>
+          </View>
+          {mpConnection?.connected ? (
+            <TouchableOpacity style={s.mpSecondaryBtn} onPress={disconnect} activeOpacity={0.8}>
+              <Text style={s.mpSecondaryText}>Desconectar conta</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity style={s.mpButton} onPress={connectMercadoPago} disabled={connectingMp} activeOpacity={0.85}>
+              {connectingMp ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Zap size={16} color="#FFFFFF" />}
+              <Text style={s.mpButtonText}>{connectingMp ? 'Abrindo autorização…' : 'Conectar Mercado Pago'}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
         {/* ── PIX panel (shown after switching to a fixed plan) ── */}
         {pixCode !== null && pendingPlan && (
           <View style={s.pixPanel}>
@@ -419,6 +476,22 @@ const s = StyleSheet.create({
     padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 12,
   },
   bannerTxt: { flex: 1, fontSize: 13, fontFamily: 'Poppins_600SemiBold', lineHeight: 18 },
+
+  mpCard: {
+    backgroundColor: '#FFF9EC', borderRadius: 16, padding: 16, marginBottom: 20,
+    borderWidth: 1.5, borderColor: '#F59E0B55',
+  },
+  mpCardConnected: { backgroundColor: '#F0FDF4', borderColor: Colors.success + '55' },
+  mpTopRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, marginBottom: 13 },
+  mpIcon: { width: 38, height: 38, borderRadius: 11, backgroundColor: '#FFFFFFAA', alignItems: 'center', justifyContent: 'center' },
+  mpTitle: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 2 },
+  mpSub: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: '#6B7280', lineHeight: 16 },
+  mpStatus: { borderRadius: 999, paddingHorizontal: 7, paddingVertical: 4 },
+  mpStatusText: { fontSize: 8, fontFamily: 'Poppins_700Bold', letterSpacing: 0.4 },
+  mpButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: Colors.primary, borderRadius: 10, paddingVertical: 12 },
+  mpButtonText: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: '#FFFFFF' },
+  mpSecondaryBtn: { alignItems: 'center', paddingVertical: 8 },
+  mpSecondaryText: { fontSize: 12, fontFamily: 'Poppins_600SemiBold', color: '#6B7280' },
 
   // PIX panel
   pixPanel: {

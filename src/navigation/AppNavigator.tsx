@@ -225,12 +225,14 @@ const PassengerFlow: React.FC = () => {
     return () => { unsub(); clearInterval(iv); };
   }, [ride?.id, screen]);
 
-  // On completion, tell the passenger how to pay the driver directly (per method).
-  // Nothing here goes through the platform — payment is always P2P passenger ↔ driver.
+  // Direct methods still instruct the passenger to pay the driver. Mercado
+  // Pago is handled by RideCompletedScreen so the checkout and split status
+  // remain visible until the passenger confirms the payment.
   useEffect(() => {
     if (screen !== 'ride_completed' || !ride) return;
     (async () => {
       const valor = `R$ ${(ride.price ?? 0).toFixed(2)}`;
+      if (ride.payment_method === 'mercadopago') return;
       if (ride.payment_method === 'cash') {
         Alert.alert('Pagamento em dinheiro', `Pague ${valor} em dinheiro diretamente ao motorista.`);
         return;

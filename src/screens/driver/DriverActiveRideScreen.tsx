@@ -85,7 +85,7 @@ interface DriverActiveRideProps {
   rideId?: string;
   originAddress?: string;
   destinationAddress?: string;
-  paymentMethod?: 'pix' | 'cash' | 'card' | 'boleto';
+  paymentMethod?: 'pix' | 'cash' | 'card' | 'boleto' | 'mercadopago';
 }
 
 const PAYMENT_LABEL: Record<string, string> = {
@@ -93,6 +93,7 @@ const PAYMENT_LABEL: Record<string, string> = {
   cash: 'Dinheiro (receba na corrida)',
   card: 'Cartão',
   boleto: 'Pagamento indisponível',
+  mercadopago: 'Mercado Pago (repasse automático)',
 };
 
 const CANCEL_REASONS = [

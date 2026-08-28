@@ -1308,6 +1308,9 @@ adminRouter.get('/payments', requireAuth, async (req, res) => {
   const allPayments = source.filter((p) => statusFilter === 'all' || p.status === statusFilter);
   const pagePayments = allPayments.slice((page - 1) * pageSize, page * pageSize);
   const names = await profileNames(pagePayments.map((p) => p.driver_id));
+  const { data: ridePayments } = await admin.from('ride_payments').select('*').order('created_at', { ascending: false }).limit(300);
+  const rideSource = ridePayments ?? [];
+  const rideNames = await profileNames(rideSource.map((p) => p.driver_id));
   const count = (status) => source.filter((p) => p.status === status).length;
   const notice = req.query.error ? `<div class="err">${esc(String(req.query.error))}</div>` : req.query.ok ? '<div class="ok">Operação concluída.</div>' : '';
   const rows = pagePayments.map((p) => [
@@ -1317,7 +1320,13 @@ adminRouter.get('/payments', requireAuth, async (req, res) => {
   const href = (status) => `/payments?status=${encodeURIComponent(status)}`;
   const filters = `<div class="card"><div class="filters"><a class="${statusFilter === 'all' ? 'on' : ''}" href="${href('all')}">Todos (${source.length})</a><a class="${statusFilter === 'pending' ? 'on' : ''}" href="${href('pending')}">Pendentes (${count('pending')})</a><a class="${statusFilter === 'approved' ? 'on' : ''}" href="${href('approved')}">Aprovados (${count('approved')})</a><a class="${statusFilter === 'rejected' ? 'on' : ''}" href="${href('rejected')}">Recusados (${count('rejected')})</a><a class="${statusFilter === 'refunded' ? 'on' : ''}" href="${href('refunded')}">Estornados (${count('refunded')})</a></div></div>`;
   const kpis = `<div class="grid">${kpiCard('Pagamentos pendentes', count('pending'))}${kpiCard('Pagamentos aprovados', count('approved'))}${kpiCard('Receita aprovada', brl(source.filter((p) => p.status === 'approved').reduce((sum, p) => sum + Number(p.amount || 0), 0)))}</div>`;
-  const body = `${notice}${kpis}${filters}<div class="card"><h2>Pagamentos de assinatura (${allPayments.length})</h2><p class="muted">Sincronizar consulta o status diretamente no Mercado Pago. Confirmar manualmente é uma exceção administrativa e também libera o período conforme o plano.</p>${table(['Motorista', 'Valor', 'Método', 'Provedor', 'Status local', 'Status Mercado Pago', 'Pago em', 'Criado', 'Ações'], rows)}${pagination(allPayments.length, page, pageSize, req.originalUrl)}</div>`;
+  const rideRows = rideSource.map((p) => [
+    `<strong>${esc(rideNames[p.driver_id] ?? '—')}</strong><br><span class="muted">Corrida ${esc(p.ride_id || '')}</span>`,
+    brl(p.gross_amount), brl(p.marketplace_fee), brl(p.driver_amount), badge(p.status), esc(p.provider_status || '—'),
+    p.paid_at ? fmtDate(p.paid_at) : '—', fmtDate(p.created_at),
+  ]);
+  const rideSection = `<div class="card"><h2>Repasses de corridas (${rideSource.length})</h2><p class="muted">Os pagamentos Mercado Pago são divididos pelo provedor. A coluna "Líquido motorista" é o valor atribuído ao motorista após a comissão do plano.</p>${table(['Motorista / corrida', 'Bruto', 'Comissão plataforma', 'Líquido motorista', 'Status', 'Status Mercado Pago', 'Pago em', 'Criado'], rideRows)}</div>`;
+  const body = `${notice}${kpis}${filters}<div class="card"><h2>Pagamentos de assinatura (${allPayments.length})</h2><p class="muted">Sincronizar consulta o status diretamente no Mercado Pago. Confirmar manualmente é uma exceção administrativa e também libera o período conforme o plano.</p>${table(['Motorista', 'Valor', 'Método', 'Provedor', 'Status local', 'Status Mercado Pago', 'Pago em', 'Criado', 'Ações'], rows)}${pagination(allPayments.length, page, pageSize, req.originalUrl)}</div>${rideSection}`;
   return render(res, layout({ title: 'Pagamentos', active: '/payments', email: req.session.email, body }));
 });
 
@@ -1656,12 +1665,20 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
               <input value="${esc(process.env.MERCADOPAGO_CLIENT_ID || 'Não configurado')}" readonly style="background:#F8FAFC;font-family:monospace;font-size:12px;">
             </div>
             <div>
+              <label>Mercado Pago Client Secret</label>
+              <input value="${process.env.MERCADOPAGO_CLIENT_SECRET ? 'Configurado (oculto)' : 'Pendente — configurar no Coolify'}" readonly style="background:#F8FAFC;font-weight:700;color:${process.env.MERCADOPAGO_CLIENT_SECRET ? '#047857' : '#DC2626'}">
+            </div>
+            <div>
               <label>Status do Access Token</label>
               <input value="${process.env.MERCADOPAGO_ACCESS_TOKEN ? 'Ativo (Produção)' : 'Pendente'}" readonly style="background:#F8FAFC;font-weight:700;color:${process.env.MERCADOPAGO_ACCESS_TOKEN ? '#047857' : '#DC2626'}">
             </div>
             <div>
               <label>Status do Webhook Secret</label>
               <input value="${process.env.MERCADOPAGO_WEBHOOK_SECRET ? 'Configurado' : 'Pendente — configurar no Coolify'}" readonly style="background:#F8FAFC;font-weight:700;color:${process.env.MERCADOPAGO_WEBHOOK_SECRET ? '#047857' : '#DC2626'}">
+            </div>
+            <div>
+              <label>Status da chave de criptografia do Split</label>
+              <input value="${/^[a-f0-9]{64}$/i.test(String(process.env.MP_SPLIT_ENCRYPTION_KEY || '')) ? 'Configurada' : 'Pendente — configurar no Coolify'}" readonly style="background:#F8FAFC;font-weight:700;color:${/^[a-f0-9]{64}$/i.test(String(process.env.MP_SPLIT_ENCRYPTION_KEY || '')) ? '#047857' : '#DC2626'}">
             </div>
           </div>
           <div style="margin-top:14px;background:#EFF6FF;border:1px solid #BFDBFE;padding:12px 16px;border-radius:10px;font-size:12.5px;color:#1E40AF;">

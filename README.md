@@ -12,16 +12,17 @@ Expo App (React Native)                 Supabase (nuvem)
 ├─ src/contexts/AuthContext     ─────►   Auth (e-mail/senha, JWT)
 ├─ src/services/*               ─────►   PostgREST (RPC + tabelas, RLS)
 │   ├─ rides / drivers          ─────►   Postgres + PostGIS (matching geoespacial)
-│   ├─ payments                 ─────►   Edge Functions (PIX Mercado Pago)
+│   ├─ payments                 ─────►   API Node/Express no Coolify (Mercado Pago)
 │   └─ geo (Mapbox HTTP)        ─────►   Realtime (status de corrida / localização)
 └─ src/components/RouteMap      ─────►   Mapbox (mapa nativo @rnmapbox/maps)
 ```
 
 - **Banco:** projeto Supabase `zqgqwmxledxtcuvyyvia`, Postgres 17 + PostGIS.
-- **Admin web:** Node/Express hospedado no **Railway** → https://rotta-urbana-admin-production.up.railway.app (usa o mesmo Supabase).
-- **Modelo de negócio:** motorista paga **assinatura diária OU mensal** (valores editáveis no admin), via PIX
-  para a plataforma. **Corridas (passageiro → motorista) são pagas direto na chave PIX do motorista** —
-  o app gera o PIX copia-e-cola, sem cada motorista precisar integrar gateway.
+- **Admin web:** Node/Express hospedado no **Coolify** → https://rottaurbana.com.br (usa o mesmo Supabase).
+- **Modelo de negócio:** o motorista escolhe entre assinatura diária/semanal/mensal ou comissão por corrida.
+  As assinaturas são cobradas pelo Mercado Pago. Nas corridas pagas pelo checkout Mercado Pago, o
+  Split 1:1 envia automaticamente a comissão para a plataforma e o restante para a conta Mercado Pago
+  conectada do motorista.
 
 ## Como rodar
 
@@ -84,24 +85,33 @@ Painel completo em `railway-admin/` (Express + Supabase secret key), publicado p
   responder suporte, e **editar preços/planos e a chave PIX da plataforma** (tudo configurável).
 
 Deploy/atualização:
-```bash
-cd railway-admin
-git push origin master                       # Coolify faz o deploy automático
-# Configure os secrets no ambiente do serviço Coolify (Node 22).
-```
+O serviço é o diretório `railway-admin/` por compatibilidade histórica de nome; ele roda no Coolify,
+não no Railway. O deploy ocorre quando o Coolify detecta o push da branch configurada (normalmente `main`).
+Configure os secrets no ambiente do serviço Coolify (Node 22).
 
 ## Pagamentos
 
-**Corrida (passageiro → motorista):** PIX **direto** na chave do motorista. O app gera o copia-e-cola
-(`src/lib/pix.ts`, BR Code EMV + CRC16) com o valor da corrida — sem gateway por motorista.
+**Corrida (passageiro → motorista):** a opção padrão é Mercado Pago. O passageiro conclui o checkout
+com Pix ou cartão e o Mercado Pago faz o Split 1:1 usando `marketplace_fee`: a comissão configurada
+no plano Por Corrida fica na plataforma e o restante é atribuído ao motorista. O webhook confirma o
+pagamento e atualiza `fare_paid`; o relatório do motorista mostra o valor líquido aprovado.
+
+PIX direto, dinheiro e cartão na maquininha continuam disponíveis como alternativas manuais. Nesses
+métodos o app não consegue realizar repasse automático.
 
 **Assinatura (motorista → plataforma):** diária, semanal ou mensal (valores no admin), pelo checkout
 hospedado do Mercado Pago. O motorista paga com cartão ou Pix, e as cobranças recorrentes são
 sincronizadas por `subscription_preapproval`, `subscription_authorized_payment` e `payment` no webhook.
-No Coolify, configure `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET` e
-`PUBLIC_APP_URL=https://rottaurbana.com.br`. O app nunca coleta nem armazena dados brutos do cartão.
+No Coolify, configure `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_WEBHOOK_SECRET`,
+`MERCADOPAGO_CLIENT_ID`, `MERCADOPAGO_CLIENT_SECRET`,
+`MERCADOPAGO_SPLIT_REDIRECT_URI=https://rottaurbana.com.br/api/mercadopago/oauth/callback`,
+`MP_SPLIT_ENCRYPTION_KEY` (32 bytes em hex) e `PUBLIC_APP_URL=https://rottaurbana.com.br`.
+O webhook deve apontar para `https://rottaurbana.com.br/api/mercadopago/webhook`.
+Cada motorista autoriza a própria conta em **Plano & Mensalidade → Conectar Mercado Pago**.
+Os tokens ficam criptografados no backend; o app nunca coleta nem armazena dados brutos do cartão.
 
-> Evolução futura: split/marketplace via Mercado Pago por motorista (cada um conecta a própria conta).
+O banco usa `mercadopago_driver_accounts` para as autorizações e `ride_payments` para conciliação
+idempotente, incluindo comissão, valor líquido, checkout, webhook e reembolso.
 
 ## Categorias de corrida (Economy / Comfort / Black) e elegibilidade
 

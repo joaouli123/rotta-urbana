@@ -23,6 +23,35 @@ export interface SubscriptionCheckout {
   local_subscription_id?: string;
 }
 
+export interface RidePayment {
+  id: string;
+  ride_id: string;
+  gross_amount: number;
+  commission_pct: number;
+  marketplace_fee: number;
+  driver_amount: number;
+  currency: string;
+  method: 'mercadopago';
+  status: 'pending' | 'approved' | 'rejected' | 'refunded' | 'cancelled';
+  provider_status?: string | null;
+  provider_status_detail?: string | null;
+  provider_preference_id?: string | null;
+  provider_payment_id?: string | null;
+  checkout_url?: string | null;
+  paid_at?: string | null;
+  refunded_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MercadoPagoConnectionStatus {
+  connected: boolean;
+  status: 'connected' | 'disconnected' | 'revoked' | 'error';
+  provider_user_id: string | null;
+  live_mode: boolean | null;
+  access_token_expires_at: string | null;
+}
+
 async function paymentsApi<T>(path: string, init: RequestInit = {}): Promise<T> {
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token;
@@ -95,6 +124,35 @@ export async function syncSubscriptionStatus(): Promise<SubscriptionRow | null> 
 
 export async function cancelSubscription(): Promise<void> {
   await paymentsApi('/api/subscriptions/cancel', { method: 'POST', body: '{}' });
+}
+
+/** Starts the server-side OAuth connection for a driver's Mercado Pago account. */
+export async function startMercadoPagoConnection(): Promise<string> {
+  const result = await paymentsApi<{ authorization_url: string }>('/api/mercadopago/connect/start');
+  if (!result?.authorization_url) throw new Error('O Mercado Pago não retornou o link de conexão.');
+  return result.authorization_url;
+}
+
+export async function getMercadoPagoConnectionStatus(): Promise<MercadoPagoConnectionStatus> {
+  return paymentsApi<MercadoPagoConnectionStatus>('/api/mercadopago/connect/status');
+}
+
+export async function disconnectMercadoPago(): Promise<void> {
+  await paymentsApi('/api/mercadopago/connect/disconnect', { method: 'POST', body: '{}' });
+}
+
+/** Creates (or reuses) a hosted Mercado Pago checkout for a completed ride. */
+export async function createRideCheckout(rideId: string): Promise<RidePayment> {
+  const result = await paymentsApi<{ payment: RidePayment }>(`/api/rides/${encodeURIComponent(rideId)}/payment/checkout`, {
+    method: 'POST', body: '{}',
+  });
+  if (!result?.payment) throw new Error('O servidor não retornou o pagamento da corrida.');
+  return result.payment;
+}
+
+export async function getRidePayment(rideId: string): Promise<RidePayment | null> {
+  const result = await paymentsApi<{ payment: RidePayment | null }>(`/api/rides/${encodeURIComponent(rideId)}/payment`);
+  return result.payment ?? null;
 }
 
 /**

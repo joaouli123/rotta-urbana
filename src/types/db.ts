@@ -5,7 +5,7 @@ export type RideStatusDb =
   | 'searching' | 'driver_found' | 'driver_on_way' | 'driver_arrived'
   | 'in_progress' | 'completed' | 'cancelled';
 export type RideTypeDb = 'economy' | 'comfort' | 'premium' | 'moto';
-export type PaymentMethodDb = 'pix' | 'card' | 'boleto' | 'cash';
+export type PaymentMethodDb = 'pix' | 'card' | 'boleto' | 'cash' | 'mercadopago';
 export type SubscriptionStatus = 'pending' | 'active' | 'expired' | 'suspended';
 export type Gender = 'female' | 'male' | 'other';
 export type PlanSegment = 'moto' | 'economy' | 'comfort' | 'premium';

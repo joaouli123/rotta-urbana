@@ -10,12 +10,15 @@ import {
   TextInput,
   Share,
   Alert,
+  Linking,
+  ActivityIndicator,
 } from 'react-native';
 import Svg, { Path, Circle, Rect } from 'react-native-svg';
-import { Star, Share2, HelpCircle, ChevronRight, Home, User } from 'lucide-react-native';
+import { Star, Share2, HelpCircle, ChevronRight, Home, User, CreditCard, CheckCircle } from 'lucide-react-native';
 import { Button, Card, Avatar } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
 import { rateRide, getRideCounterpart, type RideCounterpart } from '../../services/rides';
+import { createRideCheckout, getRidePayment, type RidePayment } from '../../services/payments';
 import { playSound } from '../../lib/sounds';
 import type { RideRow, RideTypeDb } from '../../types/db';
 
@@ -73,6 +76,10 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [driver, setDriver] = useState<RideCounterpart | null>(null);
+  const [ridePayment, setRidePayment] = useState<RidePayment | null>(null);
+  const [paymentLoading, setPaymentLoading] = useState(false);
+  const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [paymentRetry, setPaymentRetry] = useState(0);
 
   const effectiveType = (ride?.ride_type as any) ?? rideType;
 
@@ -87,10 +94,43 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
     return () => { active = false; };
   }, [ride?.id]);
 
+  // The checkout is created only after the ride is completed, with the final
+  // server-side fare. The webhook then changes this same card to "approved".
+  useEffect(() => {
+    if (!ride?.id || ride.payment_method !== 'mercadopago') return;
+    let active = true;
+    const loadPayment = async (createIfMissing: boolean) => {
+      try {
+        if (createIfMissing) setPaymentLoading(true);
+        let current = await getRidePayment(ride.id);
+        if (!current && createIfMissing) current = await createRideCheckout(ride.id);
+        if (active) {
+          setRidePayment(current);
+          setPaymentError(null);
+        }
+      } catch (error) {
+        if (active && createIfMissing) setPaymentError(error instanceof Error ? error.message : 'Não foi possível preparar o pagamento.');
+      } finally {
+        if (active && createIfMissing) setPaymentLoading(false);
+      }
+    };
+    void loadPayment(true);
+    const interval = setInterval(() => { void loadPayment(false); }, 5000);
+    return () => { active = false; clearInterval(interval); };
+  }, [ride?.id, ride?.payment_method, paymentRetry]);
+
   const driverName = driver?.name ?? 'Motorista';
   const destShort = ride?.destination_address?.split(',')[0] ?? 'Destino';
 
-  const finish = () => { setSubmitted(true); setTimeout(onGoHome, 1800); };
+  const finish = () => {
+    const waitingForPayment = ride?.payment_method === 'mercadopago' && ridePayment?.status !== 'approved';
+    setSubmitted(true);
+    if (!waitingForPayment) setTimeout(onGoHome, 1800);
+  };
+
+  const openRideCheckout = () => {
+    if (ridePayment?.checkout_url) Linking.openURL(ridePayment.checkout_url).catch(() => setPaymentError('Não foi possível abrir o checkout do Mercado Pago.'));
+  };
 
   // Save the rating, then go home. "Pular" skips the RPC.
   const handleSubmit = async () => {
@@ -182,6 +222,47 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
           </View>
         </Card>
 
+        {ride?.payment_method === 'mercadopago' && (
+          <Card style={styles.paymentCard}>
+            <View style={styles.paymentHeader}>
+              <View style={styles.paymentIconWrap}>
+                <CreditCardIcon />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.paymentTitle}>Pagamento da corrida</Text>
+                <Text style={styles.paymentSub}>PIX ou cartão pelo Mercado Pago</Text>
+              </View>
+              {ridePayment?.status === 'approved' && <CheckCircle size={22} color={Colors.success} />}
+            </View>
+
+            {paymentLoading && !ridePayment ? (
+              <View style={styles.paymentStateRow}><ActivityIndicator size="small" color={Colors.primary} /><Text style={styles.paymentStateText}>Preparando pagamento seguro…</Text></View>
+            ) : ridePayment?.status === 'approved' ? (
+              <View style={[styles.paymentNotice, { backgroundColor: Colors.success + '12' }]}>
+                <CheckCircle size={17} color={Colors.success} />
+                <Text style={[styles.paymentNoticeText, { color: Colors.success }]}>Pagamento confirmado. O repasse ao motorista foi processado automaticamente.</Text>
+              </View>
+            ) : (
+              <>
+                <View style={styles.paymentNotice}>
+                  <Text style={styles.paymentNoticeText}>{paymentError || 'Finalize o pagamento para concluir a corrida e liberar o repasse ao motorista.'}</Text>
+                </View>
+                {ridePayment?.checkout_url && (
+                  <TouchableOpacity style={styles.paymentButton} onPress={openRideCheckout} activeOpacity={0.85}>
+                    <CreditCardIcon color="#FFFFFF" />
+                    <Text style={styles.paymentButtonText}>Pagar com Mercado Pago</Text>
+                  </TouchableOpacity>
+                )}
+                {paymentError && !ridePayment?.checkout_url && (
+                  <TouchableOpacity style={styles.paymentRetryButton} onPress={() => { setPaymentError(null); setPaymentRetry((value) => value + 1); }} activeOpacity={0.8}>
+                    <Text style={styles.paymentRetryText}>Tentar preparar novamente</Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+          </Card>
+        )}
+
         {/* Driver Rating */}
         {!submitted ? (
           <Card style={styles.ratingCard}>
@@ -245,7 +326,14 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
                 <Star size={28} color={Colors.textInverse} fill={Colors.textInverse} />
               </View>
               <Text style={styles.thankYou}>Obrigado pela avaliacao!</Text>
-              <Text style={styles.redirecting}>Voltando para o inicio...</Text>
+              <Text style={styles.redirecting}>
+                {ride?.payment_method === 'mercadopago' && ridePayment?.status !== 'approved'
+                  ? 'Finalize o pagamento acima ou volte ao início quando quiser.'
+                  : 'Voltando para o inicio...'}
+              </Text>
+              {ride?.payment_method === 'mercadopago' && ridePayment?.status !== 'approved' && (
+                <Button title="Voltar ao início" onPress={onGoHome} variant="ghost" style={{ marginTop: 12 }} />
+              )}
             </View>
           </Card>
         )}
@@ -276,6 +364,10 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
     </View>
   );
 };
+
+const CreditCardIcon = ({ color = Colors.primary }: { color?: string }) => (
+  <CreditCard size={20} color={color} strokeWidth={2.2} />
+);
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
@@ -320,6 +412,29 @@ const styles = StyleSheet.create({
   odDot: { width: 10, height: 10, borderRadius: 5 },
   odText: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary },
   odLine: { width: 2, height: 14, backgroundColor: Colors.border, marginLeft: 4 },
+
+  paymentCard: { marginBottom: 16, padding: 18 },
+  paymentHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 14 },
+  paymentIconWrap: {
+    width: 42, height: 42, borderRadius: 12, backgroundColor: Colors.primary + '18',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  paymentTitle: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
+  paymentSub: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 2 },
+  paymentStateRow: { flexDirection: 'row', alignItems: 'center', gap: 9, paddingVertical: 8 },
+  paymentStateText: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary },
+  paymentNotice: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FFF9EC',
+    borderRadius: Radius.sm, padding: 11, borderWidth: 1, borderColor: '#F59E0B40', marginBottom: 12,
+  },
+  paymentNoticeText: { flex: 1, fontSize: 12, lineHeight: 17, fontFamily: 'Poppins_500Medium', color: '#92400E' },
+  paymentButton: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    backgroundColor: Colors.primary, borderRadius: Radius.md, paddingVertical: 13,
+  },
+  paymentButtonText: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: '#FFFFFF' },
+  paymentRetryButton: { alignItems: 'center', paddingVertical: 9 },
+  paymentRetryText: { fontSize: 12, fontFamily: 'Poppins_600SemiBold', color: Colors.textSecondary },
 
   ratingCard: { marginBottom: 16, padding: 20 },
   driverRatingRow: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 20 },

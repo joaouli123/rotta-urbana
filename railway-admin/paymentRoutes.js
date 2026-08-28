@@ -1,21 +1,32 @@
 import {
   MercadoPagoError,
   cancelPreapproval,
+  createSplitPreference,
   createRecurringSubscription,
+  exchangeMercadoPagoCode,
   getAuthorizedPayment,
   getPayment,
+  getPaymentWithToken,
   getPreapproval,
   mercadopagoConfigured,
+  mercadopagoAuthorizationUrl,
+  mercadopagoOAuthConfigured,
   mercadopagoRequest,
+  mercadopagoSplitConfigured,
   mercadopagoWebhookConfigured,
+  refreshMercadoPagoToken,
+  refundPaymentWithToken,
   safeProviderMetadata,
   verifyWebhookSignature,
   webhookDataId,
   webhookTopic,
 } from './mercadoPago.js';
+import { decryptSecret, encryptSecret, secretBoxConfigured } from './secretBox.js';
+import crypto from 'node:crypto';
 
 const PLAN_DAYS = { daily: 1, weekly: 7, monthly: 30 };
 const FIXED_PLANS = new Set(Object.keys(PLAN_DAYS));
+const RIDE_PAYMENT_METHOD = 'mercadopago';
 
 const localStatusFromProvider = (status) => {
   const normalized = String(status || '').toLowerCase();
@@ -30,6 +41,12 @@ const providerPaymentStatus = (status) => {
   if (['approved', 'accredited', 'processed'].includes(normalized)) return 'approved';
   if (['rejected', 'cancelled', 'canceled', 'cancelled_by_user'].includes(normalized)) return 'rejected';
   return 'pending';
+};
+
+const ridePaymentStatus = (status) => {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'refunded') return 'refunded';
+  return providerPaymentStatus(normalized);
 };
 
 const providerPaymentMethod = (provider) => {
@@ -129,7 +146,7 @@ function bearerMiddleware(admin) {
 
 async function getSettings(admin) {
   const { data, error } = await admin.from('app_settings')
-    .select('subscription_daily_amount,subscription_monthly_amount,plan_weekly_price,moto_daily_price,moto_weekly_price,moto_monthly_price,car_economy_monthly_price,car_comfort_monthly_price,car_premium_monthly_price,updated_at')
+    .select('subscription_daily_amount,subscription_monthly_amount,plan_weekly_price,commission_pct,moto_commission_pct,moto_daily_price,moto_weekly_price,moto_monthly_price,car_economy_monthly_price,car_comfort_monthly_price,car_premium_monthly_price,updated_at')
     .eq('id', 1).single();
   if (error) throw error;
   return data || {};
@@ -316,14 +333,403 @@ export async function syncPaymentForAdmin(admin, paymentId) {
   throw new MercadoPagoError('Este pagamento não possui identificador do Mercado Pago.', 400);
 }
 
+function publicHost(req) {
+  const configured = String(process.env.PUBLIC_APP_URL || '').trim().replace(/\/$/, '');
+  if (configured) return configured;
+  const forwardedProto = String(req.get('x-forwarded-proto') || '').split(',')[0].trim();
+  return `${forwardedProto || req.protocol}://${req.get('host')}`;
+}
+
+function splitRedirectUri(req) {
+  return String(process.env.MERCADOPAGO_SPLIT_REDIRECT_URI || `${publicHost(req)}/api/mercadopago/oauth/callback`).trim();
+}
+
+function stateHash(state) {
+  return crypto.createHash('sha256').update(String(state)).digest('hex');
+}
+
+async function userFromBearer(req, admin) {
+  const match = String(req.get('authorization') || '').match(/^Bearer\s+(.+)$/i);
+  if (!match) throw new MercadoPagoError('Sessão ausente ou expirada.', 401);
+  const { data, error } = await admin.auth.getUser(match[1].trim());
+  if (error || !data?.user) throw new MercadoPagoError('Sessão inválida ou expirada.', 401);
+  const { data: profile, error: profileError } = await admin.from('profiles')
+    .select('id,full_name,email,role,is_active').eq('id', data.user.id).maybeSingle();
+  if (profileError || !profile || profile.is_active === false) throw new MercadoPagoError('Usuário não autorizado.', 403);
+  return { user: data.user, profile };
+}
+
+function userMiddleware(admin, role) {
+  return async (req, res, next) => {
+    try {
+      const auth = await userFromBearer(req, admin);
+      if (role && auth.profile.role !== role) throw new MercadoPagoError('Usuário não autorizado para esta operação.', 403);
+      req.userAuth = auth;
+      next();
+    } catch (error) {
+      const status = error instanceof MercadoPagoError ? error.status : 401;
+      res.status(status).json({ error: error.message || 'Não autorizado.' });
+    }
+  };
+}
+
+async function getMercadoPagoAccount(admin, driverId) {
+  const { data, error } = await admin.from('mercadopago_driver_accounts')
+    .select('*').eq('driver_id', driverId).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+async function sellerAccessToken(admin, driverId) {
+  const account = await getMercadoPagoAccount(admin, driverId);
+  if (!account || account.status !== 'connected') {
+    throw new MercadoPagoError('O motorista ainda não conectou a conta do Mercado Pago.', 409);
+  }
+
+  const expiresAt = account.access_token_expires_at ? new Date(account.access_token_expires_at).getTime() : 0;
+  const validForMs = expiresAt - Date.now();
+  if (validForMs > 10 * 60 * 1000) {
+    try {
+      return { account, token: decryptSecret(account.access_token_ciphertext) };
+    } catch (error) {
+      await admin.from('mercadopago_driver_accounts').update({ status: 'error', last_error: 'Token criptografado inválido.' }).eq('driver_id', driverId);
+      throw new MercadoPagoError('Não foi possível acessar a conta Mercado Pago do motorista.', 503, { cause: error?.message });
+    }
+  }
+
+  if (!account.refresh_token_ciphertext) {
+    await admin.from('mercadopago_driver_accounts').update({ status: 'error', last_error: 'Refresh token ausente ou expirado.' }).eq('driver_id', driverId);
+    throw new MercadoPagoError('A conexão do Mercado Pago expirou. O motorista precisa conectar novamente.', 409);
+  }
+
+  let refreshToken;
+  try { refreshToken = decryptSecret(account.refresh_token_ciphertext); }
+  catch (error) {
+    await admin.from('mercadopago_driver_accounts').update({ status: 'error', last_error: 'Refresh token criptografado inválido.' }).eq('driver_id', driverId);
+    throw new MercadoPagoError('A conexão do Mercado Pago expirou. O motorista precisa conectar novamente.', 409, { cause: error?.message });
+  }
+
+  try {
+    const refreshed = await refreshMercadoPagoToken(refreshToken);
+    if (!refreshed?.access_token) throw new MercadoPagoError('O Mercado Pago não retornou um novo token.', 502, refreshed);
+    const nextExpires = new Date(Date.now() + Number(refreshed.expires_in || 15552000) * 1000).toISOString();
+    const nextRefresh = refreshed.refresh_token || refreshToken;
+    const { data: saved, error } = await admin.from('mercadopago_driver_accounts').update({
+      access_token_ciphertext: encryptSecret(refreshed.access_token),
+      refresh_token_ciphertext: encryptSecret(nextRefresh),
+      access_token_expires_at: nextExpires,
+      status: 'connected',
+      last_error: null,
+    }).eq('driver_id', driverId).select('*').single();
+    if (error) throw error;
+    return { account: saved, token: refreshed.access_token };
+  } catch (error) {
+    await admin.from('mercadopago_driver_accounts').update({ status: 'error', last_error: 'Falha ao renovar o token do Mercado Pago.' }).eq('driver_id', driverId);
+    if (error instanceof MercadoPagoError) throw error;
+    throw new MercadoPagoError('Não foi possível renovar a conexão do Mercado Pago.', 503, { cause: error?.message });
+  }
+}
+
+function calculateMarketplaceFee(settings, driver, grossAmount) {
+  const plan = String(driver?.plan_type || '').toLowerCase();
+  if (plan !== 'commission') return { pct: 0, fee: 0 };
+  const segment = String(driver?.plan_segment || '').toLowerCase();
+  const configuredPct = segment === 'moto' ? settings?.moto_commission_pct : settings?.commission_pct;
+  const pct = Math.max(0, Math.min(100, Number(configuredPct ?? 15)));
+  const fee = Number((Number(grossAmount) * pct / 100).toFixed(2));
+  return { pct, fee };
+}
+
+async function getRideForPassenger(admin, rideId, passengerId) {
+  const { data, error } = await admin.from('rides').select('id,passenger_id,driver_id,status,ride_type,price,payment_method,fare_paid,completed_at')
+    .eq('id', rideId).eq('passenger_id', passengerId).maybeSingle();
+  if (error) throw error;
+  if (!data) throw new MercadoPagoError('Corrida não encontrada para este passageiro.', 404);
+  return data;
+}
+
+async function getRidePayment(admin, rideId) {
+  const { data, error } = await admin.from('ride_payments').select('*').eq('ride_id', rideId).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+function publicRidePayment(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    ride_id: row.ride_id,
+    gross_amount: Number(row.gross_amount),
+    commission_pct: Number(row.commission_pct),
+    marketplace_fee: Number(row.marketplace_fee),
+    driver_amount: Number(row.driver_amount),
+    currency: row.currency,
+    method: row.method,
+    status: row.status,
+    provider_status: row.provider_status,
+    provider_status_detail: row.provider_status_detail,
+    provider_preference_id: row.provider_preference_id,
+    provider_payment_id: row.provider_payment_id,
+    checkout_url: row.checkout_url,
+    paid_at: row.paid_at,
+    refunded_at: row.refunded_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+async function createRideCheckout(admin, req, ride) {
+  if (ride.payment_method !== RIDE_PAYMENT_METHOD) {
+    throw new MercadoPagoError('Esta corrida não foi configurada para pagamento pelo Mercado Pago.', 400);
+  }
+  if (ride.status !== 'completed') throw new MercadoPagoError('O pagamento só pode ser iniciado após a conclusão da corrida.', 409);
+  if (!ride.driver_id || !Number.isFinite(Number(ride.price)) || Number(ride.price) <= 0) {
+    throw new MercadoPagoError('A corrida não possui motorista ou valor válido para cobrança.', 409);
+  }
+  if (!mercadopagoSplitConfigured() || !secretBoxConfigured()) {
+    throw new MercadoPagoError('O repasse automático ainda não está configurado no servidor.', 503);
+  }
+
+  const existing = await getRidePayment(admin, ride.id);
+  if (existing?.status === 'approved') return existing;
+  if (existing?.checkout_url && existing?.status === 'pending') return existing;
+
+  const [{ data: driver, error: driverError }, settings, seller] = await Promise.all([
+    admin.from('drivers').select('id,plan_type,plan_segment').eq('id', ride.driver_id).maybeSingle(),
+    getSettings(admin),
+    sellerAccessToken(admin, ride.driver_id),
+  ]);
+  if (driverError) throw driverError;
+  if (!driver) throw new MercadoPagoError('Motorista não encontrado.', 404);
+
+  const grossAmount = Number(Number(ride.price).toFixed(2));
+  const { pct, fee } = calculateMarketplaceFee(settings, driver, grossAmount);
+  if (existing && (Number(existing.gross_amount) !== grossAmount || existing.driver_id !== ride.driver_id)) {
+    throw new MercadoPagoError('O valor desta cobrança mudou e precisa ser revisado pelo suporte.', 409);
+  }
+
+  const host = publicHost(req);
+  const notificationUrl = `${host}/api/mercadopago/webhook?ride_id=${encodeURIComponent(ride.id)}`;
+  const backUrl = `${host}/pagamento/retorno?ride_id=${encodeURIComponent(ride.id)}`;
+  const preference = await createSplitPreference({
+    sellerAccessToken: seller.token,
+    rideId: ride.id,
+    amount: grossAmount,
+    marketplaceFee: fee,
+    payerEmail: req.userAuth?.profile?.email || req.userAuth?.user?.email,
+    notificationUrl,
+    backUrls: { success: backUrl, pending: backUrl, failure: backUrl },
+    idempotencyKey: `ride-checkout:${ride.id}`,
+  });
+  const checkoutUrl = preference?.init_point || preference?.sandbox_init_point;
+  if (!preference?.id || !checkoutUrl) throw new MercadoPagoError('O Mercado Pago não retornou o link da corrida.', 502, preference);
+
+  const row = {
+    ride_id: ride.id,
+    passenger_id: ride.passenger_id,
+    driver_id: ride.driver_id,
+    gross_amount: grossAmount,
+    commission_pct: pct,
+    marketplace_fee: fee,
+    driver_amount: Number((grossAmount - fee).toFixed(2)),
+    currency: 'BRL',
+    provider: 'mercadopago',
+    method: RIDE_PAYMENT_METHOD,
+    status: 'pending',
+    provider_status: preference.status || 'pending',
+    provider_preference_id: String(preference.id),
+    external_reference: ride.id,
+    checkout_url: checkoutUrl,
+    provider_metadata: safeProviderMetadata(preference),
+  };
+  const { data: saved, error } = await admin.from('ride_payments').upsert(row, { onConflict: 'ride_id' }).select('*').single();
+  if (error) throw error;
+  return saved;
+}
+
+async function applyRidePaymentWebhook(admin, provider, hintedRideId = null) {
+  const providerPaymentId = provider?.id ? String(provider.id) : null;
+  const externalReference = provider?.external_reference ? String(provider.external_reference) : null;
+  let query = admin.from('ride_payments').select('*');
+  if (providerPaymentId) query = query.eq('provider_payment_id', providerPaymentId);
+  else if (externalReference) query = query.eq('external_reference', externalReference);
+  else if (hintedRideId) query = query.eq('ride_id', hintedRideId);
+  else return null;
+  let { data: local, error } = await query.maybeSingle();
+  if (error) throw error;
+  if (!local && hintedRideId) {
+    const result = await admin.from('ride_payments').select('*').eq('ride_id', hintedRideId).maybeSingle();
+    local = result.data;
+    error = result.error;
+    if (error) throw error;
+  }
+  if (!local) return null;
+
+  const amount = Number(provider?.transaction_amount || 0);
+  if (amount > 0 && Math.abs(amount - Number(local.gross_amount)) > 0.01) {
+    throw new MercadoPagoError('Valor do pagamento do Mercado Pago não confere com a corrida.', 409, { rideId: local.ride_id });
+  }
+  const status = ridePaymentStatus(provider?.status);
+  const patch = {
+    status,
+    provider_status: String(provider?.status || 'pending'),
+    provider_status_detail: provider?.status_detail || null,
+    provider_payment_id: providerPaymentId || local.provider_payment_id,
+    provider_metadata: safeProviderMetadata(provider),
+    paid_at: status === 'approved' ? (local.paid_at || new Date().toISOString()) : local.paid_at,
+    refunded_at: status === 'refunded' ? (local.refunded_at || new Date().toISOString()) : local.refunded_at,
+  };
+  const { data: saved, error: updateError } = await admin.from('ride_payments').update(patch).eq('id', local.id).select('*').single();
+  if (updateError) throw updateError;
+
+  if (status === 'approved') {
+    const { error: rideError } = await admin.from('rides').update({ fare_paid: true }).eq('id', local.ride_id).eq('status', 'completed');
+    if (rideError) throw rideError;
+  } else if (status === 'refunded') {
+    const { error: rideError } = await admin.from('rides').update({ fare_paid: false }).eq('id', local.ride_id);
+    if (rideError) throw rideError;
+  }
+  return { rideId: local.ride_id, paymentStatus: status, driverAmount: Number(local.driver_amount) };
+}
+
+async function providerPaymentForRide(admin, paymentId, rideId) {
+  const local = rideId ? await getRidePayment(admin, rideId) : null;
+  if (local?.driver_id) {
+    const seller = await sellerAccessToken(admin, local.driver_id);
+    return getPaymentWithToken(seller.token, paymentId);
+  }
+  return getPayment(paymentId);
+}
+
 export function registerMercadoPagoRoutes({ app, admin, isProd }) {
   const requireDriver = bearerMiddleware(admin);
+  const requirePassenger = userMiddleware(admin, 'passenger');
+  const requireUser = userMiddleware(admin);
 
   // Reconcile rows left overdue while the service was asleep. This is best
   // effort at boot; every payment/status webhook also remains idempotent.
   void expireOverdueSubscriptions(admin).catch((error) => console.warn('[MercadoPago] overdue reconciliation:', error.message));
 
   app.get('/pagamento/retorno', (_req, res) => res.status(200).send(`<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Pagamento Rotta Urbana</title><body style="font-family:Arial,sans-serif;padding:40px;max-width:680px;margin:auto"><h1>Pagamento recebido</h1><p>Volte ao aplicativo para acompanhar a confirmação. A assinatura é atualizada automaticamente pelo Mercado Pago.</p></body></html>`));
+
+  app.get('/api/mercadopago/connect/start', requireDriver, async (req, res) => {
+    if (!mercadopagoOAuthConfigured() || !secretBoxConfigured()) {
+      return res.status(503).json({ error: 'A conexão Mercado Pago ainda não está configurada no servidor.' });
+    }
+    try {
+      const state = crypto.randomBytes(32).toString('hex');
+      const { error } = await admin.from('mercadopago_oauth_states').insert({
+        state_hash: stateHash(state),
+        driver_id: req.driverAuth.driver.id,
+        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      });
+      if (error) throw error;
+      const authorizationUrl = mercadopagoAuthorizationUrl({ state, redirectUri: splitRedirectUri(req) });
+      return res.json({ authorization_url: authorizationUrl, expires_in: 600 });
+    } catch (error) {
+      console.error('[MercadoPago OAuth start]', error);
+      const status = error instanceof MercadoPagoError ? error.status : 502;
+      return res.status(status).json({ error: error.message || 'Não foi possível iniciar a conexão Mercado Pago.' });
+    }
+  });
+
+  app.get('/api/mercadopago/oauth/callback', async (req, res) => {
+    const finish = (ok, message) => {
+      const title = ok ? 'Mercado Pago conectado' : 'Não foi possível conectar';
+      const color = ok ? '#166534' : '#991b1b';
+      const appUrl = ok ? 'rottaurbana://mercadopago/connected?status=success' : 'rottaurbana://mercadopago/connected?status=error';
+      const safeMessage = String(message).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+      return res.status(ok ? 200 : 400).send(`<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font-family:Arial,sans-serif;padding:32px;max-width:620px;margin:auto;color:#1f2937"><h1 style="color:${color}">${title}</h1><p>${safeMessage}</p><p><a href="${appUrl}">Voltar ao aplicativo</a></p></body></html>`);
+    };
+    const rawState = String(req.query?.state || '').trim();
+    if (!rawState) return finish(false, 'A autorização não retornou um estado válido. Inicie a conexão novamente pelo app.');
+    try {
+      const { data: oauthState, error } = await admin.from('mercadopago_oauth_states').select('*')
+        .eq('state_hash', stateHash(rawState)).maybeSingle();
+      if (error) throw error;
+      if (!oauthState || oauthState.used_at || new Date(oauthState.expires_at).getTime() <= Date.now()) {
+        return finish(false, 'Esta autorização expirou ou já foi utilizada. Inicie uma nova conexão pelo app.');
+      }
+      await admin.from('mercadopago_oauth_states').update({ used_at: new Date().toISOString() }).eq('state_hash', oauthState.state_hash);
+      if (req.query?.error) return finish(false, 'A autorização foi cancelada no Mercado Pago.');
+      const code = String(req.query?.code || '').trim();
+      if (!code) return finish(false, 'O Mercado Pago não retornou o código de autorização.');
+      if (!mercadopagoOAuthConfigured() || !secretBoxConfigured()) return finish(false, 'A conexão Mercado Pago não está configurada no servidor.');
+
+      const tokenData = await exchangeMercadoPagoCode({ code, redirectUri: splitRedirectUri(req) });
+      if (!tokenData?.access_token || !tokenData?.user_id) throw new MercadoPagoError('O Mercado Pago não retornou os dados da conta autorizada.', 502);
+      const { error: saveError } = await admin.from('mercadopago_driver_accounts').upsert({
+        driver_id: oauthState.driver_id,
+        provider_user_id: String(tokenData.user_id),
+        access_token_ciphertext: encryptSecret(tokenData.access_token),
+        refresh_token_ciphertext: tokenData.refresh_token ? encryptSecret(tokenData.refresh_token) : null,
+        access_token_expires_at: new Date(Date.now() + Number(tokenData.expires_in || 15552000) * 1000).toISOString(),
+        live_mode: tokenData.live_mode !== false,
+        status: 'connected',
+        last_error: null,
+        connected_at: new Date().toISOString(),
+      }, { onConflict: 'driver_id' });
+      if (saveError) throw saveError;
+      return finish(true, 'A conta do motorista foi vinculada. Os próximos pagamentos de corridas serão divididos automaticamente conforme o plano.');
+    } catch (error) {
+      console.error('[MercadoPago OAuth callback]', error);
+      return finish(false, error instanceof MercadoPagoError ? error.message : 'Falha ao salvar a autorização. Tente novamente.');
+    }
+  });
+
+  app.get('/api/mercadopago/connect/status', requireDriver, async (req, res) => {
+    try {
+      const account = await getMercadoPagoAccount(admin, req.driverAuth.driver.id);
+      return res.json({
+        connected: account?.status === 'connected',
+        status: account?.status || 'disconnected',
+        provider_user_id: account?.provider_user_id || null,
+        live_mode: account?.live_mode ?? null,
+        access_token_expires_at: account?.access_token_expires_at || null,
+      });
+    } catch (error) {
+      const status = error instanceof MercadoPagoError ? error.status : 502;
+      return res.status(status).json({ error: error.message || 'Não foi possível consultar a conexão Mercado Pago.' });
+    }
+  });
+
+  app.post('/api/mercadopago/connect/disconnect', requireDriver, async (req, res) => {
+    try {
+      const { error } = await admin.from('mercadopago_driver_accounts').delete().eq('driver_id', req.driverAuth.driver.id);
+      if (error) throw error;
+      return res.json({ ok: true });
+    } catch (error) {
+      const status = error instanceof MercadoPagoError ? error.status : 502;
+      return res.status(status).json({ error: error.message || 'Não foi possível desconectar a conta Mercado Pago.' });
+    }
+  });
+
+  app.post('/api/rides/:id/payment/checkout', requirePassenger, async (req, res) => {
+    try {
+      const ride = await getRideForPassenger(admin, req.params.id, req.userAuth.user.id);
+      const payment = await createRideCheckout(admin, req, ride);
+      return res.json({ payment: publicRidePayment(payment) });
+    } catch (error) {
+      console.error('[MercadoPago ride checkout]', error);
+      const status = error instanceof MercadoPagoError ? error.status : 502;
+      return res.status(status).json({ error: error.message || 'Não foi possível criar o pagamento da corrida.' });
+    }
+  });
+
+  app.get('/api/rides/:id/payment', requireUser, async (req, res) => {
+    try {
+      const { data: ride, error: rideError } = await admin.from('rides').select('id,passenger_id,driver_id').eq('id', req.params.id).maybeSingle();
+      if (rideError) throw rideError;
+      if (!ride || (ride.passenger_id !== req.userAuth.user.id && ride.driver_id !== req.userAuth.user.id && req.userAuth.profile.role !== 'admin')) {
+        throw new MercadoPagoError('Pagamento não encontrado.', 404);
+      }
+      const payment = await getRidePayment(admin, req.params.id);
+      return res.json({ payment: publicRidePayment(payment) });
+    } catch (error) {
+      const status = error instanceof MercadoPagoError ? error.status : 502;
+      return res.status(status).json({ error: error.message || 'Não foi possível consultar o pagamento da corrida.' });
+    }
+  });
 
   app.post('/api/subscriptions/create-checkout', requireDriver, async (req, res) => {
     const plan = String(req.body?.plan || '').toLowerCase();
@@ -466,7 +872,20 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
       let result = null;
       if (topic.includes('subscription_authorized_payment')) result = await applyAuthorizedPaymentWebhook(admin, await getAuthorizedPayment(dataId));
       else if (topic.includes('subscription_preapproval')) result = await applyPreapprovalWebhook(admin, await getPreapproval(dataId));
-      else if (topic === 'payment' || topic.includes('payment')) result = await applyPaymentWebhook(admin, await getPayment(dataId));
+      else if (topic === 'payment' || topic.includes('payment')) {
+        const hintedRideId = String(req.query?.ride_id || '').trim() || null;
+        const hintedRidePayment = hintedRideId ? await getRidePayment(admin, hintedRideId) : null;
+        let provider;
+        if (hintedRidePayment?.driver_id) {
+          provider = await providerPaymentForRide(admin, dataId, hintedRideId);
+          result = await applyRidePaymentWebhook(admin, provider, hintedRideId);
+        } else {
+          // The platform token remains the fallback for legacy subscription
+          // payments and for notifications that arrive without ride_id.
+          provider = await getPayment(dataId);
+          result = await applyRidePaymentWebhook(admin, provider) || await applyPaymentWebhook(admin, provider);
+        }
+      }
       console.log(`[MercadoPago webhook] ${topic || 'unknown'} ${dataId}`, result || 'ignored');
       return res.status(200).send('OK');
     } catch (error) {

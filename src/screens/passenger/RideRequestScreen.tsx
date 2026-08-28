@@ -112,7 +112,7 @@ const RIDE_TYPES = [
 export interface RidePayload {
   originLng: number; originLat: number; originAddress: string;
   destLng: number; destLat: number; destAddress: string;
-  paymentMethod: 'pix' | 'cash' | 'card';
+  paymentMethod: 'mercadopago' | 'pix' | 'cash' | 'card';
   requiresFemaleDriver?: boolean;
 }
 
@@ -131,7 +131,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
   const isFemale = profile?.gender === 'female';
   const [selectedDest, setSelectedDest] = useState(destination);
   const [selectedType, setSelectedType] = useState('economy');
-  const [selectedPayment, setSelectedPayment] = useState<'pix' | 'cash' | 'card'>('pix');
+  const [selectedPayment, setSelectedPayment] = useState<'mercadopago' | 'pix' | 'cash' | 'card'>('mercadopago');
   const [preferFemaleDriver, setPreferFemaleDriver] = useState(true);
   const [step, setStep] = useState<'search' | 'choose'>(destination ? 'choose' : 'search');
   const [isExpanded, setIsExpanded] = useState(true);
@@ -331,6 +331,22 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
           <Text style={styles.modalTitle}>Forma de Pagamento</Text>
           
           <ScrollView style={{ maxHeight: 300 }} showsVerticalScrollIndicator={false}>
+            {/* Mercado Pago — checkout with automatic driver/platform split */}
+            <TouchableOpacity
+              style={[styles.modalPayItem, selectedPayment === 'mercadopago' && styles.modalPayItemActive]}
+              onPress={() => { setSelectedPayment('mercadopago'); setSelectedCard(null); setShowPaymentModal(false); }}
+              activeOpacity={0.7}
+            >
+              <View style={[styles.payIconWrap, { backgroundColor: Colors.primary + '18' }]}>
+                <CreditCard size={22} color={Colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalPayName}>Mercado Pago</Text>
+                <Text style={styles.modalPayDesc}>PIX ou cartão com repasse automático</Text>
+              </View>
+              {selectedPayment === 'mercadopago' && <Check size={18} color={Colors.primary} strokeWidth={2.5} />}
+            </TouchableOpacity>
+
             {/* PIX */}
             <TouchableOpacity
               style={[styles.modalPayItem, selectedPayment === 'pix' && styles.modalPayItemActive]}
@@ -798,7 +814,11 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
                 activeOpacity={0.8}
               >
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  {selectedPayment === 'pix' ? (
+                  {selectedPayment === 'mercadopago' ? (
+                    <View style={[styles.payIconWrapSmall, { backgroundColor: Colors.primary + '18' }]}>
+                      <CreditCard size={16} color={Colors.primary} />
+                    </View>
+                  ) : selectedPayment === 'pix' ? (
                     <View style={[styles.payIconWrapSmall, { backgroundColor: '#32BCAD12' }]}>
                       <PixIcon size={16} color="#32BCAD" />
                     </View>
@@ -812,7 +832,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
                     </View>
                   )}
                   <Text style={styles.selectedPaymentText}>
-                    {selectedPayment === 'pix' ? 'PIX' : selectedPayment === 'cash' ? 'Dinheiro' : (selectedCard ? `Cartão •••• ${selectedCard.number.slice(-4)}` : 'Cartão')}
+                    {selectedPayment === 'mercadopago' ? 'Mercado Pago' : selectedPayment === 'pix' ? 'PIX direto' : selectedPayment === 'cash' ? 'Dinheiro' : (selectedCard ? `Cartão •••• ${selectedCard.number.slice(-4)}` : 'Cartão')}
                   </Text>
                 </View>
                 <ChevronRight size={16} color="#888" />

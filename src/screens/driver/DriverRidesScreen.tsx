@@ -174,7 +174,7 @@ const DriverRidesScreen: React.FC<DriverRidesScreenProps> = ({ onBack }) => {
                   { label: 'Valor', value: fmtPrice(selected.price) },
                   { label: 'Distância', value: selected.distance_km ? `${selected.distance_km.toFixed(1)} km` : '—' },
                   { label: 'Duração', value: selected.duration_min ? `${selected.duration_min} min` : '—' },
-                  { label: 'Pagamento', value: selected.payment_method === 'pix' ? 'PIX' : selected.payment_method === 'card' ? 'Cartão' : 'Dinheiro' },
+                  { label: 'Pagamento', value: selected.payment_method === 'mercadopago' ? 'Mercado Pago' : selected.payment_method === 'pix' ? 'PIX direto' : selected.payment_method === 'card' ? 'Cartão' : 'Dinheiro' },
                   { label: 'Data', value: fmtDate(selected.requested_at) },
                   ...(selected.cancel_reason ? [{ label: 'Motivo cancel.', value: selected.cancel_reason }] : []),
                 ].map(row => (

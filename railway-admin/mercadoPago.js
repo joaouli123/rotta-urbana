@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 
 const API_BASE = 'https://api.mercadopago.com';
+const REQUEST_TIMEOUT_MS = 20_000;
 
 export class MercadoPagoError extends Error {
   constructor(message, status = 502, details = null) {
@@ -12,6 +13,8 @@ export class MercadoPagoError extends Error {
 }
 
 const accessToken = () => String(process.env.MERCADOPAGO_ACCESS_TOKEN || '').trim();
+const clientId = () => String(process.env.MERCADOPAGO_CLIENT_ID || '').trim();
+const clientSecret = () => String(process.env.MERCADOPAGO_CLIENT_SECRET || '').trim();
 
 export function mercadopagoConfigured() {
   return accessToken().length >= 20;
@@ -19,6 +22,14 @@ export function mercadopagoConfigured() {
 
 export function mercadopagoWebhookConfigured() {
   return String(process.env.MERCADOPAGO_WEBHOOK_SECRET || '').trim().length >= 16;
+}
+
+export function mercadopagoOAuthConfigured() {
+  return clientId().length >= 6 && clientSecret().length >= 12;
+}
+
+export function mercadopagoSplitConfigured() {
+  return mercadopagoConfigured() && mercadopagoOAuthConfigured();
 }
 
 function safeJson(value) {
@@ -29,26 +40,131 @@ export async function mercadopagoRequest(path, { method = 'GET', body, idempoten
   const token = accessToken();
   if (!token) throw new MercadoPagoError('MERCADOPAGO_ACCESS_TOKEN não configurado.', 503);
 
+  return mercadopagoRequestWithToken(token, path, { method, body, idempotencyKey });
+}
+
+async function parseResponse(response) {
+  const raw = await response.text();
+  let data = null;
+  try { data = raw ? JSON.parse(raw) : null; } catch { data = { raw: raw.slice(0, 500) }; }
+  return data;
+}
+
+async function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw new MercadoPagoError('Mercado Pago demorou demais para responder.', 504);
+    }
+    throw new MercadoPagoError('Não foi possível conectar ao Mercado Pago.', 502, { cause: error?.message });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function mercadopagoRequestWithToken(token, path, { method = 'GET', body, idempotencyKey } = {}) {
+  const normalizedToken = String(token || '').trim();
+  if (!normalizedToken) throw new MercadoPagoError('Token do Mercado Pago ausente.', 503);
+
   const headers = {
-    Authorization: `Bearer ${token}`,
+    Authorization: `Bearer ${normalizedToken}`,
     Accept: 'application/json',
   };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (idempotencyKey) headers['X-Idempotency-Key'] = idempotencyKey;
 
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await requestJson(`${API_BASE}${path}`, {
     method,
     headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body,
   });
-  const raw = await response.text();
-  let data = null;
-  try { data = raw ? JSON.parse(raw) : null; } catch { data = { raw: raw.slice(0, 500) }; }
+  const data = await parseResponse(response);
   if (!response.ok) {
     const providerMessage = data?.message || data?.error || `HTTP ${response.status}`;
     throw new MercadoPagoError(`Mercado Pago: ${providerMessage}`, response.status, data);
   }
   return data;
+}
+
+async function oauthTokenRequest(body) {
+  if (!mercadopagoOAuthConfigured()) {
+    throw new MercadoPagoError('OAuth do Mercado Pago não está configurado no servidor.', 503);
+  }
+  const response = await requestJson(`${API_BASE}/oauth/token`, {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: { client_id: clientId(), client_secret: clientSecret(), ...body },
+  });
+  const data = await parseResponse(response);
+  if (!response.ok) {
+    const providerMessage = data?.message || data?.error_description || data?.error || `HTTP ${response.status}`;
+    throw new MercadoPagoError(`Mercado Pago OAuth: ${providerMessage}`, response.status, data);
+  }
+  return data;
+}
+
+export function mercadopagoAuthorizationUrl({ state, redirectUri }) {
+  if (!mercadopagoOAuthConfigured()) {
+    throw new MercadoPagoError('OAuth do Mercado Pago não está configurado no servidor.', 503);
+  }
+  const url = new URL('https://auth.mercadopago.com/authorization');
+  url.searchParams.set('client_id', clientId());
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('platform_id', 'mp');
+  url.searchParams.set('state', String(state));
+  url.searchParams.set('redirect_uri', String(redirectUri));
+  return url.toString();
+}
+
+export function exchangeMercadoPagoCode({ code, redirectUri }) {
+  return oauthTokenRequest({ grant_type: 'authorization_code', code: String(code), redirect_uri: String(redirectUri) });
+}
+
+export function refreshMercadoPagoToken(refreshToken) {
+  return oauthTokenRequest({ grant_type: 'refresh_token', refresh_token: String(refreshToken) });
+}
+
+export const getPaymentWithToken = (token, id) => mercadopagoRequestWithToken(token, `/v1/payments/${encodeURIComponent(id)}`);
+
+export function createSplitPreference({ sellerAccessToken, rideId, amount, marketplaceFee, payerEmail, notificationUrl, backUrls, idempotencyKey }) {
+  const safeAmount = Number(Number(amount).toFixed(2));
+  const safeFee = Number(Number(marketplaceFee).toFixed(2));
+  return mercadopagoRequestWithToken(sellerAccessToken, '/checkout/preferences', {
+    method: 'POST',
+    idempotencyKey,
+    body: {
+      items: [{
+        id: `ride-${rideId}`,
+        title: 'Corrida Rotta Urbana',
+        description: 'Pagamento de corrida',
+        currency_id: 'BRL',
+        quantity: 1,
+        unit_price: safeAmount,
+      }],
+      marketplace_fee: safeFee,
+      payer: payerEmail ? { email: String(payerEmail).trim().toLowerCase() } : undefined,
+      external_reference: String(rideId),
+      notification_url: notificationUrl,
+      back_urls: backUrls,
+      auto_return: 'approved',
+      statement_descriptor: 'ROTTA URBANA',
+    },
+  });
+}
+
+export function refundPaymentWithToken(sellerAccessToken, paymentId, amount, idempotencyKey) {
+  const body = amount == null ? {} : { amount: Number(Number(amount).toFixed(2)) };
+  return mercadopagoRequestWithToken(sellerAccessToken, `/v1/payments/${encodeURIComponent(paymentId)}/refunds`, {
+    method: 'POST', body, idempotencyKey,
+  });
 }
 
 export function buildRecurringSchedule(plan, amount) {
@@ -128,8 +244,15 @@ export function webhookTopic(req) {
 
 export function safeProviderMetadata(data = {}) {
   return {
+    status: data.status ?? null,
     status_detail: data.status_detail ?? null,
     payment_method_id: data.payment_method_id ?? null,
+    payment_type_id: data.payment_type_id ?? null,
+    transaction_amount: data.transaction_amount ?? null,
+    net_received_amount: data.transaction_details?.net_received_amount ?? data.net_received_amount ?? null,
+    total_paid_amount: data.transaction_details?.total_paid_amount ?? data.total_paid_amount ?? null,
+    fee_details: Array.isArray(data.fee_details) ? data.fee_details : [],
+    collector_id: data.collector_id ?? null,
     preapproval_id: data.preapproval_id ?? null,
     external_reference: data.external_reference ?? null,
     date_created: data.date_created ?? null,
@@ -140,6 +263,8 @@ export function providerConfigSummary() {
   return {
     accessToken: mercadopagoConfigured(),
     webhookSecret: mercadopagoWebhookConfigured(),
+    oauth: mercadopagoOAuthConfigured(),
+    split: mercadopagoSplitConfigured(),
     api: API_BASE,
   };
 }
