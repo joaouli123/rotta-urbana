@@ -79,6 +79,16 @@ function hasText(haystack: string, value: string): boolean {
   return haystack.includes(needle);
 }
 
+function matchesStateText(haystack: string, state: string): boolean {
+  const stateCode = state.toUpperCase();
+  const stateName = BRAZIL_STATE_NAMES[stateCode] || stateCode;
+  const codeMatches = hasText(haystack, stateCode);
+  const nameMatches = hasText(haystack, stateName);
+  // Mato Grosso do Sul must not be accepted when the configured UF is MT.
+  if (stateCode === 'MT' && hasText(haystack, BRAZIL_STATE_NAMES.MS)) return false;
+  return codeMatches || nameMatches;
+}
+
 function normalizeScope(value: unknown): ServiceAreaScope {
   const scope = String(value ?? '').trim().toLowerCase() as ServiceAreaScope;
   return SCOPES.includes(scope) ? scope : DEFAULT_SERVICE_AREA.scope;
@@ -191,8 +201,7 @@ export function matchesServiceAreaText(text: string, area: ServiceArea): boolean
   const haystack = normalizeAreaText(text);
   if (!haystack) return false;
   if (area.scope === 'country') return hasText(haystack, COUNTRY_NAMES[area.country] || area.country);
-  const stateName = BRAZIL_STATE_NAMES[area.state] || area.state;
-  if (!hasText(haystack, stateName) && !hasText(haystack, area.state)) return false;
+  if (!matchesStateText(haystack, area.state)) return false;
   if (area.scope === 'state') return true;
   return hasText(haystack, area.city);
 }
