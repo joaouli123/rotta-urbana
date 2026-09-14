@@ -1497,6 +1497,10 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
   const set = s ?? {};
   const okMsg = req.query.ok ? `<div class="ok">Configurações salvas com sucesso! As alterações já estão ativas no App e na Landing Page.</div>` : '';
   const tab = req.query.tab || 'plans';
+  const serviceAreaScope = ['radius', 'city', 'state', 'country'].includes(String(set.service_area_scope))
+    ? String(set.service_area_scope)
+    : 'radius';
+  const serviceAreaScopeLabel = ({ radius: 'Raio', city: 'Cidade', state: 'Estado', country: 'País' })[serviceAreaScope] || 'Raio';
 
   const catMeta = {
     moto: { title: 'Moto', color: '#10B981' },
@@ -1628,6 +1632,57 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
             <div><label>Início</label><input type="time" name="night_start" value="${esc(String(set.night_start || '19:00').slice(0, 5))}"></div>
             <div><label>Fim</label><input type="time" name="night_end" value="${esc(String(set.night_end || '06:00').slice(0, 5))}"></div>
             <div><label>Multiplicador</label><input name="night_multiplier" value="${fmtVal(set.night_multiplier ?? 1.15)}" placeholder="1,15"></div>
+          </div>
+        </div>
+
+        <!-- 2d. Área operacional configurável -->
+        <div class="card" style="border-left:4px solid #0EA5E9;">
+          <h2 style="margin:0 0 6px 0;">Área de atendimento e pesquisas</h2>
+          <p style="margin:0 0 16px 0;color:var(--mut);font-size:13.5px;">Escolha o alcance que o app deve aceitar. O limite é aplicado no mapa, no autocomplete de endereços e na criação de corridas. As alterações entram em vigor no app sem precisar cadastrar cada endereço manualmente.</p>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">
+            <div>
+              <label>Limitar área de atendimento</label>
+              <select name="service_area_enabled" style="font-weight:600;color:#0369A1;">
+                <option value="1" ${set.service_area_enabled !== false ? 'selected' : ''}>Sim — usar esta área</option>
+                <option value="0" ${set.service_area_enabled === false ? 'selected' : ''}>Não — liberar todas as localidades</option>
+              </select>
+            </div>
+            <div>
+              <label>Tipo de área</label>
+              <select name="service_area_scope" style="font-weight:600;color:#0369A1;">
+                <option value="radius" ${serviceAreaScope === 'radius' ? 'selected' : ''}>Raio a partir do centro</option>
+                <option value="city" ${serviceAreaScope === 'city' ? 'selected' : ''}>Cidade</option>
+                <option value="state" ${serviceAreaScope === 'state' ? 'selected' : ''}>Estado/UF</option>
+                <option value="country" ${serviceAreaScope === 'country' ? 'selected' : ''}>País</option>
+              </select>
+            </div>
+            <div>
+              <label>Cidade atendida</label>
+              <input name="service_area_city" value="${esc(set.service_area_city || 'Sinop')}" placeholder="Sinop">
+            </div>
+            <div>
+              <label>Estado (UF)</label>
+              <input name="service_area_state" value="${esc(set.service_area_state || 'MT')}" maxlength="2" placeholder="MT">
+            </div>
+            <div>
+              <label>País (ISO-2)</label>
+              <input name="service_area_country" value="${esc(set.service_area_country || 'BR')}" maxlength="2" placeholder="BR">
+            </div>
+            <div>
+              <label>Raio de atendimento (km)</label>
+              <input name="service_area_radius_km" type="number" min="1" max="200" step="0.5" value="${fmtVal(set.service_area_radius_km ?? 20)}">
+            </div>
+            <div>
+              <label>Centro — longitude</label>
+              <input name="service_area_center_lng" type="number" min="-180" max="180" step="0.000001" value="${set.service_area_center_lng ?? -55.5024}">
+            </div>
+            <div>
+              <label>Centro — latitude</label>
+              <input name="service_area_center_lat" type="number" min="-90" max="90" step="0.000001" value="${set.service_area_center_lat ?? -11.8642}">
+            </div>
+          </div>
+          <div style="margin-top:14px;background:#F0F9FF;border:1px solid #BAE6FD;padding:12px 16px;border-radius:10px;font-size:12.5px;color:#075985;">
+            <strong>Configuração atual:</strong> ${esc(serviceAreaScopeLabel)} — ${esc(set.service_area_city || 'Sinop')}/${esc(set.service_area_state || 'MT')}/${esc(set.service_area_country || 'BR')}${serviceAreaScope === 'radius' ? ` em um raio de ${fmtVal(set.service_area_radius_km ?? 20)} km` : ''}. Para raio, informe também as coordenadas do centro. Para cidade/estado/país, o app busca o limite administrativo configurado.
           </div>
         </div>
 
@@ -1816,6 +1871,14 @@ adminRouter.post('/settings', requireAuth, async (req, res) => {
     night_start: b.night_start || '19:00',
     night_end: b.night_end || '06:00',
     night_multiplier: num(b.night_multiplier),
+    service_area_enabled: b.service_area_enabled === '1',
+    service_area_scope: ['radius', 'city', 'state', 'country'].includes(String(b.service_area_scope)) ? String(b.service_area_scope) : 'radius',
+    service_area_city: String(b.service_area_city || 'Sinop').trim().slice(0, 80) || 'Sinop',
+    service_area_state: String(b.service_area_state || 'MT').trim().toUpperCase().slice(0, 2) || 'MT',
+    service_area_country: String(b.service_area_country || 'BR').trim().toUpperCase().slice(0, 2) || 'BR',
+    service_area_radius_km: Math.min(200, Math.max(1, num(b.service_area_radius_km) || 20)),
+    service_area_center_lng: signedNum(b.service_area_center_lng, -55.5024, -180, 180),
+    service_area_center_lat: signedNum(b.service_area_center_lat, -11.8642, -90, 90),
     platform_pix_key: b.platform_pix_key ?? '',
     platform_pix_name: b.platform_pix_name ?? '',
     platform_pix_city: b.platform_pix_city ?? '',
@@ -1889,7 +1952,7 @@ app.post('/api/payments/create-pix-legacy-disabled', async (req, res) => {
         description: description || 'Assinatura Rotta Urbana',
         payment_method_id: 'pix',
         payer: {
-          email: email || 'contato@rottaurbana.com.br',
+          email: email || 'rottaurbana.sinop@gmail.com',
           first_name: 'Motorista',
           last_name: 'Parceiro'
         },
@@ -2006,6 +2069,12 @@ const num = (v) => {
   }
   const n = Number(s);
   return Number.isFinite(n) && n >= 0 ? n : 0;
+};
+
+const signedNum = (v, fallback, min, max) => {
+  const n = Number(String(v ?? '').trim().replace(',', '.'));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, n));
 };
 
 const fmtVal = (n, dec = 2) => Number(n ?? 0).toFixed(dec);

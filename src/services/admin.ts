@@ -140,6 +140,14 @@ export interface AppSettings {
   plan_weekly_price: number | null;
   subscription_daily_amount: number | null;
   subscription_monthly_amount: number | null;
+  service_area_enabled?: boolean;
+  service_area_scope?: 'radius' | 'city' | 'state' | 'country' | null;
+  service_area_city?: string | null;
+  service_area_state?: string | null;
+  service_area_country?: string | null;
+  service_area_center_lng?: number | null;
+  service_area_center_lat?: number | null;
+  service_area_radius_km?: number | null;
 }
 
 export async function getAppSettings(): Promise<AppSettings> {

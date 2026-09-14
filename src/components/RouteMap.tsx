@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ViewStyle } from 'react-native';
 import { Colors } from '../constants';
 import { Flag } from 'lucide-react-native';
+import { DEFAULT_SERVICE_AREA, getServiceArea, serviceAreaBbox, type ServiceArea } from '../services/serviceArea';
+import { getServiceAreaBounds } from '../services/geo';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Safe Mapbox loader.
@@ -40,6 +42,8 @@ interface RouteMapProps {
   drivers?: DriverPin[];
   route?: { type: 'LineString'; coordinates: LngLat[] } | null;
   followUser?: boolean;
+  /** Keep the operational map focused on the Sinop service area. */
+  restrictToSinop?: boolean;
   paddingTop?: number;
   paddingBottom?: number;
   driverLocation?: LngLat;
@@ -49,7 +53,22 @@ interface RouteMapProps {
 
 export const isMapAvailable = () => MAP_READY;
 
-const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, paddingTop, paddingBottom, driverLocation, secondaryRoute, style }) => {
+const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, driverLocation, secondaryRoute, style }) => {
+  const [serviceArea, setServiceArea] = useState<ServiceArea>(DEFAULT_SERVICE_AREA);
+  const [serviceAreaBounds, setServiceAreaBounds] = useState(() => serviceAreaBbox(DEFAULT_SERVICE_AREA));
+
+  useEffect(() => {
+    if (!restrictToSinop) return;
+    let active = true;
+    getServiceArea().then(async (area) => {
+      if (!active) return;
+      setServiceArea(area);
+      const bounds = await getServiceAreaBounds(area);
+      if (active) setServiceAreaBounds(bounds);
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [restrictToSinop]);
+
   if (!MAP_READY) {
     return (
       <View style={[styles.placeholder, style]}>
@@ -64,7 +83,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
 
   const center = origin ?? (drivers[0] ? [drivers[0].lng, drivers[0].lat] as LngLat : [-55.5024, -11.8642] as LngLat);
   // Follow the live GPS puck only when we have no fixed points to frame.
-  const follow = !!followUser && !origin && !destination && !route;
+  const follow = !restrictToSinop && !!followUser && !origin && !destination && !route;
   const pad = { paddingTop: paddingTop ?? 0, paddingBottom: paddingBottom ?? 0, paddingLeft: 0, paddingRight: 0 };
 
   // Frame the WHOLE trip when we have a route or both endpoints.
@@ -98,8 +117,11 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
     ].join(':');
   }
 
-  // Sinop, MT — used as initial camera position before GPS kicks in.
-  const SINOP_COORD: LngLat = [-55.5024, -11.8642];
+  // The admin-configured area replaces the old hardcoded Sinop rectangle.
+  // Until the setting is loaded, DEFAULT_SERVICE_AREA keeps the map focused.
+  const mapCenter = restrictToSinop ? serviceArea.center : center;
+  const maxBounds = restrictToSinop ? serviceAreaBounds : undefined;
+  const minServiceZoom = serviceArea.radiusKm <= 30 ? 11.5 : serviceArea.radiusKm <= 60 ? 10.5 : 9.5;
 
   return (
     <Mapbox.MapView style={[{ flex: 1 }, style]} styleURL={Mapbox.StyleURL.Street} logoEnabled={false} compassEnabled={false}>
@@ -109,6 +131,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
         <Mapbox.Camera
           key={boundsKey}
           bounds={bounds}
+          maxBounds={maxBounds}
+          minZoomLevel={restrictToSinop ? minServiceZoom : undefined}
           maxZoomLevel={15.5}
           animationDuration={700}
         />
@@ -116,12 +140,14 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
         <Mapbox.Camera
           followUserLocation
           followZoomLevel={15}
-          defaultSettings={{ centerCoordinate: SINOP_COORD, zoomLevel: 13 }}
+          defaultSettings={{ centerCoordinate: serviceArea.center, zoomLevel: minServiceZoom + 1.5 }}
+          maxBounds={maxBounds}
+          minZoomLevel={restrictToSinop ? minServiceZoom : undefined}
           padding={pad}
           animationDuration={700}
         />
       ) : (
-        <Mapbox.Camera zoomLevel={15} centerCoordinate={center} padding={pad} animationDuration={700} />
+        <Mapbox.Camera zoomLevel={Math.min(15, minServiceZoom + 3.5)} centerCoordinate={mapCenter} maxBounds={maxBounds} minZoomLevel={restrictToSinop ? minServiceZoom : undefined} padding={pad} animationDuration={700} />
       )}
       {/* Stable location dot (default puck, no spinning heading arrow). */}
       <Mapbox.UserLocation visible androidRenderMode="normal" />

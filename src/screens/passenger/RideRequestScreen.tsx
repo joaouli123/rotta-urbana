@@ -38,8 +38,9 @@ import { Button } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
 import RouteMap from '../../components/RouteMap';
 import PixIcon from '../../components/icons/PixIcon';
-import { geocode, getRoute } from '../../services/geo';
+import { geocode, getRoute, isCoordinateWithinServiceArea } from '../../services/geo';
 import { estimateFares, getRideHistory } from '../../services/rides';
+import { DEFAULT_SERVICE_AREA, getServiceArea, isWithinServiceArea, serviceAreaLabel, type ServiceArea } from '../../services/serviceArea';
 const imgEconomico = require('../../../assets/icons/icone_economico.png');
 const imgConforto  = require('../../../assets/icons/icone_conforto.png');
 const imgPremium   = require('../../../assets/icons/icone_premium.png');
@@ -122,8 +123,6 @@ interface RideRequestScreenProps {
   onBack: () => void;
 }
 
-const SINOP: [number, number] = [-55.5024, -11.8642];
-
 const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '', onConfirm, onBack }) => {
   const insets = useSafeAreaInsets();
   const { height: SCREEN_H } = useWindowDimensions();
@@ -132,7 +131,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
   const [selectedDest, setSelectedDest] = useState(destination);
   const [selectedType, setSelectedType] = useState('economy');
   const [selectedPayment, setSelectedPayment] = useState<'mercadopago' | 'pix' | 'cash' | 'card'>('mercadopago');
-  const [preferFemaleDriver, setPreferFemaleDriver] = useState(true);
+  const [preferFemaleDriver, setPreferFemaleDriver] = useState(false);
   const [step, setStep] = useState<'search' | 'choose'>(destination ? 'choose' : 'search');
   const [isExpanded, setIsExpanded] = useState(true);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -164,6 +163,8 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
   const [suggestions, setSuggestions] = useState<{ id: string; name: string; address: string; lng: number; lat: number }[]>([]);
   const [searching, setSearching] = useState(false);
   const [recents, setRecents] = useState<{ id: string; name: string; address: string }[]>([]);
+  const [serviceArea, setServiceArea] = useState<ServiceArea>(DEFAULT_SERVICE_AREA);
+  const [outsideServiceArea, setOutsideServiceArea] = useState(false);
   // Measured bottom-panel height → used to frame the route in the visible map area (like Uber).
   const [panelH, setPanelH] = useState(Math.round(SCREEN_H * 0.5));
 
@@ -182,16 +183,33 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
 
   // Driver/passenger origin (GPS).
   useEffect(() => {
+    let active = true;
     (async () => {
+      const area = await getServiceArea();
+      if (!active) return;
+      setServiceArea(area);
+
+      const applyPosition = (position: [number, number]) => {
+        if (!active) return;
+        if (area.enabled && !isWithinServiceArea(position, area)) {
+          setOrigin(null);
+          setOutsideServiceArea(true);
+          return;
+        }
+        setOutsideServiceArea(false);
+        setOrigin(position);
+      };
+
       try {
         const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status !== 'granted') { setOrigin(SINOP); return; }
+        if (status !== 'granted') { applyPosition(area.center); return; }
         const last = await Location.getLastKnownPositionAsync();
-        if (last) setOrigin([last.coords.longitude, last.coords.latitude]);
+        if (last) applyPosition([last.coords.longitude, last.coords.latitude]);
         const pos = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-        setOrigin([pos.coords.longitude, pos.coords.latitude]);
-      } catch { setOrigin(SINOP); }
+        applyPosition([pos.coords.longitude, pos.coords.latitude]);
+      } catch { applyPosition(area.center); }
     })();
+    return () => { active = false; };
   }, []);
 
   const computeRouteFares = async (org: [number, number], dc: [number, number]) => {
@@ -278,8 +296,16 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
     }).catch(() => {});
   }, []);
 
-  const confirm = () => {
+  const confirm = async () => {
     if (origin && destCoords) {
+      const [originAllowed, destinationAllowed] = await Promise.all([
+        isCoordinateWithinServiceArea(origin, serviceArea),
+        isCoordinateWithinServiceArea(destCoords, serviceArea),
+      ]);
+      if (!originAllowed || !destinationAllowed) {
+        Alert.alert('Fora da área de atendimento', `A Rotta Urbana atende somente ${serviceAreaLabel(serviceArea)} no momento.`);
+        return;
+      }
       onConfirm(selectedType, {
         originLng: origin[0], originLat: origin[1], originAddress: 'Minha localização',
         destLng: destCoords[0], destLat: destCoords[1], destAddress,
@@ -508,6 +534,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
         destination={destCoords ?? undefined}
         route={route}
         followUser={!destCoords}
+        restrictToSinop
         paddingTop={insets.top + 166}
         paddingBottom={Math.min(panelH, Math.round(SCREEN_H * 0.52))}
         style={styles.mapArea}
@@ -600,6 +627,12 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
               </TouchableOpacity>
               <Text style={styles.searchHeaderTitle}>Buscar endereço</Text>
             </View>
+
+            {outsideServiceArea && (
+              <Text style={styles.serviceAreaNotice}>
+                Você está fora da área de atendimento. No momento atendemos somente {serviceAreaLabel(serviceArea)}.
+              </Text>
+            )}
 
             {/* Address Input Row inside Search Overlay */}
             <View style={styles.addressRow}>
@@ -1178,6 +1211,17 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Poppins_600SemiBold',
     color: Colors.textPrimary,
+  },
+  serviceAreaNotice: {
+    marginBottom: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: Radius.sm,
+    backgroundColor: '#FFF7ED',
+    color: '#9A3412',
+    fontSize: 12,
+    lineHeight: 18,
+    fontFamily: 'Poppins_500Medium',
   },
 });
 

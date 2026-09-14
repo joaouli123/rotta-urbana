@@ -14,6 +14,9 @@ import { registerForPushNotifications, clearPushToken } from '../services/push';
 import { showSearchingNotification, showDriverFoundNotification, clearRideNotification, ensureNotificationPermission } from '../services/localNotifications';
 import { selectPlan, createSubscriptionCheckout, buildRideFarePix, getSubscription, syncSubscriptionStatus, isSubscriptionCurrent } from '../services/payments';
 import { friendlyError } from '../lib/errors';
+import { DEFAULT_SERVICE_AREA, getServiceArea } from '../services/serviceArea';
+import { isCoordinateWithinServiceArea, reverseGeocode } from '../services/geo';
+import { serviceAreaLabel } from '../services/serviceArea';
 
 // Auth
 import SplashScreen from '../screens/auth/SplashScreen';
@@ -50,9 +53,6 @@ import DriverRatePassengerScreen from '../screens/driver/DriverRatePassengerScre
 import PlanSelectionScreen from '../screens/driver/PlanSelectionScreen';
 import { getDriverPlanType, getDriverPlanSegment, type PlanType } from '../services/payments';
 
-// Sinop, MT center — fallback when GPS is unavailable. [lng, lat]
-const SINOP: [number, number] = [-55.5024, -11.8642];
-
 async function getOrigin(): Promise<[number, number]> {
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
@@ -61,7 +61,7 @@ async function getOrigin(): Promise<[number, number]> {
       return [pos.coords.longitude, pos.coords.latitude];
     }
   } catch { /* ignore */ }
-  return SINOP;
+  return DEFAULT_SERVICE_AREA.center;
 }
 
 const Loading: React.FC<{ message?: string }> = ({ message = 'Carregando...' }) => (
@@ -285,6 +285,18 @@ const PassengerFlow: React.FC = () => {
         destLngLat = originLngLat;
         const places = await geocode(destText || 'Sinop, MT', originLngLat);
         if (places[0]) { destLngLat = [places[0].lng, places[0].lat]; destAddr = places[0].address || places[0].name; }
+      }
+      const serviceArea = await getServiceArea();
+      if (serviceArea.enabled && serviceArea.scope !== 'radius') {
+        const resolvedOriginAddress = await reverseGeocode(originLngLat[0], originLngLat[1]);
+        if (resolvedOriginAddress) originAddr = resolvedOriginAddress;
+      }
+      const [originAllowed, destinationAllowed] = await Promise.all([
+        isCoordinateWithinServiceArea(originLngLat, serviceArea),
+        isCoordinateWithinServiceArea(destLngLat, serviceArea),
+      ]);
+      if (!originAllowed || !destinationAllowed) {
+        throw new Error(`A Rotta Urbana atende somente ${serviceAreaLabel(serviceArea)} no momento.`);
       }
       setOriginCoords(originLngLat);
       setDestCoords(destLngLat);

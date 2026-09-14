@@ -102,6 +102,7 @@ export interface SubscriptionRow {
   next_payment_at?: string | null;
   provider_last_synced_at?: string | null;
   provider_cancelled_at?: string | null;
+  provider_metadata?: Record<string, unknown> | null;
 }
 
 export interface AppSettings {
@@ -128,6 +129,14 @@ export interface AppSettings {
   night_start?: string | null;
   night_end?: string | null;
   night_multiplier?: number | null;
+  service_area_enabled?: boolean;
+  service_area_scope?: 'radius' | 'city' | 'state' | 'country' | null;
+  service_area_city?: string | null;
+  service_area_state?: string | null;
+  service_area_country?: string | null;
+  service_area_center_lng?: number | null;
+  service_area_center_lat?: number | null;
+  service_area_radius_km?: number | null;
 }
 
 export interface PaymentRow {
