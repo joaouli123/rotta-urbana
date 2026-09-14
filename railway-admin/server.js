@@ -20,6 +20,16 @@ const {
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 
+const BRAZIL_STATES = [
+  ['AC', 'Acre'], ['AL', 'Alagoas'], ['AP', 'Amapá'], ['AM', 'Amazonas'],
+  ['BA', 'Bahia'], ['CE', 'Ceará'], ['DF', 'Distrito Federal'], ['ES', 'Espírito Santo'],
+  ['GO', 'Goiás'], ['MA', 'Maranhão'], ['MT', 'Mato Grosso'], ['MS', 'Mato Grosso do Sul'],
+  ['MG', 'Minas Gerais'], ['PA', 'Pará'], ['PB', 'Paraíba'], ['PR', 'Paraná'],
+  ['PE', 'Pernambuco'], ['PI', 'Piauí'], ['RJ', 'Rio de Janeiro'], ['RN', 'Rio Grande do Norte'],
+  ['RS', 'Rio Grande do Sul'], ['RO', 'Rondônia'], ['RR', 'Roraima'], ['SC', 'Santa Catarina'],
+  ['SP', 'São Paulo'], ['SE', 'Sergipe'], ['TO', 'Tocantins'],
+];
+
 if (!SUPABASE_URL || !SUPABASE_SECRET_KEY) {
   console.error('Missing SUPABASE_URL / SUPABASE_SECRET_KEY');
   process.exit(1);
@@ -1638,7 +1648,7 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
         <!-- 2d. Área operacional configurável -->
         <div class="card" style="border-left:4px solid #0EA5E9;">
           <h2 style="margin:0 0 6px 0;">Área de atendimento e pesquisas</h2>
-          <p style="margin:0 0 16px 0;color:var(--mut);font-size:13.5px;">Escolha o alcance que o app deve aceitar. O limite é aplicado no mapa, no autocomplete de endereços e na criação de corridas. As alterações entram em vigor no app sem precisar cadastrar cada endereço manualmente.</p>
+          <p style="margin:0 0 16px 0;color:var(--mut);font-size:13.5px;">Escolha o alcance que o app deve aceitar. O limite é aplicado no mapa, no autocomplete de endereços e na criação de corridas. Cidade, estado e país são sempre escolhidos em uma lista — nunca digitados livremente — para evitar erro de digitação que trave o app.</p>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;">
             <div>
               <label>Limitar área de atendimento</label>
@@ -1649,42 +1659,145 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
             </div>
             <div>
               <label>Tipo de área</label>
-              <select name="service_area_scope" style="font-weight:600;color:#0369A1;">
-                <option value="radius" ${serviceAreaScope === 'radius' ? 'selected' : ''}>Raio a partir do centro</option>
+              <select name="service_area_scope" id="serviceAreaScope" style="font-weight:600;color:#0369A1;" onchange="window.__updateServiceAreaScope()">
+                <option value="radius" ${serviceAreaScope === 'radius' ? 'selected' : ''}>Raio a partir de uma cidade</option>
                 <option value="city" ${serviceAreaScope === 'city' ? 'selected' : ''}>Cidade</option>
                 <option value="state" ${serviceAreaScope === 'state' ? 'selected' : ''}>Estado/UF</option>
                 <option value="country" ${serviceAreaScope === 'country' ? 'selected' : ''}>País</option>
               </select>
             </div>
-            <div>
-              <label>Cidade atendida</label>
-              <input name="service_area_city" value="${esc(set.service_area_city || 'Sinop')}" placeholder="Sinop">
-            </div>
-            <div>
-              <label>Estado (UF)</label>
-              <input name="service_area_state" value="${esc(set.service_area_state || 'MT')}" maxlength="2" placeholder="MT">
-            </div>
-            <div>
-              <label>País (ISO-2)</label>
-              <input name="service_area_country" value="${esc(set.service_area_country || 'BR')}" maxlength="2" placeholder="BR">
-            </div>
-            <div>
+            <div id="serviceAreaRadiusBlock" style="min-width:180px;">
               <label>Raio de atendimento (km)</label>
               <input name="service_area_radius_km" type="number" min="1" max="200" step="0.5" value="${fmtVal(set.service_area_radius_km ?? 20)}">
             </div>
-            <div>
-              <label>Centro — longitude</label>
-              <input name="service_area_center_lng" type="number" min="-180" max="180" step="0.000001" value="${set.service_area_center_lng ?? -55.5024}">
+          </div>
+
+          <div id="serviceAreaCityBlock" style="margin-top:14px;position:relative;max-width:420px;">
+            <label>Cidade atendida — digite para buscar e selecione um resultado</label>
+            <input id="serviceAreaCitySearch" autocomplete="off" placeholder="Digite o nome da cidade..." value="${esc(set.service_area_city || 'Sinop')}${set.service_area_state ? `, ${esc(set.service_area_state)}` : ''}">
+            <div id="serviceAreaCityResults" style="display:none;position:absolute;z-index:20;left:0;right:0;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(15,23,42,0.12);margin-top:4px;max-height:260px;overflow:auto;"></div>
+            <input type="hidden" name="service_area_city" id="serviceAreaCityHidden" value="${esc(set.service_area_city || 'Sinop')}">
+            <input type="hidden" name="service_area_center_lng" id="serviceAreaLngHidden" value="${set.service_area_center_lng ?? -55.5024}">
+            <input type="hidden" name="service_area_center_lat" id="serviceAreaLatHidden" value="${set.service_area_center_lat ?? -11.8642}">
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:14px;">
+            <div id="serviceAreaStateBlock">
+              <label>Estado (UF)</label>
+              <select name="service_area_state" id="serviceAreaStateSelect">
+                ${BRAZIL_STATES.map(([code, name]) => `<option value="${code}" ${String(set.service_area_state || 'MT').toUpperCase() === code ? 'selected' : ''}>${code} — ${name}</option>`).join('')}
+              </select>
             </div>
-            <div>
-              <label>Centro — latitude</label>
-              <input name="service_area_center_lat" type="number" min="-90" max="90" step="0.000001" value="${set.service_area_center_lat ?? -11.8642}">
+            <div id="serviceAreaCountryBlock">
+              <label>País</label>
+              <select name="service_area_country" id="serviceAreaCountrySelect">
+                <option value="BR" selected>Brasil</option>
+              </select>
             </div>
           </div>
+
           <div style="margin-top:14px;background:#F0F9FF;border:1px solid #BAE6FD;padding:12px 16px;border-radius:10px;font-size:12.5px;color:#075985;">
-            <strong>Configuração atual:</strong> ${esc(serviceAreaScopeLabel)} — ${esc(set.service_area_city || 'Sinop')}/${esc(set.service_area_state || 'MT')}/${esc(set.service_area_country || 'BR')}${serviceAreaScope === 'radius' ? ` em um raio de ${fmtVal(set.service_area_radius_km ?? 20)} km` : ''}. Para raio, informe também as coordenadas do centro. Para cidade/estado/país, o app busca o limite administrativo configurado.
+            <strong>Configuração atual:</strong> ${esc(serviceAreaScopeLabel)} — ${esc(set.service_area_city || 'Sinop')}/${esc(set.service_area_state || 'MT')}/${esc(set.service_area_country || 'BR')}${serviceAreaScope === 'radius' ? ` em um raio de ${fmtVal(set.service_area_radius_km ?? 20)} km` : ''}.
           </div>
         </div>
+
+        <script>
+          (function () {
+            // Public (pk.) Mapbox token — same one already embedded client-side in the Expo app bundle. Safe to expose.
+            const MAPBOX_TOKEN = 'pk.eyJ1Ijoiam9hb3VsaTEiLCJhIjoiY2tkNnBtNWwyMGthdDJ6cXYyMGtqNzgwbyJ9.cv7ICE6LhiIu-SdQygW4dg';
+            const scopeSelect = document.getElementById('serviceAreaScope');
+            const cityBlock = document.getElementById('serviceAreaCityBlock');
+            const stateBlock = document.getElementById('serviceAreaStateBlock');
+            const radiusBlock = document.getElementById('serviceAreaRadiusBlock');
+            const cityInput = document.getElementById('serviceAreaCitySearch');
+            const cityResults = document.getElementById('serviceAreaCityResults');
+            const cityHidden = document.getElementById('serviceAreaCityHidden');
+            const lngHidden = document.getElementById('serviceAreaLngHidden');
+            const latHidden = document.getElementById('serviceAreaLatHidden');
+            const stateSelect = document.getElementById('serviceAreaStateSelect');
+
+            window.__updateServiceAreaScope = function () {
+              const scope = scopeSelect.value;
+              cityBlock.style.display = (scope === 'radius' || scope === 'city') ? '' : 'none';
+              stateBlock.style.display = (scope === 'country') ? 'none' : '';
+              radiusBlock.style.display = (scope === 'radius') ? '' : 'none';
+            };
+            window.__updateServiceAreaScope();
+
+            let debounceTimer = null;
+            let currentResults = [];
+
+            function hideResults() {
+              cityResults.style.display = 'none';
+              cityResults.innerHTML = '';
+              currentResults = [];
+            }
+
+            function selectPlace(place) {
+              cityHidden.value = place.city;
+              lngHidden.value = place.lng;
+              latHidden.value = place.lat;
+              cityInput.value = place.state ? (place.city + ', ' + place.state) : place.city;
+              if (place.stateCode && stateSelect) {
+                const opt = Array.from(stateSelect.options).find((o) => o.value === place.stateCode);
+                if (opt) stateSelect.value = place.stateCode;
+              }
+              hideResults();
+            }
+
+            async function search(query) {
+              if (!query || query.trim().length < 2 || !MAPBOX_TOKEN) { hideResults(); return; }
+              const params = new URLSearchParams({
+                q: query, access_token: MAPBOX_TOKEN, language: 'pt', limit: '6',
+                country: 'br', types: 'place',
+              });
+              let data;
+              try {
+                const res = await fetch('https://api.mapbox.com/search/geocode/v6/forward?' + params);
+                data = await res.json();
+              } catch { hideResults(); return; }
+              const features = (data && data.features) || [];
+              currentResults = features.map((f) => {
+                const props = f.properties || {};
+                const ctx = props.context || {};
+                return {
+                  city: props.name || props.name_preferred || query,
+                  state: ctx.region ? ctx.region.name : '',
+                  stateCode: ctx.region ? String(ctx.region.region_code || '').toUpperCase() : '',
+                  lng: f.geometry && f.geometry.coordinates ? f.geometry.coordinates[0] : null,
+                  lat: f.geometry && f.geometry.coordinates ? f.geometry.coordinates[1] : null,
+                  label: props.full_address || props.place_formatted || props.name || query,
+                };
+              }).filter((p) => p.lng != null && p.lat != null);
+
+              if (!currentResults.length) { hideResults(); return; }
+              cityResults.innerHTML = '';
+              currentResults.forEach((p, i) => {
+                const row = document.createElement('div');
+                row.textContent = p.label;
+                row.style.padding = '10px 14px';
+                row.style.cursor = 'pointer';
+                row.style.borderBottom = '1px solid #F1F5F9';
+                row.style.fontSize = '13.5px';
+                row.addEventListener('mouseover', () => { row.style.background = '#F0F9FF'; });
+                row.addEventListener('mouseout', () => { row.style.background = '#fff'; });
+                row.addEventListener('click', () => selectPlace(currentResults[i]));
+                cityResults.appendChild(row);
+              });
+              cityResults.style.display = 'block';
+            }
+
+            cityInput.addEventListener('input', () => {
+              clearTimeout(debounceTimer);
+              const query = cityInput.value;
+              debounceTimer = setTimeout(() => search(query), 350);
+            });
+            cityInput.addEventListener('focus', () => { if (currentResults.length) cityResults.style.display = 'block'; });
+            document.addEventListener('click', (e) => {
+              if (!cityBlock.contains(e.target)) hideResults();
+            });
+          })();
+        </script>
 
         <!-- 3. Dados PIX -->
         <div class="card" style="border-left:4px solid #F59E0B;">
