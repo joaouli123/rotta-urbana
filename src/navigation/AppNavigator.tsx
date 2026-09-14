@@ -147,7 +147,7 @@ const PassengerFlow: React.FC = () => {
   const [originCoords, setOriginCoords] = useState<[number, number] | null>(null);
   const [destCoords, setDestCoords] = useState<[number, number] | null>(null);
   const [passengerCancelling, setPassengerCancelling] = useState(false);
-  const rideStateRef = useRef<{ id: string | null; status: string | null }>({ id: null, status: null });
+  const rideStateRef = useRef<{ id: string | null; status: string | null; updatedAt: string | null }>({ id: null, status: null, updatedAt: null });
 
   // Ask for notification permission once, register a push token (so we can push
   // "motorista a caminho" even with the app fully closed), and clear any leftover
@@ -188,12 +188,24 @@ const PassengerFlow: React.FC = () => {
   useEffect(() => {
     if (!ride || (screen !== 'ride_matching' && screen !== 'ride_tracking')) return;
     if (rideStateRef.current.id !== ride.id) {
-      rideStateRef.current = { id: ride.id, status: ride.status };
+      rideStateRef.current = { id: ride.id, status: ride.status, updatedAt: ride.updated_at };
     }
     const apply = (r: RideRow) => {
-      const changed = rideStateRef.current.id !== r.id || rideStateRef.current.status !== r.status;
-      rideStateRef.current = { id: r.id, status: r.status };
+      const changed = rideStateRef.current.id !== r.id
+        || rideStateRef.current.status !== r.status
+        || rideStateRef.current.updatedAt !== r.updated_at;
+      rideStateRef.current = { id: r.id, status: r.status, updatedAt: r.updated_at };
       setRide(r);
+      // A driver can change the destination after boarding. Refresh the
+      // coordinates as well as the address so the passenger's map follows it.
+      if (changed && ['driver_on_way', 'driver_arrived', 'in_progress'].includes(r.status)) {
+        getRidePoints(r.id).then((points) => {
+          if (points) {
+            setOriginCoords([points.originLng, points.originLat]);
+            setDestCoords([points.destLng, points.destLat]);
+          }
+        }).catch(() => {});
+      }
       // Realtime and polling can deliver the same row. Only a real status
       // transition may play sounds, alert, navigate, or schedule a local notification.
       if (!changed) return;
@@ -744,6 +756,18 @@ const DriverFlow: React.FC = () => {
           originAddress={activeRide?.origin_address}
           destinationAddress={activeRide?.destination_address}
           paymentMethod={activeRide?.payment_method}
+          onDestinationChanged={(nextDestination, nextAddress, pricing) => {
+            setActivePoints((current) => current ? { ...current, dest: nextDestination } : current);
+            setActiveRide((current) => current ? {
+              ...current,
+              destination_address: nextAddress,
+              ...(pricing ? {
+                price: pricing.price,
+                distance_km: pricing.distanceKm,
+                duration_min: pricing.durationMin,
+              } : {}),
+            } : current);
+          }}
           onCompleted={completeRide}
           onCancel={() => { setActiveRide(null); setScreen('driver_home'); }}
           onPanic={() => Alert.alert('Emergência', 'Deseja ligar para a emergência (190)?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Ligar 190', style: 'destructive', onPress: () => Linking.openURL('tel:190') }])}

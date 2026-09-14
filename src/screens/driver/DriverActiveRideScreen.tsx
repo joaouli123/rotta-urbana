@@ -4,6 +4,7 @@ import {
   Text,
   StyleSheet,
   TouchableOpacity,
+  ActivityIndicator,
   StatusBar,
   ScrollView,
   Linking,
@@ -24,18 +25,20 @@ import {
   Clock,
   X,
   DollarSign,
+  Search,
 } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { Avatar, Button, Card } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
 import RouteMap from '../../components/RouteMap';
 import type { LngLat } from '../../components/RouteMap';
-import { getRoute } from '../../services/geo';
+import { geocode, getRoute, type Place } from '../../services/geo';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ChatModal from '../../components/ChatModal';
 import {
   getRideCounterpart,
   updateRideStatus,
+  updateRideDestination,
   cancelRide,
   type RideCounterpart,
 } from '../../services/rides';
@@ -86,6 +89,11 @@ interface DriverActiveRideProps {
   originAddress?: string;
   destinationAddress?: string;
   paymentMethod?: 'pix' | 'cash' | 'card' | 'boleto' | 'mercadopago';
+  onDestinationChanged?: (
+    destination: LngLat,
+    address: string,
+    pricing?: { price: number | null; distanceKm: number | null; durationMin: number | null },
+  ) => void;
 }
 
 const PAYMENT_LABEL: Record<string, string> = {
@@ -117,6 +125,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   originAddress,
   destinationAddress,
   paymentMethod,
+  onDestinationChanged,
 }) => {
   const insets = useSafeAreaInsets();
   const [status, setStatus] = useState<DriverRideStatus>('to_passenger');
@@ -126,6 +135,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   const [counterpart, setCounterpart] = useState<RideCounterpart | null>(null);
   const [unread, setUnread] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [currentDestination, setCurrentDestination] = useState<LngLat | undefined>(destination);
+  const [currentDestinationAddress, setCurrentDestinationAddress] = useState(destinationAddress);
 
   // Driver live position
   const [driverPos, setDriverPos] = useState<LngLat | null>(null);
@@ -137,17 +148,31 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   const [cancelDescription, setCancelDescription] = useState('');
   const [cancelling, setCancelling] = useState(false);
 
+  // Destination editor
+  const [routeEditorOpen, setRouteEditorOpen] = useState(false);
+  const [routeQuery, setRouteQuery] = useState('');
+  const [routeSuggestions, setRouteSuggestions] = useState<Place[]>([]);
+  const [routeSearching, setRouteSearching] = useState(false);
+  const [routeSaving, setRouteSaving] = useState(false);
+
   const chatOpenRef = useRef(false);
   chatOpenRef.current = chatOpen;
   const meRef = useRef<string | null>(null);
   const totalDistRef = useRef(0);          // full trip distance (meters)
   const lastApproachPosRef = useRef<LngLat | null>(null);
 
+  // The navigator receives realtime updates too. Keep the local map/card in
+  // sync when the ride row changes outside this screen.
+  useEffect(() => {
+    setCurrentDestination(destination);
+    setCurrentDestinationAddress(destinationAddress);
+  }, [destination?.[0], destination?.[1], destinationAddress]);
+
   // ── Fetch trip route (pickup → destination) once ────────────────────────────
   useEffect(() => {
-    if (!origin || !destination) return;
+    if (!origin || !currentDestination) return;
     let active = true;
-    getRoute(origin, destination)
+    getRoute(origin, currentDestination)
       .then((r) => {
         if (!active || !r) return;
         setTripRoute(r.geometry as RouteGeometry);
@@ -155,7 +180,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       })
       .catch(() => {});
     return () => { active = false; };
-  }, [origin?.[0], origin?.[1], destination?.[0], destination?.[1]]);
+  }, [origin?.[0], origin?.[1], currentDestination?.[0], currentDestination?.[1]]);
 
   // ── Fetch approach route (driver → pickup) when heading to passenger ─────────
   // Re-fetch only when driver moves > 80m to avoid hammering the API.
@@ -198,6 +223,25 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       .catch(() => {});
     return () => { active = false; };
   }, [rideId]);
+
+  // Search the configured operational area with debounce. The shared geo
+  // service uses Mapbox Search Box for local POIs and filters other cities.
+  useEffect(() => {
+    if (!routeEditorOpen || routeQuery.trim().length < 3) {
+      setRouteSuggestions([]);
+      setRouteSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setRouteSearching(true);
+    const timer = setTimeout(() => {
+      geocode(routeQuery, driverPos ?? origin)
+        .then((places) => { if (!cancelled) setRouteSuggestions(places); })
+        .catch(() => { if (!cancelled) setRouteSuggestions([]); })
+        .finally(() => { if (!cancelled) setRouteSearching(false); });
+    }, 220);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [routeEditorOpen, routeQuery, driverPos?.[0], driverPos?.[1], origin?.[0], origin?.[1]]);
 
   useEffect(() => { currentUserId().then((id) => { meRef.current = id; }); }, []);
   useEffect(() => {
@@ -311,7 +355,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     },
     in_ride: {
       label: 'Em corrida',
-      sub: etaText ?? (destinationAddress ? `Destino: ${destinationAddress}` : 'Calculando...'),
+      sub: etaText ?? (currentDestinationAddress ? `Destino: ${currentDestinationAddress}` : 'Calculando...'),
       color: Colors.success,
       nextLabel: 'Finalizar corrida',
     },
@@ -327,6 +371,39 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   const canCancel = status !== 'completed';
   const canConfirm = !!cancelReason && cancelDescription.trim().length > 0;
   const progressPct = Math.round(progress * 100);
+  const canChangeRoute = status === 'passenger_pickup' || status === 'in_ride';
+
+  const openRouteEditor = () => {
+    setRouteQuery('');
+    setRouteSuggestions([]);
+    setRouteEditorOpen(true);
+  };
+
+  const selectNewDestination = async (place: Place) => {
+    if (!rideId || routeSaving) return;
+    const nextPoint: LngLat = [place.lng, place.lat];
+    const nextAddress = place.address || place.name;
+    setRouteSaving(true);
+    try {
+      const updated = await updateRideDestination(rideId, place.lat, place.lng, nextAddress);
+      const savedAddress = updated.destination_address || nextAddress;
+      setCurrentDestination(nextPoint);
+      setCurrentDestinationAddress(savedAddress);
+      onDestinationChanged?.(nextPoint, savedAddress, {
+        price: updated.price,
+        distanceKm: updated.distance_km,
+        durationMin: updated.duration_min,
+      });
+      setRouteEditorOpen(false);
+      setRouteQuery('');
+      setRouteSuggestions([]);
+      Alert.alert('Rota alterada', `Novo destino: ${savedAddress}\nValor atualizado: R$ ${Number(updated.price ?? 0).toFixed(2).replace('.', ',')}`);
+    } catch (e: any) {
+      Alert.alert('Não foi possível alterar a rota', friendlyError(e?.message));
+    } finally {
+      setRouteSaving(false);
+    }
+  };
 
   // ── Render ───────────────────────────────────────────────────────────────────
   return (
@@ -335,8 +412,9 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 
       <RouteMap
         origin={origin}
-        destination={destination}
+        destination={currentDestination}
         route={activeRoute}
+        restrictToSinop
         driverLocation={driverPos ?? undefined}
         followUser
         paddingTop={70}
@@ -408,9 +486,15 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
           <View style={styles.routePoint}>
             <View style={[styles.routeDot, { backgroundColor: Colors.danger }]} />
             <Text style={styles.routePointAddr} numberOfLines={1}>
-              Destino: {destinationAddress ?? (destination ? `${destination[1].toFixed(4)}, ${destination[0].toFixed(4)}` : '—')}
+              Destino: {currentDestinationAddress ?? (currentDestination ? `${currentDestination[1].toFixed(4)}, ${currentDestination[0].toFixed(4)}` : '—')}
             </Text>
           </View>
+          {canChangeRoute && (
+            <TouchableOpacity style={styles.changeRouteBtn} onPress={openRouteEditor} activeOpacity={0.8}>
+              <Navigation size={15} color={Colors.primary} />
+              <Text style={styles.changeRouteTxt}>Alterar a rota</Text>
+            </TouchableOpacity>
+          )}
           {/* Payment method (how the driver gets paid) */}
           {paymentMethod && (
             <View style={styles.payRow}>
@@ -464,6 +548,77 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         rideId={rideId}
         title={counterpart?.name ?? 'Passageiro'}
       />
+
+      {/* ── Change destination modal ───────────────────────────────────── */}
+      <Modal visible={routeEditorOpen} animationType="slide" transparent statusBarTranslucent onRequestClose={() => setRouteEditorOpen(false)}>
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.modalWrap}
+        >
+          <View style={styles.modalOverlay} />
+          <View style={[styles.routeEditorSheet, { paddingBottom: insets.bottom + 16 }]}>
+            <View style={styles.cancelHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.cancelTitle}>Alterar a rota</Text>
+                <Text style={styles.routeEditorHint}>Escolha o novo destino do passageiro.</Text>
+              </View>
+              <TouchableOpacity style={styles.closeBtn} onPress={() => setRouteEditorOpen(false)} disabled={routeSaving}>
+                <X size={20} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.routeInputWrap}>
+              <Search size={18} color={Colors.textMuted} />
+              <TextInput
+                style={styles.routeInput}
+                placeholder="Endereço, comércio ou ponto de interesse"
+                placeholderTextColor={Colors.textMuted}
+                value={routeQuery}
+                onChangeText={setRouteQuery}
+                autoFocus
+                autoCorrect={false}
+                returnKeyType="search"
+                editable={!routeSaving}
+              />
+              {routeSearching && <ActivityIndicator size="small" color={Colors.primary} />}
+            </View>
+
+            <ScrollView
+              style={styles.routeResults}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {routeSuggestions.map((place, index) => (
+                <TouchableOpacity
+                  key={`${place.lng}-${place.lat}-${index}`}
+                  style={styles.routeResult}
+                  onPress={() => selectNewDestination(place)}
+                  disabled={routeSaving}
+                  activeOpacity={0.7}
+                >
+                  <View style={styles.routeResultIcon}>
+                    <MapPin size={17} color={Colors.primary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.routeResultTitle} numberOfLines={1}>{place.name}</Text>
+                    <Text style={styles.routeResultAddress} numberOfLines={2}>{place.address || 'Sinop/MT'}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+              {!routeSearching && routeQuery.trim().length >= 3 && routeSuggestions.length === 0 && (
+                <Text style={styles.routeEmpty}>Nenhum endereço encontrado dentro da área de atendimento.</Text>
+              )}
+              {routeQuery.trim().length < 3 && (
+                <Text style={styles.routeEmpty}>Digite pelo menos 3 letras. A busca está limitada à área configurada no painel.</Text>
+              )}
+            </ScrollView>
+
+            <TouchableOpacity style={[styles.dismissBtn, styles.routeEditorCancel]} onPress={() => setRouteEditorOpen(false)} disabled={routeSaving}>
+              <Text style={styles.dismissTxt}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* ── Cancel modal ────────────────────────────────────────────────── */}
       <Modal visible={cancelOpen} animationType="slide" transparent statusBarTranslucent>
@@ -592,6 +747,12 @@ const styles = StyleSheet.create({
   routeDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
   routePointAddr: { ...Typography.bodyMedium, color: Colors.textPrimary, flex: 1 },
   routeDivider: { width: 2, height: 14, backgroundColor: Colors.border, marginLeft: 4, marginVertical: 4 },
+  changeRouteBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    marginTop: 12, paddingVertical: 10, borderRadius: Radius.md,
+    borderWidth: 1, borderColor: Colors.primary + '55', backgroundColor: Colors.primary + '0D',
+  },
+  changeRouteTxt: { ...Typography.smallMedium, color: Colors.primary, fontWeight: '700' },
   payRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.borderLight },
   payTxt: { ...Typography.caption, color: Colors.textSecondary, flex: 1 },
   etaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.borderLight },
@@ -619,6 +780,33 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
     paddingHorizontal: 20, paddingTop: 20, maxHeight: '85%',
   },
+  routeEditorSheet: {
+    backgroundColor: Colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 20, paddingTop: 20, maxHeight: '88%',
+  },
+  routeEditorHint: { ...Typography.caption, color: Colors.textMuted, marginTop: 3 },
+  routeInputWrap: {
+    minHeight: 50, flexDirection: 'row', alignItems: 'center', gap: 10,
+    borderWidth: 1.5, borderColor: Colors.primary + '77', borderRadius: Radius.md,
+    paddingHorizontal: 14, backgroundColor: Colors.card,
+  },
+  routeInput: {
+    flex: 1, color: Colors.textPrimary, fontFamily: 'Poppins_400Regular', fontSize: 14,
+    paddingVertical: 12,
+  },
+  routeResults: { maxHeight: 360, marginTop: 12, marginBottom: 14 },
+  routeResult: {
+    flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 13,
+    borderBottomWidth: 1, borderBottomColor: Colors.borderLight,
+  },
+  routeResultIcon: {
+    width: 34, height: 34, borderRadius: 17, backgroundColor: Colors.primary + '14',
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  routeResultTitle: { ...Typography.bodyMedium, color: Colors.textPrimary, fontWeight: '600' },
+  routeResultAddress: { ...Typography.caption, color: Colors.textMuted, marginTop: 2 },
+  routeEmpty: { ...Typography.caption, color: Colors.textMuted, textAlign: 'center', paddingVertical: 24, lineHeight: 19 },
+  routeEditorCancel: { flex: 0, width: '100%' },
   cancelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
   cancelTitle: { ...Typography.h4, color: Colors.textPrimary },
   closeBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: Colors.card, alignItems: 'center', justifyContent: 'center' },

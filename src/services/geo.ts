@@ -27,6 +27,7 @@ export interface Place {
   lng: number;
   lat: number;
   contextText?: string;
+  featureType?: string;
 }
 
 async function fetchJson<T>(url: string): Promise<T | null> {
@@ -60,10 +61,11 @@ function placeFromFeature(feature: any, fallback = ''): Place | null {
   ].filter(Boolean).join(', ');
   return {
     name: properties.name ?? properties.name_preferred ?? fallback,
-    address: properties.full_address ?? properties.place_formatted ?? '',
+    address: properties.full_address ?? properties.place_formatted ?? properties.address ?? '',
     lng: coordinates[0],
     lat: coordinates[1],
     contextText,
+    featureType: properties.feature_type,
   };
 }
 
@@ -71,6 +73,109 @@ function matchesConfiguredScope(place: Place, area: ServiceArea): boolean {
   if (!area.enabled) return true;
   if (area.scope === 'radius') return isWithinServiceArea([place.lng, place.lat], area);
   return matchesServiceAreaText([place.name, place.address, place.contextText].filter(Boolean).join(', '), area);
+}
+
+const POI_TERMS = [
+  'shopping', 'hospital', 'clinica', 'farmacia', 'mercado', 'supermercado',
+  'restaurante', 'lanchonete', 'hotel', 'pousada', 'aeroporto', 'rodoviaria',
+  'escola', 'faculdade', 'universidade', 'igreja', 'parque', 'praca', 'posto',
+  'academia', 'banco', 'oficina', 'delegacia', 'cartorio', 'prefeitura',
+];
+
+function isLikelyPoiQuery(query: string): boolean {
+  const normalized = query
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  return POI_TERMS.some((term) => normalized.includes(term));
+}
+
+function placeScore(place: Place, query: string, area: ServiceArea): number {
+  const normalizedQuery = query
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+  const searchable = `${place.name} ${place.address}`
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+  const localText = `${place.address} ${place.contextText ?? ''}`;
+  let score = 0;
+  if (place.featureType === 'poi') score += isLikelyPoiQuery(query) ? 10_000 : 900;
+  if (place.featureType === 'address') score += 500;
+  if (normalizedQuery && searchable.includes(normalizedQuery)) score += 300;
+  if (area.enabled && area.scope !== 'radius' && matchesConfiguredScope(place, area)) score += 400;
+  if (area.enabled && area.scope === 'radius') {
+    // Search Box already returns a distance, but scoring by coordinates keeps
+    // the ordering deterministic across its POI/address result types.
+    const distance = Math.hypot(
+      (place.lng - area.center[0]) * Math.cos((area.center[1] * Math.PI) / 180),
+      place.lat - area.center[1],
+    );
+    score -= distance * 100;
+  }
+  if (area.city && localText.toLowerCase().includes(area.city.toLowerCase())) score += 150;
+  return score;
+}
+
+function sortPlaces(places: Place[], query: string, area: ServiceArea): Place[] {
+  return places
+    .sort((a, b) => placeScore(b, query, area) - placeScore(a, query, area))
+    .slice(0, 8);
+}
+
+function searchBoxParams(query: string, area: ServiceArea, proximity?: LngLat): URLSearchParams {
+  const params = new URLSearchParams({
+    q: scopedGeocodeQuery(query, area), access_token: TOKEN, language: 'pt', limit: '10',
+  });
+  if (area.enabled) {
+    if (area.country) params.set('country', area.country.toUpperCase());
+    if (area.scope === 'radius') {
+      const bbox = serviceAreaBbox(area);
+      params.set('bbox', `${bbox.sw[0]},${bbox.sw[1]},${bbox.ne[0]},${bbox.ne[1]}`);
+      params.set('radius', String(Math.min(10, area.radiusKm / 111.32)));
+    }
+    params.set('proximity', `${area.center[0]},${area.center[1]}`);
+    // A generic term such as "Shopping" must not fall back to the city or a
+    // street. Search Box has current POI data for local businesses.
+    if (isLikelyPoiQuery(query)) params.set('types', 'poi');
+  } else if (proximity) {
+    params.set('proximity', `${proximity[0]},${proximity[1]}`);
+  }
+  return params;
+}
+
+async function searchBoxGeocode(query: string, area: ServiceArea, proximity?: LngLat): Promise<Place[]> {
+  const params = searchBoxParams(query, area, proximity);
+  const data = await fetchJson<{ features?: any[] }>(
+    `https://api.mapbox.com/search/searchbox/v1/forward?${params}`,
+  );
+  return (data?.features ?? [])
+    .map((feature: any) => placeFromFeature(feature, query))
+    .filter((place: Place | null): place is Place => !!place && matchesConfiguredScope(place, area));
+}
+
+async function legacyGeocode(query: string, area: ServiceArea, proximity?: LngLat): Promise<Place[]> {
+  const params = new URLSearchParams({
+    q: scopedGeocodeQuery(query, area), access_token: TOKEN, language: 'pt', limit: '8',
+  });
+  if (area.enabled) {
+    if (area.country) params.set('country', area.country.toLowerCase());
+    if (area.scope === 'radius') {
+      const bbox = serviceAreaBbox(area);
+      params.set('bbox', `${bbox.sw[0]},${bbox.sw[1]},${bbox.ne[0]},${bbox.ne[1]}`);
+    }
+    params.set('proximity', `${area.center[0]},${area.center[1]}`);
+  } else if (proximity) {
+    params.set('proximity', `${proximity[0]},${proximity[1]}`);
+  }
+  const data = await fetchJson<{ features?: any[] }>(
+    `https://api.mapbox.com/search/geocode/v6/forward?${params}`,
+  );
+  return (data?.features ?? [])
+    .map((feature: any) => placeFromFeature(feature, query))
+    .filter((place: Place | null): place is Place => !!place && matchesConfiguredScope(place, area));
 }
 
 /** Driving route geometry + distance/duration between two points. */
@@ -101,24 +206,14 @@ export async function getRoute(from: LngLat, to: LngLat): Promise<RouteResult | 
 export async function geocode(query: string, proximity?: LngLat): Promise<Place[]> {
   if (!TOKEN || query.trim().length < 3) return [];
   const area = await getServiceArea();
-  const params = new URLSearchParams({
-    q: scopedGeocodeQuery(query, area), access_token: TOKEN, language: 'pt', limit: '8',
-  });
-  if (area.enabled) {
-    if (area.country) params.set('country', area.country.toLowerCase());
-    if (area.scope === 'radius') {
-      const bbox = serviceAreaBbox(area);
-      params.set('bbox', `${bbox.sw[0]},${bbox.sw[1]},${bbox.ne[0]},${bbox.ne[1]}`);
-    }
-    params.set('proximity', `${area.center[0]},${area.center[1]}`);
-  } else if (proximity) {
-    params.set('proximity', `${proximity[0]},${proximity[1]}`);
-  }
-  const data = await fetchJson<{ features?: any[] }>(`https://api.mapbox.com/search/geocode/v6/forward?${params}`);
-  if (!data) return [];
-  return (data.features ?? [])
-    .map((feature: any) => placeFromFeature(feature, query))
-    .filter((place: Place | null): place is Place => !!place && matchesConfiguredScope(place, area));
+  const effectiveArea = area.enabled || !proximity
+    ? area
+    : { ...area, center: proximity };
+  const searchBoxPlaces = await searchBoxGeocode(query, effectiveArea, proximity);
+  const fallbackPlaces = searchBoxPlaces.length > 0
+    ? []
+    : await legacyGeocode(query, effectiveArea, proximity);
+  return sortPlaces([...searchBoxPlaces, ...fallbackPlaces], query, effectiveArea);
 }
 
 /** Reverse geocoding (point -> address). */

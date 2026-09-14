@@ -2,7 +2,17 @@ import { supabase } from '../lib/supabase';
 import type { RideRow, RideStatusDb, RideTypeDb, PaymentMethodDb } from '../types/db';
 
 const ACTIVE: RideStatusDb[] = ['searching', 'driver_found', 'driver_on_way', 'driver_arrived', 'in_progress'];
+const CANCEL_TIMEOUT_MS = 60_000;
 const first = <T,>(d: T | T[] | null): T | null => (Array.isArray(d) ? d[0] ?? null : d);
+
+export class RideCancelTimeoutError extends Error {
+  readonly code = 'RIDE_CANCEL_TIMEOUT';
+
+  constructor() {
+    super('ride_cancel_timeout');
+    this.name = 'RideCancelTimeoutError';
+  }
+}
 
 export interface RequestRideInput {
   originLat: number; originLng: number; originAddress: string;
@@ -41,9 +51,46 @@ export async function updateRideStatus(rideId: string, status: 'driver_arrived' 
   return first<RideRow>(data)!;
 }
 
-export async function cancelRide(rideId: string, reason?: string): Promise<void> {
-  const { error } = await supabase.rpc('cancel_ride', { p_ride_id: rideId, p_reason: reason ?? null });
+/** Changes the destination while the assigned driver is on the active ride. */
+export async function updateRideDestination(
+  rideId: string,
+  destinationLat: number,
+  destinationLng: number,
+  destinationAddress: string,
+): Promise<RideRow> {
+  const { data, error } = await supabase.rpc('update_ride_destination', {
+    p_ride_id: rideId,
+    p_dest_lat: destinationLat,
+    p_dest_lng: destinationLng,
+    p_dest_address: destinationAddress,
+  });
   if (error) throw error;
+  return first<RideRow>(data)!;
+}
+
+export async function cancelRide(rideId: string, reason?: string): Promise<void> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CANCEL_TIMEOUT_MS);
+
+  try {
+    // Keep this chain behind a narrow boundary: the generated Supabase
+    // database types can otherwise make TypeScript recurse while checking
+    // the builder returned by rpc(). The request still uses Supabase's native
+    // AbortSignal support at runtime.
+    const request = (supabase as any)
+      .rpc('cancel_ride', { p_ride_id: rideId, p_reason: reason ?? null })
+      .abortSignal(controller.signal) as Promise<{ error?: any }>;
+    const { error } = await request;
+    if (controller.signal.aborted) throw new RideCancelTimeoutError();
+    if (error) throw error;
+  } catch (error: any) {
+    if (controller.signal.aborted || error?.name === 'AbortError') {
+      throw new RideCancelTimeoutError();
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 export async function rateRide(rideId: string, stars: number, comment?: string): Promise<void> {
