@@ -192,6 +192,28 @@ export async function isLocationInServiceArea(point: LngLat, address?: string | 
   }
 }
 
+/**
+ * Map limit from the official boundary stored for the configured area — the
+ * same one the rides are checked against. null when it cannot be used: radius
+ * scope, offline, no stored boundary, or a boundary of another area than `area`.
+ */
+export async function getOfficialServiceAreaBounds(area: ServiceArea): Promise<{ ne: LngLat; sw: LngLat } | null> {
+  if (!area.enabled || area.scope === 'radius') return null;
+  try {
+    // Untyped: the function is newer than the generated database types.
+    const { data, error } = await (supabase as any).rpc('service_area_map_bounds');
+    if (error || !data) return null;
+    const state = area.scope === 'country' ? '' : area.state;
+    const cityKey = area.scope === 'city' ? normalizeAreaText(area.city) : '';
+    if (data.scope !== area.scope || data.country !== area.country || data.state !== state || data.city_key !== cityKey) return null;
+    const [west, south, east, north] = [data.west, data.south, data.east, data.north].map(Number);
+    if (![west, south, east, north].every(Number.isFinite)) return null;
+    return { sw: [west, south], ne: [east, north] };
+  } catch {
+    return null;
+  }
+}
+
 export function scopedGeocodeQuery(query: string, area: ServiceArea): string {
   const base = query.trim();
   if (!area.enabled || !base) return base;

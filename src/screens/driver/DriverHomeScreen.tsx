@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   StatusBar,
   ScrollView,
+  useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,7 +23,7 @@ import {
 } from 'lucide-react-native';
 import { Avatar, Badge, Card } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
-import RouteMap from '../../components/RouteMap';
+import RouteMap, { homeMapPadding } from '../../components/RouteMap';
 import { useAuth } from '../../contexts/AuthContext';
 import { getMyDriver, getEarnings } from '../../services/drivers';
 import { getSubscription } from '../../services/payments';
@@ -60,6 +61,7 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
   onSubscription,
 }) => {
   const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
   const { profile } = useAuth();
   const [driver, setDriver] = useState<DriverRow | null>(null);
   const [sub, setSub] = useState<SubscriptionRow | null>(null);
@@ -101,7 +103,7 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
       {/* Live map (Mapbox no dev build) */}
-      <RouteMap origin={coords} followUser restrictToSinop paddingTop={insets.top + 80} paddingBottom={360} style={styles.map} />
+      <RouteMap origin={coords} followUser restrictToSinop {...homeMapPadding(insets.top, height)} style={styles.map} />
 
       {/* Top Bar */}
       <View style={[styles.topBar, { top: insets.top + 6 }]}>

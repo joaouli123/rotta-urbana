@@ -26,7 +26,7 @@ import {
 import { Card, Avatar } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import RouteMap, { type DriverPin } from '../../components/RouteMap';
+import RouteMap, { homeMapPadding, type DriverPin } from '../../components/RouteMap';
 import { nearbyDrivers } from '../../services/drivers';
 import { getRideHistory } from '../../services/rides';
 import { useAuth } from '../../contexts/AuthContext';
@@ -102,8 +102,7 @@ const PassengerHomeScreen: React.FC<PassengerHomeProps> = ({
         drivers={drivers}
         followUser
         restrictToSinop
-        paddingTop={insets.top + 80}
-        paddingBottom={Math.round(height * 0.5)}
+        {...homeMapPadding(insets.top, height)}
         style={styles.mapContainer}
       />
 

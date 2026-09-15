@@ -30,7 +30,7 @@ import {
 import * as Location from 'expo-location';
 import { Avatar, Button, Card } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
-import RouteMap from '../../components/RouteMap';
+import RouteMap, { RIDE_MAP_PADDING } from '../../components/RouteMap';
 import type { LngLat } from '../../components/RouteMap';
 import { getRoute, isCoordinateWithinServiceArea, placeLabel, resolvePlace, searchPlaces, type PlaceSuggestion } from '../../services/geo';
 import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
@@ -429,8 +429,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         restrictToSinop
         driverLocation={driverPos ?? undefined}
         followUser
-        paddingTop={70}
-        paddingBottom={320}
+        {...RIDE_MAP_PADDING}
         style={styles.map}
       />
 

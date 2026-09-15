@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ViewStyle } from 'react-native';
 import { Colors } from '../constants';
 import { Flag } from 'lucide-react-native';
 import { DEFAULT_SERVICE_AREA, getServiceArea, serviceAreaBbox, type ServiceArea } from '../services/serviceArea';
-import { getServiceAreaBounds } from '../services/geo';
+import { resolveServiceAreaBounds } from '../services/geo';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Safe Mapbox loader.
@@ -53,21 +53,73 @@ interface RouteMapProps {
 
 export const isMapAvailable = () => MAP_READY;
 
-const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, driverLocation, secondaryRoute, style }) => {
-  const [serviceArea, setServiceArea] = useState<ServiceArea>(DEFAULT_SERVICE_AREA);
-  const [serviceAreaBounds, setServiceAreaBounds] = useState(() => serviceAreaBbox(DEFAULT_SERVICE_AREA));
+/** Driver and passenger home maps frame the service area the same way. */
+export const homeMapPadding = (topInset: number, screenHeight: number) => ({
+  paddingTop: topInset + 80,
+  paddingBottom: Math.round(screenHeight * 0.5),
+});
 
+/** Driver and passenger ride maps frame the trip the same way. */
+export const RIDE_MAP_PADDING = { paddingTop: 80, paddingBottom: 320 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared service-area limit.
+// Every restricted map (driver and passenger, every screen) reads ONE limit,
+// resolved here and pushed to all mounted maps, so no screen is left with a
+// provisional or fallback rectangle while another already has the real one.
+// ─────────────────────────────────────────────────────────────────────────────
+interface MapLimits {
+  area: ServiceArea;
+  bounds: { ne: LngLat; sw: LngLat };
+  minZoom: number;
+}
+
+const LIMITS_TTL_MS = 60_000;
+const LIMITS_RETRY_MS = 15_000;
+let mapLimits: MapLimits | null = null;
+let mapLimitsKey = '';
+let mapLimitsExpiresAt = 0;
+let loadingLimits = false;
+const limitListeners = new Set<(limits: MapLimits) => void>();
+
+const minZoomFor = (area: ServiceArea) => (area.radiusKm <= 30 ? 11.5 : area.radiusKm <= 60 ? 10.5 : 9.5);
+
+async function refreshMapLimits() {
+  if (loadingLimits || (mapLimits && mapLimitsExpiresAt > Date.now())) return;
+  loadingLimits = true;
+  try {
+    const area = await getServiceArea();
+    const bounds = await resolveServiceAreaBounds(area);
+    // No answer yet: the configured radius keeps the map closed until the retry.
+    const next: MapLimits = { area, bounds: bounds ?? serviceAreaBbox(area), minZoom: minZoomFor(area) };
+    mapLimitsExpiresAt = Date.now() + (bounds ? LIMITS_TTL_MS : LIMITS_RETRY_MS);
+    if (!bounds) setTimeout(() => { if (limitListeners.size) refreshMapLimits(); }, LIMITS_RETRY_MS + 500);
+    const key = JSON.stringify(next);
+    if (key === mapLimitsKey) return;
+    mapLimits = next;
+    mapLimitsKey = key;
+    limitListeners.forEach((listener) => listener(next));
+  } catch {
+    /* keep the last limit */
+  } finally {
+    loadingLimits = false;
+  }
+}
+
+function useMapLimits(enabled: boolean): MapLimits | null {
+  const [limits, setLimits] = useState<MapLimits | null>(mapLimits);
   useEffect(() => {
-    if (!restrictToSinop) return;
-    let active = true;
-    getServiceArea().then(async (area) => {
-      if (!active) return;
-      setServiceArea(area);
-      const bounds = await getServiceAreaBounds(area);
-      if (active) setServiceAreaBounds(bounds);
-    }).catch(() => {});
-    return () => { active = false; };
-  }, [restrictToSinop]);
+    if (!enabled) return;
+    limitListeners.add(setLimits);
+    if (mapLimits) setLimits(mapLimits);
+    refreshMapLimits();
+    return () => { limitListeners.delete(setLimits); };
+  }, [enabled]);
+  return enabled ? limits : null;
+}
+
+const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, driverLocation, secondaryRoute, style }) => {
+  const limits = useMapLimits(restrictToSinop);
 
   if (!MAP_READY) {
     return (
@@ -118,10 +170,13 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
   }
 
   // The admin-configured area replaces the old hardcoded Sinop rectangle.
-  // Until the setting is loaded, DEFAULT_SERVICE_AREA keeps the map focused.
+  // No limit is applied until the shared one is resolved: a provisional
+  // rectangle would clamp this map differently from the others.
+  const serviceArea = limits?.area ?? DEFAULT_SERVICE_AREA;
   const mapCenter = restrictToSinop ? serviceArea.center : center;
-  const maxBounds = restrictToSinop ? serviceAreaBounds : undefined;
-  const minServiceZoom = serviceArea.radiusKm <= 30 ? 11.5 : serviceArea.radiusKm <= 60 ? 10.5 : 9.5;
+  const maxBounds = limits?.bounds;
+  const minZoomLevel = limits?.minZoom;
+  const minServiceZoom = minZoomFor(serviceArea);
 
   return (
     <Mapbox.MapView style={[{ flex: 1 }, style]} styleURL={Mapbox.StyleURL.Street} logoEnabled={false} compassEnabled={false}>
@@ -132,7 +187,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
           key={boundsKey}
           bounds={bounds}
           maxBounds={maxBounds}
-          minZoomLevel={restrictToSinop ? minServiceZoom : undefined}
+          minZoomLevel={minZoomLevel}
           maxZoomLevel={15.5}
           animationDuration={700}
         />
@@ -142,12 +197,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
           followZoomLevel={15}
           defaultSettings={{ centerCoordinate: serviceArea.center, zoomLevel: minServiceZoom + 1.5 }}
           maxBounds={maxBounds}
-          minZoomLevel={restrictToSinop ? minServiceZoom : undefined}
+          minZoomLevel={minZoomLevel}
           padding={pad}
           animationDuration={700}
         />
       ) : (
-        <Mapbox.Camera zoomLevel={Math.min(15, minServiceZoom + 3.5)} centerCoordinate={mapCenter} maxBounds={maxBounds} minZoomLevel={restrictToSinop ? minServiceZoom : undefined} padding={pad} animationDuration={700} />
+        <Mapbox.Camera zoomLevel={Math.min(15, minServiceZoom + 3.5)} centerCoordinate={mapCenter} maxBounds={maxBounds} minZoomLevel={minZoomLevel} padding={pad} animationDuration={700} />
       )}
       {/* Stable location dot (default puck, no spinning heading arrow). */}
       <Mapbox.UserLocation visible androidRenderMode="normal" />

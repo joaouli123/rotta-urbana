@@ -38,7 +38,7 @@ import {
 } from 'lucide-react-native';
 import { Avatar, Rating, Card } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
-import RouteMap from '../../components/RouteMap';
+import RouteMap, { RIDE_MAP_PADDING } from '../../components/RouteMap';
 import { getRoute, isCoordinateWithinServiceArea, placeLabel, resolvePlace, searchPlaces, type LngLat, type PlaceSuggestion } from '../../services/geo';
 import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
 import { getRideDriverLocation, getRideCounterpart, updateRideDestination, type RideCounterpart } from '../../services/rides';
@@ -319,7 +319,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
       {/* Mapa (Mapbox no dev build; placeholder no Expo Go) com a rota traçada */}
-      <RouteMap origin={origin} destination={destination} route={route} restrictToSinop driverLocation={driverLoc ?? undefined} secondaryRoute={driverLine} paddingTop={80} paddingBottom={300} style={styles.map} />
+      <RouteMap origin={origin} destination={destination} route={route} restrictToSinop driverLocation={driverLoc ?? undefined} secondaryRoute={driverLine} {...RIDE_MAP_PADDING} style={styles.map} />
 
       {/* Panic button */}
       <TouchableOpacity style={[styles.panicBtn, { top: insets.top + 8 }]} onPress={onPanic}>

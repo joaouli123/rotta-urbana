@@ -1,5 +1,6 @@
 import {
   COUNTRY_NAMES,
+  getOfficialServiceAreaBounds,
   getServiceArea,
   isLocationInServiceArea,
   isWithinServiceArea,
@@ -566,13 +567,29 @@ export async function isCoordinateWithinServiceArea(point: LngLat, area: Service
 
 let boundsCache: { key: string; value: Bbox; expiresAt: number } | null = null;
 
-/** Resolves an administrative bbox for city/state/country map framing. */
-export async function getServiceAreaBounds(area: ServiceArea): Promise<Bbox> {
-  const fallback = serviceAreaBbox(area);
-  if (!area.enabled || area.scope === 'radius' || !TOKEN) return fallback;
+/**
+ * Rectangle of the configured city/state/country. The official boundary the
+ * rides are checked against comes first; the Mapbox geocode only covers a
+ * database without it. null when neither answered.
+ */
+export async function resolveServiceAreaBounds(area: ServiceArea): Promise<Bbox | null> {
+  if (!area.enabled || area.scope === 'radius') return serviceAreaBbox(area);
   const key = [area.scope, area.city, area.state, area.country].join('|');
   if (boundsCache && boundsCache.key === key && boundsCache.expiresAt > Date.now()) return boundsCache.value;
 
+  const value = (await getOfficialServiceAreaBounds(area)) ?? (await geocodedAreaBounds(area));
+  if (!value) return null;
+  boundsCache = { key, value, expiresAt: Date.now() + 5 * 60_000 };
+  return value;
+}
+
+/** Resolves an administrative bbox for city/state/country map framing. */
+export async function getServiceAreaBounds(area: ServiceArea): Promise<Bbox> {
+  return (await resolveServiceAreaBounds(area)) ?? serviceAreaBbox(area);
+}
+
+async function geocodedAreaBounds(area: ServiceArea): Promise<Bbox | null> {
+  if (!TOKEN) return null;
   const label = area.scope === 'country'
     ? (area.country || 'BR')
     : area.scope === 'state'
@@ -586,8 +603,6 @@ export async function getServiceAreaBounds(area: ServiceArea): Promise<Bbox> {
   const data = await fetchJson<{ features?: any[] }>(`https://api.mapbox.com/search/geocode/v6/forward?${params}`);
   const bbox = data?.features?.[0]?.bbox ?? data?.features?.[0]?.properties?.bbox;
   const valid = Array.isArray(bbox) && bbox.length === 4 && bbox.every((value: unknown) => typeof value === 'number');
-  if (!valid) return fallback;
-  const value: Bbox = { sw: [bbox[0], bbox[1]], ne: [bbox[2], bbox[3]] };
-  boundsCache = { key, value, expiresAt: Date.now() + 5 * 60_000 };
-  return value;
+  if (!valid) return null;
+  return { sw: [bbox[0], bbox[1]], ne: [bbox[2], bbox[3]] };
 }
