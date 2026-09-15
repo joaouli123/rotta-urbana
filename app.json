@@ -3,7 +3,7 @@
     "name": "rotta-urbana",
     "slug": "rotta-urbana",
     "scheme": "rotta-urbana",
-    "version": "1.2.4",
+    "version": "1.2.5",
     "orientation": "portrait",
     "icon": "./assets/icon-filled.png",
     "userInterfaceStyle": "light",
