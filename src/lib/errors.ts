@@ -33,7 +33,30 @@ export function friendlyError(msg?: string): string {
       m.includes('email address is invalid') || m.includes('invalid format'))
     return 'E-mail inválido. Confira e tente novamente.';
 
+  // ── Service area ("ride outside service area: Sinop/MT") ─────────────────
+  if (m.includes('destination outside service area')) return 'O novo destino fica fora da área de atendimento.';
+  if (m.includes('outside service area')) {
+    const area = msg.match(/outside service area:\s*(.+)$/i)?.[1]?.trim();
+    return area
+      ? `Endereço fora da área de atendimento. No momento atendemos somente ${area}.`
+      : 'Esse endereço fica fora da área de atendimento.';
+  }
+
+  // ── Ride flow (accept_ride / cancel_ride / update_ride_destination) ──────
+  if (m.includes('ride no longer available'))
+    return 'Essa corrida não está mais disponível: outro motorista aceitou, o passageiro cancelou ou o tempo acabou.';
+  if (m.includes('driver already has an active ride')) return 'Você já está em uma corrida. Finalize-a antes de aceitar outra.';
+  if (m.includes('driver is not online')) return 'Fique online para aceitar corridas.';
+  if (m.includes('subscription inactive or expired')) return 'Sua assinatura está vencida. Renove para aceitar corridas.';
+  if (m.includes('nao atende a categoria')) return 'Seu veículo não atende à categoria desta corrida.';
+  if (m.includes('ride not cancellable')) return 'Essa corrida já foi finalizada e não pode ser cancelada.';
+  if (m.includes('only be changed during an active ride'))
+    return 'O destino só pode ser alterado depois que um motorista aceitar a corrida.';
+  if (m.includes('not assigned to this user') || m.includes('not found or not yours')) return 'Corrida não encontrada.';
+
   // ── Connectivity ──────────────────────────────────────────────────────────
+  if (m.includes('ride_cancel_timeout') || m.includes('ridecanceltimeouterror'))
+    return 'O cancelamento não foi confirmado em até 1 minuto. Verifique sua conexão e tente novamente.';
   if (m.includes('aborted') || m.includes('abort') || m.includes('timed out') || m.includes('timeout'))
     return 'Tempo esgotado. Verifique sua conexão.';
   if (m.includes('network') || m.includes('fetch') || m.includes('failed to'))

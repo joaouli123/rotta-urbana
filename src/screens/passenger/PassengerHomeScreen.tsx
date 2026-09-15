@@ -101,6 +101,7 @@ const PassengerHomeScreen: React.FC<PassengerHomeProps> = ({
         origin={coords ?? undefined}
         drivers={drivers}
         followUser
+        restrictToSinop
         paddingTop={insets.top + 80}
         paddingBottom={Math.round(height * 0.5)}
         style={styles.mapContainer}

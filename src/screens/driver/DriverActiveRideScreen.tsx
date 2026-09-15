@@ -32,7 +32,8 @@ import { Avatar, Button, Card } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
 import RouteMap from '../../components/RouteMap';
 import type { LngLat } from '../../components/RouteMap';
-import { geocode, getRoute, type Place } from '../../services/geo';
+import { getRoute, isCoordinateWithinServiceArea, placeLabel, resolvePlace, searchPlaces, type PlaceSuggestion } from '../../services/geo';
+import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ChatModal from '../../components/ChatModal';
 import {
@@ -151,7 +152,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   // Destination editor
   const [routeEditorOpen, setRouteEditorOpen] = useState(false);
   const [routeQuery, setRouteQuery] = useState('');
-  const [routeSuggestions, setRouteSuggestions] = useState<Place[]>([]);
+  const [routeSuggestions, setRouteSuggestions] = useState<PlaceSuggestion[]>([]);
   const [routeSearching, setRouteSearching] = useState(false);
   const [routeSaving, setRouteSaving] = useState(false);
 
@@ -224,10 +225,10 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     return () => { active = false; };
   }, [rideId]);
 
-  // Search the configured operational area with debounce. The shared geo
-  // service uses Mapbox Search Box for local POIs and filters other cities.
+  // Autocomplete inside the configured operational area with debounce. The
+  // shared geo service uses Mapbox Search Box suggestions for local POIs.
   useEffect(() => {
-    if (!routeEditorOpen || routeQuery.trim().length < 3) {
+    if (!routeEditorOpen || routeQuery.trim().length < 2) {
       setRouteSuggestions([]);
       setRouteSearching(false);
       return;
@@ -235,7 +236,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     let cancelled = false;
     setRouteSearching(true);
     const timer = setTimeout(() => {
-      geocode(routeQuery, driverPos ?? origin)
+      searchPlaces(routeQuery, driverPos ?? origin)
         .then((places) => { if (!cancelled) setRouteSuggestions(places); })
         .catch(() => { if (!cancelled) setRouteSuggestions([]); })
         .finally(() => { if (!cancelled) setRouteSearching(false); });
@@ -379,12 +380,23 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     setRouteEditorOpen(true);
   };
 
-  const selectNewDestination = async (place: Place) => {
+  const selectNewDestination = async (suggestion: PlaceSuggestion) => {
     if (!rideId || routeSaving) return;
-    const nextPoint: LngLat = [place.lng, place.lat];
-    const nextAddress = place.address || place.name;
     setRouteSaving(true);
     try {
+      // Autocomplete rows carry no coordinates until retrieved.
+      const place = await resolvePlace(suggestion);
+      if (!place) {
+        Alert.alert('Endereço não encontrado', 'Não conseguimos localizar esse lugar. Tente buscar pelo nome ou endereço completo.');
+        return;
+      }
+      const nextPoint: LngLat = [place.lng, place.lat];
+      const area = await getServiceArea();
+      if (!(await isCoordinateWithinServiceArea(nextPoint, area))) {
+        Alert.alert('Fora da área de atendimento', `O novo destino precisa estar dentro da área atendida: ${serviceAreaLabel(area)}.`);
+        return;
+      }
+      const nextAddress = placeLabel(place) || placeLabel(suggestion);
       const updated = await updateRideDestination(rideId, place.lat, place.lng, nextAddress);
       const savedAddress = updated.destination_address || nextAddress;
       setCurrentDestination(nextPoint);
@@ -588,9 +600,9 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
-              {routeSuggestions.map((place, index) => (
+              {routeSuggestions.map((place) => (
                 <TouchableOpacity
-                  key={`${place.lng}-${place.lat}-${index}`}
+                  key={place.id}
                   style={styles.routeResult}
                   onPress={() => selectNewDestination(place)}
                   disabled={routeSaving}
@@ -605,11 +617,11 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
                   </View>
                 </TouchableOpacity>
               ))}
-              {!routeSearching && routeQuery.trim().length >= 3 && routeSuggestions.length === 0 && (
-                <Text style={styles.routeEmpty}>Nenhum endereço encontrado dentro da área de atendimento.</Text>
+              {!routeSearching && routeQuery.trim().length >= 2 && routeSuggestions.length === 0 && (
+                <Text style={styles.routeEmpty}>Nenhum lugar encontrado dentro da área de atendimento.</Text>
               )}
-              {routeQuery.trim().length < 3 && (
-                <Text style={styles.routeEmpty}>Digite pelo menos 3 letras. A busca está limitada à área configurada no painel.</Text>
+              {routeQuery.trim().length < 2 && (
+                <Text style={styles.routeEmpty}>Digite o nome do lugar ou o endereço. A busca está limitada à área configurada no painel.</Text>
               )}
             </ScrollView>
 

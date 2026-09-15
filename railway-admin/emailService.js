@@ -2,6 +2,7 @@ import { Resend } from 'resend';
 
 const apiKey = process.env.RESEND_API_KEY || 're_GrzUC7GF_4txG77tqjLpnFhtdrcR3jwbE';
 const resend = new Resend(apiKey);
+// Keep the verified sender as a safe fallback; the public support recipient is configured below.
 const fromEmail = process.env.FROM_EMAIL || 'Rotta Urbana <contato@rottaurbana.com.br>';
 
 /**
@@ -211,6 +212,6 @@ export async function sendContactFormEmail({ name, email, phone = 'Não informad
       </div>
     </div>
   `;
-  const adminEmail = process.env.ADMIN_EMAIL || 'cleipytt49app2@gmail.com';
+  const adminEmail = process.env.ADMIN_EMAIL || 'rottaurbana.sinop@gmail.com';
   return sendEmail({ to: adminEmail, subject: `[Contato LP] ${subject} - ${name}`, html });
 }

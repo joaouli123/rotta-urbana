@@ -174,6 +174,24 @@ export function isWithinServiceArea(point: LngLat, area: ServiceArea, extraKm = 
   return !area.enabled || area.scope !== 'radius' || distanceKm(point, area.center) <= area.radiusKm + extraKm;
 }
 
+/**
+ * Official check in the database: the IBGE boundary of the configured
+ * city/state/country (the same rule the ride guard applies). null when it
+ * cannot decide — offline, or no boundary stored for the area yet — so the
+ * caller falls back to its own check.
+ */
+export async function isLocationInServiceArea(point: LngLat, address?: string | null): Promise<boolean | null> {
+  try {
+    // Untyped: the function is newer than the generated database types.
+    const { data, error } = await (supabase as any).rpc('service_area_allows_location', {
+      p_lng: point[0], p_lat: point[1], p_address: address ?? null,
+    });
+    return !error && typeof data === 'boolean' ? data : null;
+  } catch {
+    return null;
+  }
+}
+
 export function scopedGeocodeQuery(query: string, area: ServiceArea): string {
   const base = query.trim();
   if (!area.enabled || !base) return base;

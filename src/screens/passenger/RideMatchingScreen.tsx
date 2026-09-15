@@ -277,7 +277,7 @@ const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, 
         </View>
 
         {phase === 'searching' ? (
-          <TouchableOpacity style={styles.cancelBtn} onPress={onCancel} activeOpacity={0.8}>
+          <TouchableOpacity style={styles.cancelBtn} onPress={() => onCancel()} activeOpacity={0.8}>
             <X size={15} color={Colors.danger} strokeWidth={2.5} />
             <Text style={styles.cancelTxt}>Cancelar corrida</Text>
           </TouchableOpacity>
@@ -313,7 +313,7 @@ const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, 
             >
               <Text style={styles.promptSecondaryTxt}>Aceitar motorista homem</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.promptCancel} activeOpacity={0.7} onPress={onCancel}>
+            <TouchableOpacity style={styles.promptCancel} activeOpacity={0.7} onPress={() => onCancel()}>
               <Text style={styles.promptCancelTxt}>Cancelar corrida</Text>
             </TouchableOpacity>
           </View>

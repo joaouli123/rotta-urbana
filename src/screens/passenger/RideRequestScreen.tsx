@@ -38,9 +38,18 @@ import { Button } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
 import RouteMap from '../../components/RouteMap';
 import PixIcon from '../../components/icons/PixIcon';
-import { geocode, getRoute, isCoordinateWithinServiceArea } from '../../services/geo';
+import {
+  geocode,
+  getRoute,
+  isCoordinateWithinServiceArea,
+  parseGeoPoint,
+  placeLabel,
+  resolvePlace,
+  searchPlaces,
+  type PlaceSuggestion,
+} from '../../services/geo';
 import { estimateFares, getRideHistory } from '../../services/rides';
-import { DEFAULT_SERVICE_AREA, getServiceArea, isWithinServiceArea, serviceAreaLabel, type ServiceArea } from '../../services/serviceArea';
+import { DEFAULT_SERVICE_AREA, getServiceArea, isLocationInServiceArea, isWithinServiceArea, serviceAreaLabel, type ServiceArea } from '../../services/serviceArea';
 const imgEconomico = require('../../../assets/icons/icone_economico.png');
 const imgConforto  = require('../../../assets/icons/icone_conforto.png');
 const imgPremium   = require('../../../assets/icons/icone_premium.png');
@@ -153,16 +162,18 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCvv, setCardCvv] = useState('');
   const [origin, setOrigin] = useState<[number, number] | null>(null);
+  const [originAddress, setOriginAddress] = useState('Sua localização atual');
   const [destCoords, setDestCoords] = useState<[number, number] | null>(null);
   const [destAddress, setDestAddress] = useState(destination);
   const [route, setRoute] = useState<{ type: 'LineString'; coordinates: [number, number][] } | null>(null);
   const [fares, setFares] = useState<Record<string, number>>({});
   const [durMin, setDurMin] = useState<number | null>(null);
   const [resolving, setResolving] = useState(false);
+  const [routing, setRouting] = useState(false);
   const [query, setQuery] = useState('');
-  const [suggestions, setSuggestions] = useState<{ id: string; name: string; address: string; lng: number; lat: number }[]>([]);
+  const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
   const [searching, setSearching] = useState(false);
-  const [recents, setRecents] = useState<{ id: string; name: string; address: string }[]>([]);
+  const [recents, setRecents] = useState<PlaceSuggestion[]>([]);
   const [serviceArea, setServiceArea] = useState<ServiceArea>(DEFAULT_SERVICE_AREA);
   const [outsideServiceArea, setOutsideServiceArea] = useState(false);
   // Measured bottom-panel height → used to frame the route in the visible map area (like Uber).
@@ -189,8 +200,10 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
       if (!active) return;
       setServiceArea(area);
 
+      let positionSeq = 0;
       const applyPosition = (position: [number, number]) => {
         if (!active) return;
+        const seq = ++positionSeq;
         if (area.enabled && !isWithinServiceArea(position, area)) {
           setOrigin(null);
           setOutsideServiceArea(true);
@@ -198,6 +211,14 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
         }
         setOutsideServiceArea(false);
         setOrigin(position);
+        if (!area.enabled || area.scope === 'radius') return;
+        // City/state/country: the official boundary decides. Unknown (offline)
+        // keeps the position; confirm() and the database check it again.
+        isLocationInServiceArea(position).then((allowed) => {
+          if (allowed !== false || !active || seq !== positionSeq) return;
+          setOrigin(null);
+          setOutsideServiceArea(true);
+        });
       };
 
       try {
@@ -212,70 +233,124 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
     return () => { active = false; };
   }, []);
 
+  // The latest request wins: GPS refinements and quick re-selections must not
+  // overwrite the current route/prices (or the chosen place) with stale ones.
+  const routeSeq = useRef(0);
+  const selectionSeq = useRef(0);
+  const prefillPending = useRef(!!destination);
+
   const computeRouteFares = async (org: [number, number], dc: [number, number]) => {
-    const r = await getRoute(org, dc);
-    if (r) {
+    const seq = ++routeSeq.current;
+    setRouting(true);
+    try {
+      const r = await getRoute(org, dc);
+      if (!r || seq !== routeSeq.current) return;
       setRoute(r.geometry);
       setDurMin(r.durationMin);
-      setFares(await estimateFares(r.distanceKm, r.durationMin));
+      const nextFares = await estimateFares(r.distanceKm, r.durationMin);
+      if (seq === routeSeq.current) setFares(nextFares);
+    } catch { /* keep the previous estimate */ } finally {
+      if (seq === routeSeq.current) setRouting(false);
     }
   };
 
-  // Resolve a destination by name (geocode) -> coords + route + prices.
+  // Route + prices follow the chosen points (also when GPS refines the origin).
+  useEffect(() => {
+    if (origin && destCoords) computeRouteFares(origin, destCoords);
+  }, [origin?.[0], origin?.[1], destCoords?.[0], destCoords?.[1]]);
+
+  // Resolve a destination typed elsewhere (e.g. the home screen) -> coords.
   const resolveDest = async (name: string, org: [number, number]) => {
+    const seq = ++selectionSeq.current;
     setResolving(true);
     try {
-      const places = await geocode(name, org);
-      const p = places[0];
-      if (p) {
-        setDestCoords([p.lng, p.lat]);
-        setDestAddress(p.address || p.name || name);
-        await computeRouteFares(org, [p.lng, p.lat]);
+      const [p] = await geocode(name, org);
+      if (!p || seq !== selectionSeq.current) return;
+      const area = await getServiceArea();
+      const allowed = await isCoordinateWithinServiceArea([p.lng, p.lat], area);
+      if (seq !== selectionSeq.current) return;
+      if (!allowed) {
+        Alert.alert('Fora da área de atendimento', `Esse destino fica fora da área atendida: ${serviceAreaLabel(area)}.`);
+        return;
       }
-    } catch { /* ignore */ } finally { setResolving(false); }
+      setDestCoords([p.lng, p.lat]);
+      setDestAddress(placeLabel(p) || name);
+    } catch { /* ignore */ } finally {
+      if (seq === selectionSeq.current) setResolving(false);
+    }
   };
 
-  // Pick a place (from real suggestions or recents) -> go to vehicle choice.
-  const selectPlace = async (place: { name: string; address: string; lng?: number; lat?: number }) => {
-    if (activeSearchField === 'origin') {
-      if (place.lng != null && place.lat != null) {
-        setOrigin([place.lng, place.lat]);
-        if (destCoords) {
-          await computeRouteFares([place.lng, place.lat], destCoords);
-        }
-      }
-      setStep('choose');
-      setQuery('');
-      setSuggestions([]);
-    } else {
+  // Pick a place (autocomplete or recents) -> coordinates -> vehicle choice.
+  const selectPlace = async (place: PlaceSuggestion) => {
+    const field = activeSearchField;
+    const seq = ++selectionSeq.current;
+    prefillPending.current = false;
+    setQuery('');
+    setSuggestions([]);
+    setStep('choose');
+    if (field === 'destination') {
       setSelectedDest(place.name);
-      setQuery('');
-      setSuggestions([]);
-      setStep('choose');
-      if (place.lng != null && place.lat != null && origin) {
-        setDestCoords([place.lng, place.lat]);
-        setDestAddress(place.address || place.name);
-        await computeRouteFares(origin, [place.lng, place.lat]);
-      } else if (origin) {
-        await resolveDest(place.address || place.name, origin);
+      setDestAddress(placeLabel(place));
+      setDestCoords(null);
+      setRoute(null);
+      setDurMin(null);
+      setFares({});
+    }
+    setResolving(true);
+    try {
+      // Suggestions resolve through Mapbox retrieve; recents only have the saved text.
+      const resolved = place.mapboxId || place.lng != null
+        ? await resolvePlace(place)
+        : (await geocode(place.address || place.name, origin))[0] ?? null;
+      if (seq !== selectionSeq.current) return;
+      if (!resolved) {
+        Alert.alert('Endereço não encontrado', 'Não conseguimos localizar esse lugar. Tente buscar pelo nome ou endereço completo.');
+        return;
       }
+      const point: [number, number] = [resolved.lng, resolved.lat];
+      const area = await getServiceArea();
+      const allowed = await isCoordinateWithinServiceArea(point, area);
+      if (seq !== selectionSeq.current) return;
+      if (!allowed) {
+        if (field === 'destination') {
+          setSelectedDest('');
+          setDestAddress('');
+        }
+        setStep('search');
+        Alert.alert('Fora da área de atendimento', `Esse lugar fica fora da área atendida: ${serviceAreaLabel(area)}.`);
+        return;
+      }
+      const label = placeLabel(resolved) || placeLabel(place);
+      if (field === 'origin') {
+        setOrigin(point);
+        setOriginAddress(label);
+      } else {
+        setDestCoords(point);
+        setDestAddress(label);
+      }
+    } catch {
+      if (seq === selectionSeq.current) Alert.alert('Sem conexão', 'Não foi possível carregar esse endereço. Tente novamente.');
+    } finally {
+      if (seq === selectionSeq.current) setResolving(false);
     }
   };
 
   // Auto-resolve a pre-filled destination once we know the origin.
   useEffect(() => {
-    if (step === 'choose' && origin && selectedDest && !destCoords) resolveDest(selectedDest, origin);
-  }, [step, origin]);
+    if (!prefillPending.current || !origin || !selectedDest) return;
+    prefillPending.current = false;
+    if (!destCoords) resolveDest(selectedDest, origin);
+  }, [origin]);
 
-  // Real geocoding search (debounced), biased to the user's location.
+  // As-you-type place search (debounced), biased to the user's location like 99/Uber.
   useEffect(() => {
-    if (step !== 'search' || query.trim().length < 2 || !origin) { setSuggestions([]); return; }
+    if (step !== 'search' || query.trim().length < 2 || !origin) { setSuggestions([]); setSearching(false); return; }
     let cancelled = false;
     setSearching(true);
     const t = setTimeout(async () => {
       try {
-        const places = await geocode(query, origin);
-        if (!cancelled) setSuggestions(places.map((p, i) => ({ id: String(i), name: p.name, address: p.address, lng: p.lng, lat: p.lat })));
+        const places = await searchPlaces(query, origin);
+        if (!cancelled) setSuggestions(places);
       } catch {
         if (!cancelled) setSuggestions([]);
       } finally {
@@ -285,15 +360,23 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
     return () => { cancelled = true; clearTimeout(t); };
   }, [query, step, origin]);
 
-  // Recent destinations (history) for the empty state.
+  // Recent destinations (history) for the empty state — only those still
+  // inside the configured area, so an old trip never offers a forbidden place.
   useEffect(() => {
-    getRideHistory(20).then((rides) => {
+    let active = true;
+    (async () => {
+      const [rides, area] = await Promise.all([getRideHistory(20), getServiceArea()]);
       const seen = new Set<string>();
-      setRecents(rides
-        .filter((r) => r.destination_address && !seen.has(r.destination_address) && seen.add(r.destination_address))
-        .slice(0, 6)
-        .map((r) => ({ id: r.id, name: r.destination_address.split(',')[0], address: r.destination_address })));
-    }).catch(() => {});
+      const candidates = rides.flatMap((r) => {
+        const point = parseGeoPoint((r as any).destination);
+        if (!point || !r.destination_address || seen.has(r.destination_address)) return [];
+        seen.add(r.destination_address);
+        return [{ id: r.id, name: r.destination_address.split(',')[0], address: r.destination_address, lng: point[0], lat: point[1] }];
+      }).slice(0, 8);
+      const allowed = await Promise.all(candidates.map((c) => isCoordinateWithinServiceArea([c.lng, c.lat], area)));
+      if (active) setRecents(candidates.filter((_, index) => allowed[index]).slice(0, 6));
+    })().catch(() => {});
+    return () => { active = false; };
   }, []);
 
   const confirm = async () => {
@@ -307,7 +390,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
         return;
       }
       onConfirm(selectedType, {
-        originLng: origin[0], originLat: origin[1], originAddress: 'Minha localização',
+        originLng: origin[0], originLat: origin[1], originAddress,
         destLng: destCoords[0], destLat: destCoords[1], destAddress,
         paymentMethod: selectedPayment,
         requiresFemaleDriver: isFemale && preferFemaleDriver,
@@ -567,7 +650,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
             <View style={styles.routeSummaryCopy}>
               <Text style={styles.routeSummaryLabel}>PARTIDA</Text>
               <Text style={styles.routeSummaryValue} numberOfLines={1}>
-                {origin ? 'Sua localização' : 'Definir partida'}
+                {origin ? originAddress : 'Definir partida'}
               </Text>
             </View>
             <ChevronRight size={16} color="#9A9A9A" />
@@ -663,7 +746,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
                     />
                   ) : (
                     <Text style={styles.addressFieldLabelActive} numberOfLines={1}>
-                      {origin ? 'Sua localização' : 'Definir partida'}
+                      {origin ? originAddress : 'Definir partida'}
                     </Text>
                   )}
                 </TouchableOpacity>
@@ -771,7 +854,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
                       {/* Time + Price */}
                       <View style={styles.priceCol}>
                         <Text style={styles.rideTypePrice}>
-                          {fares[type.id] != null ? `R$ ${fares[type.id].toFixed(2)}` : (resolving ? '…' : type.price)}
+                          {fares[type.id] != null ? `R$ ${fares[type.id].toFixed(2)}` : (resolving || routing ? '…' : type.price)}
                         </Text>
                         <View style={styles.timeRow}>
                           <Clock size={11} color={Colors.textMuted} />
@@ -878,7 +961,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
                   selectedType === 'comfort' ? 'Solicitar Conforto' : 'Solicitar Premium'
                 }
                 onPress={confirm}
-                loading={resolving}
+                loading={resolving || routing}
                 disabled={!destCoords}
                 style={{ marginTop: 12 }}
               />

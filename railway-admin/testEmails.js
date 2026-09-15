@@ -33,7 +33,7 @@ async function runTests() {
   console.log('Resultado 5:', res5);
 
   console.log('\n6. Enviando e-mail de Formulário de Contato da Landing Page...');
-  const res6 = await sendContactFormEmail({ name: 'João Lucas', email: targetEmail, phone: '(66) 99647-1003', subject: 'Quero ser motorista parceiro', message: 'Gostaria de tirar dúvidas sobre o plano Rotta Smart.' });
+  const res6 = await sendContactFormEmail({ name: 'João Lucas', email: targetEmail, phone: '(66) 99930-9019', subject: 'Quero ser motorista parceiro', message: 'Gostaria de tirar dúvidas sobre o plano Rotta Smart.' });
   console.log('Resultado 6:', res6);
 
 console.log('\nTestes concluídos.');

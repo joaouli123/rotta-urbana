@@ -9,6 +9,7 @@ import { registerManagerRoutes } from './managerRoutes.js';
 import { registerManagerPortalRoutes } from './managerPortalRoutes.js';
 import { expireOverdueSubscriptions, registerMercadoPagoRoutes, syncPaymentForAdmin, syncSubscriptionForDriver } from './paymentRoutes.js';
 import { loadUserBundle, resetUserPassword, updateDriverProfile, updateUserProfile } from './userAdmin.js';
+import { syncServiceAreaBoundary } from './serviceAreaBoundary.js';
 
 const {
   SUPABASE_URL,
@@ -1505,7 +1506,8 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
   const { data: s } = await admin.from('app_settings').select('*').eq('id', 1).single();
   const { data: fares } = await admin.from('fare_config').select('*').order('ride_type');
   const set = s ?? {};
-  const okMsg = req.query.ok ? `<div class="ok">Configurações salvas com sucesso! As alterações já estão ativas no App e na Landing Page.</div>` : '';
+  const okMsg = req.query.ok ? `<div class="ok">Configurações salvas com sucesso! As alterações já estão ativas no App e na Landing Page.</div>`
+    : req.query.error ? `<div class="err">${esc(String(req.query.error))}</div>` : '';
   const tab = req.query.tab || 'plans';
   const serviceAreaScope = ['radius', 'city', 'state', 'country'].includes(String(set.service_area_scope))
     ? String(set.service_area_scope)
@@ -1965,6 +1967,13 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
 
 adminRouter.post('/settings', requireAuth, async (req, res) => {
   const b = req.body;
+  const area = {
+    enabled: b.service_area_enabled === '1',
+    scope: ['radius', 'city', 'state', 'country'].includes(String(b.service_area_scope)) ? String(b.service_area_scope) : 'radius',
+    city: String(b.service_area_city || 'Sinop').trim().slice(0, 80) || 'Sinop',
+    state: String(b.service_area_state || 'MT').trim().toUpperCase().slice(0, 2) || 'MT',
+    country: String(b.service_area_country || 'BR').trim().toUpperCase().slice(0, 2) || 'BR',
+  };
   await admin.from('app_settings').update({
     platform_name: b.platform_name,
     driver_approval_mode: b.driver_approval_mode === 'manual' ? 'manual' : 'auto',
@@ -1984,11 +1993,11 @@ adminRouter.post('/settings', requireAuth, async (req, res) => {
     night_start: b.night_start || '19:00',
     night_end: b.night_end || '06:00',
     night_multiplier: num(b.night_multiplier),
-    service_area_enabled: b.service_area_enabled === '1',
-    service_area_scope: ['radius', 'city', 'state', 'country'].includes(String(b.service_area_scope)) ? String(b.service_area_scope) : 'radius',
-    service_area_city: String(b.service_area_city || 'Sinop').trim().slice(0, 80) || 'Sinop',
-    service_area_state: String(b.service_area_state || 'MT').trim().toUpperCase().slice(0, 2) || 'MT',
-    service_area_country: String(b.service_area_country || 'BR').trim().toUpperCase().slice(0, 2) || 'BR',
+    service_area_enabled: area.enabled,
+    service_area_scope: area.scope,
+    service_area_city: area.city,
+    service_area_state: area.state,
+    service_area_country: area.country,
     service_area_radius_km: Math.min(200, Math.max(1, num(b.service_area_radius_km) || 20)),
     service_area_center_lng: signedNum(b.service_area_center_lng, -55.5024, -180, 180),
     service_area_center_lat: signedNum(b.service_area_center_lat, -11.8642, -90, 90),
@@ -1996,6 +2005,13 @@ adminRouter.post('/settings', requireAuth, async (req, res) => {
     platform_pix_name: b.platform_pix_name ?? '',
     platform_pix_city: b.platform_pix_city ?? '',
   }).eq('id', 1);
+  try {
+    await syncServiceAreaBoundary(admin, area);
+  } catch (e) {
+    console.error('[settings] service area boundary', e);
+    const warning = `Configurações salvas, mas o limite oficial da área não foi atualizado (${e?.message || e}). Salve de novo em alguns instantes.`;
+    return res.redirect(`/settings?tab=plans&error=${encodeURIComponent(warning)}`);
+  }
   res.redirect('/settings?tab=plans&ok=1');
 });
 

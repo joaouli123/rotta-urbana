@@ -3,6 +3,8 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, AppState,
   StatusBar, ActivityIndicator, Alert, Linking,
 } from 'react-native';
+import * as ExpoLinking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ChevronLeft, CheckCircle, AlertCircle, Clock, RefreshCw,
@@ -26,6 +28,12 @@ function fmtDate(iso?: string | null) {
 function daysUntil(iso?: string | null): number | null {
   if (!iso) return null;
   return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
+}
+
+function mercadoPagoCallbackStatus(url?: string): 'success' | 'error' | null {
+  if (!url?.startsWith('rotta-urbana://mercadopago/connected')) return null;
+  const status = url.split('?')[1]?.split('&').find((part) => part.startsWith('status='))?.split('=')[1];
+  return status === 'success' || status === 'error' ? status : null;
 }
 
 // ── Plan definitions ──────────────────────────────────────────────────────────
@@ -144,8 +152,26 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
     setConnectingMp(true);
     try {
       const url = await startMercadoPagoConnection();
-      await Linking.openURL(url);
-      Alert.alert('Conexão iniciada', 'Autorize sua conta Mercado Pago no navegador. Ao voltar para o app, toque em atualizar para confirmar.');
+      const redirectUrl = ExpoLinking.createURL('mercadopago/connected');
+      const result = await WebBrowser.openAuthSessionAsync(url, redirectUrl, {
+        showTitle: true,
+        createTask: false,
+      });
+      const callbackStatus = result.type === 'success' ? mercadoPagoCallbackStatus(result.url) : null;
+
+      if (callbackStatus === 'success') {
+        const status = await getMercadoPagoConnectionStatus().catch(() => null);
+        if (status) setMpConnection(status);
+        await load();
+        if (status?.connected) {
+          Alert.alert('Mercado Pago conectado', 'Sua conta foi vinculada e está pronta para receber os repasses automáticos.');
+        } else {
+          Alert.alert('Autorização recebida', 'A autorização foi recebida. Toque em atualizar se o status ainda não aparecer como conectado.');
+        }
+      } else if (callbackStatus === 'error') {
+        await load();
+        Alert.alert('Não foi possível conectar', 'O Mercado Pago recusou ou não concluiu a autorização. Tente novamente.');
+      }
     } catch (error) {
       Alert.alert('Não foi possível conectar', error instanceof Error ? error.message : 'Tente novamente.');
     } finally {

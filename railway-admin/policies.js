@@ -234,8 +234,8 @@ export function privacyPolicyPage() {
         <h3>Dúvidas e Contato</h3>
         <p>Se tiver qualquer dúvida sobre esta Política de Privacidade ou precisar exercer seus direitos de privacidade, entre em contato conosco:</p>
         <p><strong>Empresa:</strong> Rotta Urbana Ltda</p>
-        <p><strong>E-mail de Suporte:</strong> <a href="mailto:contato@rottaurbana.com.br" style="color: var(--primary-dark); font-weight: bold;">contato@rottaurbana.com.br</a></p>
-        <p><strong>WhatsApp Comercial:</strong> <a href="https://wa.me/5566996471003" target="_blank" style="color: var(--primary-dark); font-weight: bold;">+55 66 99647-1003</a></p>
+        <p><strong>E-mail de Suporte:</strong> <a href="mailto:rottaurbana.sinop@gmail.com" style="color: var(--primary-dark); font-weight: bold;">rottaurbana.sinop@gmail.com</a></p>
+        <p><strong>WhatsApp Comercial:</strong> <a href="https://wa.me/5566999309019" target="_blank" style="color: var(--primary-dark); font-weight: bold;">+55 66 99930-9019</a> · <a href="https://wa.me/5566996795065" target="_blank" style="color: var(--primary-dark); font-weight: bold;">+55 66 99679-5065</a></p>
       </div>
     </div>
   </main>
@@ -472,7 +472,7 @@ export function deleteAccountPage() {
       <h2>Opção 2: Solicitação por E-mail ou WhatsApp</h2>
       <p>Caso não tenha mais acesso ao aplicativo instalado ou prefira falar com o suporte, envie sua solicitação pelos nossos canais oficiais de comunicação:</p>
       <ol>
-        <li>Envie um e-mail para <a href="mailto:contato@rottaurbana.com.br" style="color: var(--primary-dark); font-weight: bold;">contato@rottaurbana.com.br</a> com o assunto "Exclusão de Conta".</li>
+        <li>Envie um e-mail para <a href="mailto:rottaurbana.sinop@gmail.com" style="color: var(--primary-dark); font-weight: bold;">rottaurbana.sinop@gmail.com</a> com o assunto "Exclusão de Conta".</li>
         <li>No corpo da mensagem, informe o seu <strong>número de telefone cadastrado com o DDD</strong> e seu <strong>nome completo</strong>.</li>
         <li>Nossa equipe efetuará uma rápida verificação de segurança para confirmar sua identidade e processará a exclusão completa dos seus dados em até <strong>5 dias úteis</strong>.</li>
       </ol>
@@ -484,8 +484,8 @@ export function deleteAccountPage() {
         <h3>Canais de Atendimento e Suporte</h3>
         <p>Se tiver qualquer dificuldade para excluir sua conta, nossa equipe de suporte está à disposição:</p>
         <p><strong>Empresa:</strong> Rotta Urbana Ltda</p>
-        <p><strong>E-mail:</strong> <a href="mailto:contato@rottaurbana.com.br" style="color: var(--primary-dark); font-weight: bold;">contato@rottaurbana.com.br</a></p>
-        <p><strong>WhatsApp de Suporte:</strong> <a href="https://wa.me/5566996471003" target="_blank" style="color: var(--primary-dark); font-weight: bold;">+55 66 99647-1003</a></p>
+        <p><strong>E-mail:</strong> <a href="mailto:rottaurbana.sinop@gmail.com" style="color: var(--primary-dark); font-weight: bold;">rottaurbana.sinop@gmail.com</a></p>
+        <p><strong>WhatsApp de Suporte:</strong> <a href="https://wa.me/5566999309019" target="_blank" style="color: var(--primary-dark); font-weight: bold;">+55 66 99930-9019</a> · <a href="https://wa.me/5566996795065" target="_blank" style="color: var(--primary-dark); font-weight: bold;">+55 66 99679-5065</a></p>
       </div>
     </div>
   </main>
@@ -596,8 +596,8 @@ export function termsOfServicePage() {
         <h3>Dúvidas e Canais Oficiais</h3>
         <p>Se você tiver qualquer dúvida sobre estes Termos de Uso, entre em contato com nossa equipe:</p>
         <p><strong>Empresa:</strong> Rotta Urbana Ltda</p>
-        <p><strong>E-mail de Contato:</strong> <a href="mailto:contato@rottaurbana.com.br" style="color: var(--primary-dark); font-weight: bold;">contato@rottaurbana.com.br</a></p>
-        <p><strong>WhatsApp Oficial:</strong> <a href="https://wa.me/5566996471003" target="_blank" style="color: var(--primary-dark); font-weight: bold;">+55 66 99647-1003</a></p>
+        <p><strong>E-mail de Contato:</strong> <a href="mailto:rottaurbana.sinop@gmail.com" style="color: var(--primary-dark); font-weight: bold;">rottaurbana.sinop@gmail.com</a></p>
+        <p><strong>WhatsApp Oficial:</strong> <a href="https://wa.me/5566999309019" target="_blank" style="color: var(--primary-dark); font-weight: bold;">+55 66 99930-9019</a> · <a href="https://wa.me/5566996795065" target="_blank" style="color: var(--primary-dark); font-weight: bold;">+55 66 99679-5065</a></p>
       </div>
     </div>
   </main>

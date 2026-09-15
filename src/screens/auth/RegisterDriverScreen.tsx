@@ -10,6 +10,7 @@ import {
   StatusBar,
   Alert,
   Image,
+  Modal,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { pickFromCamera, chooseAndPickDocument, type PickedFile } from '../../lib/filePick';
@@ -27,6 +28,8 @@ import {
   Eye,
   EyeOff,
   ChevronLeft,
+  Check,
+  X,
 } from 'lucide-react-native';
 import { Colors, Radius } from '../../constants';
 import { useAuth } from '../../contexts/AuthContext';
@@ -111,6 +114,9 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
   // Documents picked during signup. Uploaded right after the account is created,
   // since Storage needs an authenticated session.
   const [docImages, setDocImages] = useState<Partial<Record<DocType, PickedFile>>>({});
+  const [termsAccepted, setTermsAccepted] = useState(false);
+  const [termsVisible, setTermsVisible] = useState(false);
+  const [termsDraftChecked, setTermsDraftChecked] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -227,8 +233,26 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
       Alert.alert('Atenção', 'Envie ao menos a foto da CNH para continuar.');
       return;
     }
+    if (step === 1 && !termsAccepted) {
+      setTermsDraftChecked(false);
+      setTermsVisible(true);
+      return;
+    }
     if (step < steps.length - 1) setStep(step + 1);
     else submit();
+  };
+
+  const closeTerms = () => {
+    setTermsVisible(false);
+    setTermsDraftChecked(false);
+  };
+
+  const acceptTerms = () => {
+    if (!termsDraftChecked) return;
+    setTermsAccepted(true);
+    setTermsVisible(false);
+    setTermsDraftChecked(false);
+    setStep(2);
   };
 
   const goBack = () => {
@@ -498,6 +522,92 @@ const RegisterDriverScreen: React.FC<RegisterDriverScreenProps> = ({ onBack }) =
             style={styles.primaryButton}
           />
         </ScrollView>
+
+        <Modal
+          visible={termsVisible}
+          transparent
+          animationType="slide"
+          statusBarTranslucent
+          onRequestClose={closeTerms}
+        >
+          <View style={styles.termsBackdrop}>
+            <View style={[styles.termsCard, { paddingBottom: Math.max(insets.bottom, 16) }]}>
+              <View style={styles.termsHeader}>
+                <View style={styles.termsHeaderCopy}>
+                  <Text style={styles.termsTitle}>Termos do Motorista</Text>
+                  <Text style={styles.termsSubtitle}>Leia e aceite para continuar o cadastro.</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.termsCloseButton}
+                  onPress={closeTerms}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel="Fechar termos"
+                >
+                  <X size={20} color={Colors.textPrimary} strokeWidth={2.5} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView
+                style={styles.termsBody}
+                contentContainerStyle={styles.termsBodyContent}
+                showsVerticalScrollIndicator
+                keyboardShouldPersistTaps="handled"
+              >
+                <Text style={styles.termsIntro}>
+                  Ao continuar, você declara que leu e aceita integralmente os termos abaixo:
+                </Text>
+                <View style={styles.termsBulletRow}>
+                  <Text style={styles.termsBullet}>•</Text>
+                  <Text style={styles.termsText} selectable>
+                    Eu me comprometo, em baixar o aplicativo Rotta urbana, com desempenho me comprometo se preciso for abrir um CNPJ ou MEI caso venha acontecer algo. Estou ciente de que estou seguro com todo amparo conforme a regra do INSS sem comprometer o Aplicativo Rotta Urbana.
+                  </Text>
+                </View>
+                <View style={styles.termsBulletRow}>
+                  <Text style={styles.termsBullet}>•</Text>
+                  <Text style={styles.termsText} selectable>
+                    Me comprometo também em aceitar as regras do aplicativo Rotta Urbana dirigir sem efeito de bebida alcoólica ou ter consumido qualquer tipo de entorpecentes, me garantindo de transportar o passageiro sem algum tipo de agressão ou falta de respeito com o passageiro.
+                  </Text>
+                </View>
+              </ScrollView>
+
+              <TouchableOpacity
+                style={styles.termsCheckRow}
+                onPress={() => setTermsDraftChecked((current) => !current)}
+                activeOpacity={0.8}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: termsDraftChecked }}
+              >
+                <View style={[styles.checkbox, termsDraftChecked && styles.checkboxChecked]}>
+                  {termsDraftChecked && <Check size={16} color="#FFFFFF" strokeWidth={3} />}
+                </View>
+                <Text style={styles.termsCheckText}>Li e aceito os Termos do Motorista.</Text>
+              </TouchableOpacity>
+
+              <View style={styles.termsActions}>
+                <TouchableOpacity
+                  style={styles.termsCancelButton}
+                  onPress={closeTerms}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.termsCancelText}>Cancelar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.termsAcceptButton, !termsDraftChecked && styles.termsAcceptDisabled]}
+                  disabled={!termsDraftChecked}
+                  onPress={acceptTerms}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                >
+                  <Text style={[styles.termsAcceptText, !termsDraftChecked && styles.termsAcceptTextDisabled]}>
+                    {termsDraftChecked ? 'Aceitar e continuar' : 'Marque para continuar'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
       </View>
     </KeyboardAvoidingView>
   );
@@ -633,6 +743,121 @@ const styles = StyleSheet.create({
     fontSize: 13, fontFamily: 'Poppins_400Regular',
     color: Colors.textSecondary, flex: 1, lineHeight: 20,
   },
+
+  // Mandatory driver terms shown before the Documents step.
+  termsBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.55)',
+    justifyContent: 'flex-end',
+    paddingHorizontal: 14,
+    paddingTop: 28,
+  },
+  termsCard: {
+    maxHeight: '92%',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    overflow: 'hidden',
+  },
+  termsHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    paddingHorizontal: 20,
+    paddingTop: 20,
+    paddingBottom: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0F0F0',
+  },
+  termsHeaderCopy: { flex: 1, paddingRight: 12 },
+  termsTitle: {
+    fontSize: 21,
+    fontFamily: 'Poppins_700Bold',
+    color: Colors.textPrimary,
+    marginBottom: 4,
+  },
+  termsSubtitle: {
+    fontSize: 12,
+    fontFamily: 'Poppins_400Regular',
+    color: Colors.textMuted,
+    lineHeight: 18,
+  },
+  termsCloseButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F5F5F5',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  termsBody: { flexShrink: 1, maxHeight: 430 },
+  termsBodyContent: { paddingHorizontal: 20, paddingVertical: 18, gap: 16 },
+  termsIntro: {
+    fontSize: 13,
+    fontFamily: 'Poppins_500Medium',
+    color: Colors.textSecondary,
+    lineHeight: 20,
+  },
+  termsBulletRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  termsBullet: {
+    fontSize: 22,
+    lineHeight: 24,
+    color: AUTH_GREEN,
+  },
+  termsText: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Poppins_400Regular',
+    color: Colors.textPrimary,
+    lineHeight: 22,
+  },
+  termsCheckRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#F0F0F0',
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#BDBDBD',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxChecked: { backgroundColor: AUTH_GREEN, borderColor: AUTH_GREEN },
+  termsCheckText: {
+    flex: 1,
+    fontSize: 14,
+    fontFamily: 'Poppins_600SemiBold',
+    color: Colors.textPrimary,
+    lineHeight: 20,
+  },
+  termsActions: { flexDirection: 'row', gap: 10, paddingHorizontal: 20, paddingTop: 4 },
+  termsCancelButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
+    backgroundColor: '#FFFFFF',
+  },
+  termsCancelText: { fontSize: 13, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
+  termsAcceptButton: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    backgroundColor: AUTH_DARK,
+  },
+  termsAcceptDisabled: { backgroundColor: '#E7E7E7' },
+  termsAcceptText: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: '#FFFFFF' },
+  termsAcceptTextDisabled: { color: '#999999' },
 
   // Selfie
   selfieBox: {

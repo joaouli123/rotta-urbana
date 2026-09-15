@@ -293,10 +293,10 @@ const PassengerFlow: React.FC = () => {
         destAddr = payload.destAddress;
       } else {
         originLngLat = await getOrigin();
-        const { geocode } = await import('../services/geo');
+        const { geocode, placeLabel } = await import('../services/geo');
         destLngLat = originLngLat;
         const places = await geocode(destText || 'Sinop, MT', originLngLat);
-        if (places[0]) { destLngLat = [places[0].lng, places[0].lat]; destAddr = places[0].address || places[0].name; }
+        if (places[0]) { destLngLat = [places[0].lng, places[0].lat]; destAddr = placeLabel(places[0]); }
       }
       const serviceArea = await getServiceArea();
       if (serviceArea.enabled && serviceArea.scope !== 'radius') {
@@ -362,13 +362,14 @@ const PassengerFlow: React.FC = () => {
     }
   };
 
-  const handleCancel = async (reason = 'Passageiro cancelou pelo app') => {
+  const handleCancel = async (reason?: string) => {
     if (passengerCancelling) return false;
     setPassengerCancelling(true);
     clearRideNotification();
     stopSound('searching');
     try {
-      if (ride) await cancelRide(ride.id, reason);
+      const text = typeof reason === 'string' && reason.trim() ? reason : 'Passageiro cancelou pelo app';
+      if (ride) await cancelRide(ride.id, text);
       setRide(null);
       setScreen('passenger_home');
       return true;
@@ -415,7 +416,9 @@ const PassengerFlow: React.FC = () => {
     case 'ride_matching':
       return <RideMatchingScreen
         onDriverFound={() => setScreen('ride_tracking')}
-        onCancel={handleCancel}
+        // onPress hands over the press event; passed on as the reason it made
+        // the cancel RPC fail with "cyclical structure in JSON object".
+        onCancel={() => handleCancel()}
         destinationAddress={ride?.destination_address}
         price={ride?.price}
         distanceKm={ride?.distance_km}
@@ -425,7 +428,14 @@ const PassengerFlow: React.FC = () => {
         onAcceptMale={handleAcceptMale}
       />;
     case 'ride_tracking':
-      return <RideTrackingScreen rideId={ride?.id} status={ride?.status} origin={originCoords ?? undefined} destination={destCoords ?? undefined} price={ride?.price} distanceKm={ride?.distance_km} durationMin={ride?.duration_min} destinationAddress={ride?.destination_address} onCancel={handleCancel} onRideCompleted={() => setScreen('ride_completed')} onPanic={() => Alert.alert('Emergência', 'Deseja ligar para a emergência (190)?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Ligar 190', style: 'destructive', onPress: () => Linking.openURL('tel:190') }])} />;
+      return <RideTrackingScreen rideId={ride?.id} status={ride?.status} origin={originCoords ?? undefined} destination={destCoords ?? undefined} price={ride?.price} distanceKm={ride?.distance_km} durationMin={ride?.duration_min} destinationAddress={ride?.destination_address} onCancel={handleCancel} onRideCompleted={() => setScreen('ride_completed')} onPanic={() => Alert.alert('Emergência', 'Deseja ligar para a emergência (190)?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Ligar 190', style: 'destructive', onPress: () => Linking.openURL('tel:190') }])} onDestinationChanged={(nextDestination, nextAddress, pricing) => {
+        setDestCoords(nextDestination);
+        setRide((current) => current ? {
+          ...current,
+          destination_address: nextAddress,
+          ...(pricing ? { price: pricing.price, distance_km: pricing.distanceKm, duration_min: pricing.durationMin } : {}),
+        } : current);
+      }} />;
     case 'ride_completed':
       return (
         <RideCompletedScreen
@@ -554,6 +564,7 @@ const DriverFlow: React.FC = () => {
     if (!activeRide) return;
     let currentStatus = activeRide.status;
     let currentUpdatedAt = activeRide.updated_at;
+    let currentDestAddress = activeRide.destination_address;
     const apply = (r: RideRow) => {
       if (r.status === currentStatus && r.updated_at === currentUpdatedAt) return;
       currentStatus = r.status;
@@ -564,6 +575,15 @@ const DriverFlow: React.FC = () => {
         setScreen('driver_home');
         Alert.alert('Corrida cancelada', r.cancel_reason || 'O passageiro cancelou a corrida.');
         return;
+      }
+      // Destination text updates immediately via setActiveRide below, but the
+      // map/route also needs fresh coordinates — otherwise a passenger-initiated
+      // route change leaves the driver's pin/route stale on screen.
+      if (r.destination_address !== currentDestAddress) {
+        currentDestAddress = r.destination_address;
+        getRidePoints(r.id).then((points) => {
+          if (points) setActivePoints((current) => current ? { ...current, dest: [points.destLng, points.destLat] } : current);
+        }).catch(() => {});
       }
       setActiveRide(r);
     };

@@ -62,8 +62,11 @@ export async function updateDriverPix(pixKey: string, pixKeyType: string): Promi
 }
 
 export async function updateLocation(lat: number, lng: number, heading?: number): Promise<void> {
+  // Expo can return -1 when the device has no heading yet. The database
+  // accepts only a real compass value in the [0, 360) range.
+  const safeHeading = Number.isFinite(heading) && heading! >= 0 && heading! < 360 ? heading : null;
   const { error } = await supabase.rpc('update_driver_location', {
-    p_lat: lat, p_lng: lng, p_heading: heading ?? null,
+    p_lat: lat, p_lng: lng, p_heading: safeHeading,
   });
   if (error) throw error;
 }

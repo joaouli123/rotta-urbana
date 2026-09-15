@@ -105,6 +105,10 @@ begin
     when 'SC' then 'santa catarina' when 'SP' then 'sao paulo' when 'SE' then 'sergipe'
     when 'TO' then 'tocantins' else lower(coalesce(s.service_area_state, 'MT')) end;
 
+  if upper(coalesce(s.service_area_state, 'MT')) = 'MT'
+     and v_text like '%mato grosso do sul%' then
+    return false;
+  end if;
   if not (v_text like '%' || v_state_name || '%' or v_text ~ ('(^|[^a-z])' || lower(coalesce(s.service_area_state, 'MT')) || '([^a-z]|$)')) then
     return false;
   end if;

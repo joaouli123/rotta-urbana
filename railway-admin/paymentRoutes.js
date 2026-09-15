@@ -635,11 +635,14 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
 
   app.get('/api/mercadopago/oauth/callback', async (req, res) => {
     const finish = (ok, message) => {
-      const title = ok ? 'Mercado Pago conectado' : 'Não foi possível conectar';
-      const color = ok ? '#166534' : '#991b1b';
-      const appUrl = ok ? 'rottaurbana://mercadopago/connected?status=success' : 'rottaurbana://mercadopago/connected?status=error';
-      const safeMessage = String(message).replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
-      return res.status(ok ? 200 : 400).send(`<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title><body style="font-family:Arial,sans-serif;padding:32px;max-width:620px;margin:auto;color:#1f2937"><h1 style="color:${color}">${title}</h1><p>${safeMessage}</p><p><a href="${appUrl}">Voltar ao aplicativo</a></p></body></html>`);
+      const status = ok ? 'success' : 'error';
+      const details = ok ? '' : `&message=${encodeURIComponent(String(message).slice(0, 240))}`;
+      const appUrl = `rotta-urbana://mercadopago/connected?status=${status}${details}`;
+      // The mobile auth session is waiting for this custom-scheme redirect.
+      // A 302 is required here; rendering a page with a manual link leaves the
+      // browser open and the app never receives the OAuth result.
+      res.set('Cache-Control', 'no-store');
+      return res.redirect(302, appUrl);
     };
     const rawState = String(req.query?.state || '').trim();
     if (!rawState) return finish(false, 'A autorização não retornou um estado válido. Inicie a conexão novamente pelo app.');

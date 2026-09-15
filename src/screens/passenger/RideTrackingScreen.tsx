@@ -14,6 +14,7 @@ import {
   Animated,
   Alert,
   Linking,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -32,13 +33,17 @@ import {
   CheckCircle,
   Clock,
   Shield,
+  Search,
+  MapPinned,
 } from 'lucide-react-native';
 import { Avatar, Rating, Card } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
 import RouteMap from '../../components/RouteMap';
-import { getRoute } from '../../services/geo';
-import { getRideDriverLocation, getRideCounterpart, type RideCounterpart } from '../../services/rides';
+import { getRoute, isCoordinateWithinServiceArea, placeLabel, resolvePlace, searchPlaces, type LngLat, type PlaceSuggestion } from '../../services/geo';
+import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
+import { getRideDriverLocation, getRideCounterpart, updateRideDestination, type RideCounterpart } from '../../services/rides';
 import { openSupportTicket } from '../../services/profile';
+import { friendlyError } from '../../lib/errors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ChatModal from '../../components/ChatModal';
 import { subscribeMessages, currentUserId } from '../../services/chat';
@@ -55,6 +60,11 @@ interface RideTrackingScreenProps {
   distanceKm?: number | null;
   durationMin?: number | null;
   destinationAddress?: string;
+  onDestinationChanged?: (
+    destination: LngLat,
+    address: string,
+    pricing?: { price: number | null; distanceKm: number | null; durationMin: number | null },
+  ) => void;
 }
 
 type RideStatus = 'on_way' | 'arrived' | 'in_ride';
@@ -88,11 +98,76 @@ const CANCEL_REASONS = [
   'Outro motivo',
 ];
 
-const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted, onCancel, onPanic, origin, destination, rideId, status, price, distanceKm, durationMin, destinationAddress }) => {
+const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted, onCancel, onPanic, origin, destination, rideId, status, price, distanceKm, durationMin, destinationAddress, onDestinationChanged }) => {
   const insets = useSafeAreaInsets();
   const [rideStatus, setRideStatus] = useState<RideStatus>('on_way');
   const [route, setRoute] = useState<{ type: 'LineString'; coordinates: [number, number][] } | null>(null);
   const [driverLoc, setDriverLoc] = useState<[number, number] | null>(null);
+
+  // ── Route recalculation (passenger can redirect the driver mid-ride) ─────
+  const [routeEditorOpen, setRouteEditorOpen] = useState(false);
+  const [routeQuery, setRouteQuery] = useState('');
+  const [routeSuggestions, setRouteSuggestions] = useState<PlaceSuggestion[]>([]);
+  const [routeSearching, setRouteSearching] = useState(false);
+  const [routeSaving, setRouteSaving] = useState(false);
+
+  const canChangeRoute = rideId && (rideStatus === 'on_way' || rideStatus === 'arrived' || rideStatus === 'in_ride');
+
+  useEffect(() => {
+    if (!routeEditorOpen) return;
+    const query = routeQuery.trim();
+    if (query.length < 2) { setRouteSuggestions([]); setRouteSearching(false); return; }
+    let cancelled = false;
+    setRouteSearching(true);
+    const timer = setTimeout(() => {
+      searchPlaces(query, origin)
+        .then((places) => { if (!cancelled) setRouteSuggestions(places); })
+        .catch(() => { if (!cancelled) setRouteSuggestions([]); })
+        .finally(() => { if (!cancelled) setRouteSearching(false); });
+    }, 220);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [routeQuery, routeEditorOpen, origin?.[0], origin?.[1]]);
+
+  const openRouteEditor = () => {
+    setRouteQuery('');
+    setRouteSuggestions([]);
+    setRouteEditorOpen(true);
+  };
+
+  const selectNewDestination = async (suggestion: PlaceSuggestion) => {
+    if (!rideId || routeSaving) return;
+    setRouteSaving(true);
+    try {
+      // Autocomplete rows carry no coordinates until retrieved.
+      const place = await resolvePlace(suggestion);
+      if (!place) {
+        Alert.alert('Endereço não encontrado', 'Não conseguimos localizar esse lugar. Tente buscar pelo nome ou endereço completo.');
+        return;
+      }
+      const nextPoint: LngLat = [place.lng, place.lat];
+      const area = await getServiceArea();
+      if (!(await isCoordinateWithinServiceArea(nextPoint, area))) {
+        Alert.alert('Fora da área de atendimento', `O novo destino precisa estar dentro da área atendida: ${serviceAreaLabel(area)}.`);
+        return;
+      }
+      const nextAddress = placeLabel(place) || placeLabel(suggestion);
+      const updated = await updateRideDestination(rideId, place.lat, place.lng, nextAddress);
+      const savedAddress = updated.destination_address || nextAddress;
+      onDestinationChanged?.(nextPoint, savedAddress, {
+        price: updated.price,
+        distanceKm: updated.distance_km,
+        durationMin: updated.duration_min,
+      });
+      setRouteEditorOpen(false);
+      setRouteQuery('');
+      setRouteSuggestions([]);
+      Alert.alert('Rota alterada', `Novo destino: ${savedAddress}\nValor atualizado: R$ ${Number(updated.price ?? 0).toFixed(2).replace('.', ',')}`);
+    } catch (e: any) {
+      Alert.alert('Não foi possível alterar a rota', friendlyError(e?.message));
+    } finally {
+      setRouteSaving(false);
+    }
+  };
 
   // Reflete o status REAL da corrida (controlado pelo motorista) na tela do passageiro.
   useEffect(() => {
@@ -244,7 +319,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
       {/* Mapa (Mapbox no dev build; placeholder no Expo Go) com a rota traçada */}
-      <RouteMap origin={origin} destination={destination} route={route} driverLocation={driverLoc ?? undefined} secondaryRoute={driverLine} paddingTop={80} paddingBottom={300} style={styles.map} />
+      <RouteMap origin={origin} destination={destination} route={route} restrictToSinop driverLocation={driverLoc ?? undefined} secondaryRoute={driverLine} paddingTop={80} paddingBottom={300} style={styles.map} />
 
       {/* Panic button */}
       <TouchableOpacity style={[styles.panicBtn, { top: insets.top + 8 }]} onPress={onPanic}>
@@ -340,6 +415,13 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
           </View>
         )}
 
+        {canChangeRoute && (
+          <TouchableOpacity style={styles.changeRouteBtn} onPress={openRouteEditor} activeOpacity={0.8}>
+            <MapPinned size={15} color={Colors.primary} />
+            <Text style={styles.changeRouteTxt}>Alterar destino</Text>
+          </TouchableOpacity>
+        )}
+
         {rideId && (
           <TouchableOpacity style={styles.cancelRideBtn} onPress={() => setCancelOpen(true)} activeOpacity={0.8}>
             <X size={15} color={Colors.danger} />
@@ -351,6 +433,68 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
 
       {/* ── CHAT (in-app, realtime) ───────────────────────────── */}
       <ChatModal visible={chatOpen} onClose={() => setChatOpen(false)} rideId={rideId} title={driverName} />
+
+      {/* ── ROUTE EDITOR MODAL ────────────────────────────────── */}
+      <Modal visible={routeEditorOpen} animationType="slide" transparent statusBarTranslucent>
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={styles.modalWrap}>
+          <View style={styles.modalOverlay} />
+          <View style={[styles.routeEditorSheet, { paddingBottom: insets.bottom + 16 }]}>
+            <View style={styles.reportHeader}>
+              <View>
+                <Text style={styles.reportTitle}>Alterar destino</Text>
+                <Text style={styles.routeEditorHint}>Escolha o novo destino da corrida.</Text>
+              </View>
+              <TouchableOpacity style={styles.closeBtn} onPress={() => setRouteEditorOpen(false)} disabled={routeSaving}>
+                <X size={20} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.routeInputWrap}>
+              <Search size={16} color={Colors.textMuted} />
+              <TextInput
+                style={styles.routeInput}
+                placeholder="Buscar novo endereço..."
+                placeholderTextColor={Colors.textMuted}
+                value={routeQuery}
+                onChangeText={setRouteQuery}
+                autoFocus
+                editable={!routeSaving}
+              />
+              {routeSearching && <ActivityIndicator size="small" color={Colors.primary} />}
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.routeResults}>
+              {routeSuggestions.map((place) => (
+                <TouchableOpacity
+                  key={place.id}
+                  style={styles.routeResult}
+                  onPress={() => selectNewDestination(place)}
+                  disabled={routeSaving}
+                  activeOpacity={0.75}
+                >
+                  <View style={styles.routeResultIcon}>
+                    <MapPin size={16} color={Colors.primary} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.routeResultTitle} numberOfLines={1}>{place.name}</Text>
+                    <Text style={styles.routeResultAddress} numberOfLines={2}>{place.address || 'Sinop/MT'}</Text>
+                  </View>
+                </TouchableOpacity>
+              ))}
+              {!routeSearching && routeQuery.trim().length >= 2 && routeSuggestions.length === 0 && (
+                <Text style={styles.routeEmpty}>Nenhum lugar encontrado dentro da área de atendimento.</Text>
+              )}
+              {routeQuery.trim().length < 2 && (
+                <Text style={styles.routeEmpty}>Digite o nome do lugar ou o endereço. A busca está limitada à área configurada no painel.</Text>
+              )}
+            </ScrollView>
+
+            <TouchableOpacity style={[styles.dismissBtn, styles.routeEditorCancel]} onPress={() => setRouteEditorOpen(false)} disabled={routeSaving}>
+              <Text style={styles.dismissTxt}>{routeSaving ? 'Salvando...' : 'Cancelar'}</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
 
       {/* ── REPORT MODAL ──────────────────────────────────────── */}
       <Modal visible={cancelOpen} animationType="slide" transparent statusBarTranslucent>
@@ -687,6 +831,45 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: Colors.danger + '35', backgroundColor: Colors.danger + '08',
   },
   cancelRideTxt: { fontSize: 13, fontFamily: 'Poppins_600SemiBold', color: Colors.danger },
+
+  // Change destination (route recalculation)
+  changeRouteBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    paddingVertical: 11, marginTop: 10, borderRadius: Radius.md,
+    borderWidth: 1, borderColor: Colors.primary + '35', backgroundColor: Colors.primary + '08',
+  },
+  changeRouteTxt: { fontSize: 13, fontFamily: 'Poppins_600SemiBold', color: Colors.primary },
+  routeEditorSheet: {
+    backgroundColor: '#FFF', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    paddingHorizontal: 20, paddingTop: 4, maxHeight: '82%',
+  },
+  routeEditorHint: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 3 },
+  routeInputWrap: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    borderWidth: 1, borderColor: Colors.border, borderRadius: Radius.md,
+    paddingHorizontal: 12, paddingVertical: 10, marginTop: 12,
+  },
+  routeInput: {
+    flex: 1, fontSize: 14, fontFamily: 'Poppins_400Regular', color: Colors.textPrimary,
+  },
+  routeResults: { maxHeight: 360, marginTop: 12, marginBottom: 14 },
+  routeResult: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: Colors.borderLight,
+  },
+  routeResultIcon: {
+    width: 32, height: 32, borderRadius: 16, backgroundColor: Colors.primary + '12',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  routeResultTitle: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
+  routeResultAddress: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 2 },
+  routeEmpty: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, textAlign: 'center', paddingVertical: 24, lineHeight: 19 },
+  routeEditorCancel: { width: '100%' },
+  dismissBtn: {
+    alignItems: 'center', justifyContent: 'center', paddingVertical: 13,
+    borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.border, marginBottom: 4,
+  },
+  dismissTxt: { fontSize: 13, fontFamily: 'Poppins_600SemiBold', color: Colors.textSecondary },
 
   simulateBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,

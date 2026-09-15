@@ -35,7 +35,7 @@ export const Colors = {
 
   // Driver online
   online: '#22C55E',
-  offline: '#9A9A9A',
+  offline: '#EF4444',
 
   // Borders
   border: '#E0E0E0',

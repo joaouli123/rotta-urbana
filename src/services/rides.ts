@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import type { RideRow, RideStatusDb, RideTypeDb, PaymentMethodDb } from '../types/db';
+import { addressWithServiceArea } from './geo';
 
 const ACTIVE: RideStatusDb[] = ['searching', 'driver_found', 'driver_on_way', 'driver_arrived', 'in_progress'];
 const CANCEL_TIMEOUT_MS = 60_000;
@@ -22,9 +23,15 @@ export interface RequestRideInput {
 }
 
 export async function requestRide(i: RequestRideInput): Promise<RideRow> {
+  // City/state areas are checked by address text in the database, and Mapbox
+  // POI addresses often omit the UF.
+  const [originAddress, destAddress] = await Promise.all([
+    addressWithServiceArea(i.originAddress, [i.originLng, i.originLat]),
+    addressWithServiceArea(i.destAddress, [i.destLng, i.destLat]),
+  ]);
   const { data, error } = await supabase.rpc('request_ride', {
-    p_origin_lat: i.originLat, p_origin_lng: i.originLng, p_origin_address: i.originAddress,
-    p_dest_lat: i.destLat, p_dest_lng: i.destLng, p_dest_address: i.destAddress,
+    p_origin_lat: i.originLat, p_origin_lng: i.originLng, p_origin_address: originAddress,
+    p_dest_lat: i.destLat, p_dest_lng: i.destLng, p_dest_address: destAddress,
     p_ride_type: i.rideType ?? 'economy', p_payment_method: i.paymentMethod ?? 'pix',
     p_requires_female_driver: i.requiresFemaleDriver ?? false,
   });
@@ -62,13 +69,16 @@ export async function updateRideDestination(
     p_ride_id: rideId,
     p_dest_lat: destinationLat,
     p_dest_lng: destinationLng,
-    p_dest_address: destinationAddress,
+    p_dest_address: await addressWithServiceArea(destinationAddress, [destinationLng, destinationLat]),
   });
   if (error) throw error;
   return first<RideRow>(data)!;
 }
 
 export async function cancelRide(rideId: string, reason?: string): Promise<void> {
+  // Only text reaches the RPC: a press event passed by mistake is a cyclic
+  // object and breaks the JSON body, so the ride could never be cancelled.
+  const safeReason = typeof reason === 'string' && reason.trim() ? reason.trim().slice(0, 500) : null;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), CANCEL_TIMEOUT_MS);
 
@@ -78,7 +88,7 @@ export async function cancelRide(rideId: string, reason?: string): Promise<void>
     // the builder returned by rpc(). The request still uses Supabase's native
     // AbortSignal support at runtime.
     const request = (supabase as any)
-      .rpc('cancel_ride', { p_ride_id: rideId, p_reason: reason ?? null })
+      .rpc('cancel_ride', { p_ride_id: rideId, p_reason: safeReason })
       .abortSignal(controller.signal) as Promise<{ error?: any }>;
     const { error } = await request;
     if (controller.signal.aborted) throw new RideCancelTimeoutError();

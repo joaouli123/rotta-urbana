@@ -4,5 +4,5 @@
 export const Legal = {
   privacyUrl: 'https://rottaurbana.com.br/privacidade',
   termsUrl: 'https://rottaurbana.com.br/termos',
-  supportEmail: 'suporte@rottaurbana.com.br',
+  supportEmail: 'rottaurbana.sinop@gmail.com',
 };
