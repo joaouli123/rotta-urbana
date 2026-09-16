@@ -205,7 +205,10 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
         if (!active) return;
         const seq = ++positionSeq;
         if (area.enabled && !isWithinServiceArea(position, area)) {
+          // Outside the area the GPS cannot be the origin, but the passenger
+          // must still be able to search and pick a starting point inside it.
           setOrigin(null);
+          setOriginAddress('');
           setOutsideServiceArea(true);
           return;
         }
@@ -217,6 +220,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
         isLocationInServiceArea(position).then((allowed) => {
           if (allowed !== false || !active || seq !== positionSeq) return;
           setOrigin(null);
+          setOriginAddress('');
           setOutsideServiceArea(true);
         });
       };
@@ -324,6 +328,9 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
       if (field === 'origin') {
         setOrigin(point);
         setOriginAddress(label);
+        // A manually chosen origin is already validated above, so the
+        // "you are outside the area" notice no longer applies.
+        setOutsideServiceArea(false);
       } else {
         setDestCoords(point);
         setDestAddress(label);
@@ -344,7 +351,9 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
 
   // As-you-type place search (debounced), biased to the user's location like 99/Uber.
   useEffect(() => {
-    if (step !== 'search' || query.trim().length < 2 || !origin) { setSuggestions([]); setSearching(false); return; }
+    // No origin (passenger outside the area) still searches: searchPlaces falls
+    // back to the area center as bias and keeps filtering by the area bbox.
+    if (step !== 'search' || query.trim().length < 2) { setSuggestions([]); setSearching(false); return; }
     let cancelled = false;
     setSearching(true);
     const t = setTimeout(async () => {
@@ -396,7 +405,12 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
         requiresFemaleDriver: isFemale && preferFemaleDriver,
       });
     } else {
-      onConfirm(selectedType);
+      // Without both points the ride would go out with no addresses at all.
+      if (!origin) {
+        Alert.alert('Defina o ponto de partida', `Toque no campo de origem e escolha um endereço dentro de ${serviceAreaLabel(serviceArea)}.`);
+      } else {
+        Alert.alert('Defina o destino', 'Escolha para onde você quer ir.');
+      }
     }
   };
 
@@ -713,7 +727,7 @@ const RideRequestScreen: React.FC<RideRequestScreenProps> = ({ destination = '',
 
             {outsideServiceArea && (
               <Text style={styles.serviceAreaNotice}>
-                Você está fora da área de atendimento. No momento atendemos somente {serviceAreaLabel(serviceArea)}.
+                Você está fora da área de atendimento — atendemos somente {serviceAreaLabel(serviceArea)}. Toque no campo de origem e escolha um ponto de partida dentro da área.
               </Text>
             )}
 

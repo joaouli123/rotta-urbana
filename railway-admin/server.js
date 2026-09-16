@@ -1130,9 +1130,11 @@ adminRouter.get('/rides', requireAuth, async (req, res) => {
     esc(names[r.driver_id] ?? '—'),
     r.fare_paid ? badge('approved') : badge('pending'),
     fmtDate(r.requested_at),
-    (r.status === 'completed' && !r.fare_paid)
-      ? `<form class="inline" method="post" action="/rides/${r.id}/mark-paid">${iconBtnDollar('Marcar como Pago')}</form>`
-      : '—',
+    `<div style="display:flex;align-items:center;gap:8px;">`
+      + ((r.status === 'completed' && !r.fare_paid)
+        ? `<form class="inline" method="post" action="/rides/${r.id}/mark-paid">${iconBtnDollar('Marcar como Pago')}</form>`
+        : '')
+      + `<a class="act" style="padding:6px 12px;font-size:12px;" href="/rides/${r.id}">Detalhes</a></div>`,
   ]);
 
   const filterPills = [
@@ -1193,6 +1195,72 @@ adminRouter.get('/rides', requireAuth, async (req, res) => {
     </div>
   `;
   render(res, layout({ title: 'Corridas', active: '/rides', email: req.session.email, body }));
+});
+
+// Ride detail — the destination-change audit trail lives here, so a dispute
+// over a new route or a changed fare can always be checked.
+adminRouter.get('/rides/:id', requireAuth, async (req, res) => {
+  const rideId = req.params.id;
+  const { data: ride } = await admin.from('rides').select('*').eq('id', rideId).maybeSingle();
+  if (!ride) {
+    render(res, layout({
+      title: 'Corrida', active: '/rides', email: req.session.email,
+      body: `<div class="card"><h2>Corrida não encontrada</h2><p><a href="/rides">Voltar</a></p></div>`,
+    }));
+    return;
+  }
+
+  const { data: changesData } = await admin
+    .from('ride_destination_changes')
+    .select('*')
+    .eq('ride_id', rideId)
+    .order('created_at', { ascending: true });
+  const changes = changesData ?? [];
+
+  const names = await profileNames([ride.passenger_id, ride.driver_id, ...changes.map(c => c.changed_by)].filter(Boolean));
+
+  const summary = `
+    <div class="card">
+      <h2>Corrida ${esc(String(rideId).slice(0, 8))}</h2>
+      ${table(['Campo', 'Valor'], [
+        ['Status', badge(ride.status)],
+        ['Categoria', badge(ride.ride_type)],
+        ['Passageiro', esc(names[ride.passenger_id] ?? '—')],
+        ['Motorista', esc(names[ride.driver_id] ?? '—')],
+        ['Origem', esc(ride.origin_address ?? '—')],
+        ['Destino atual', esc(ride.destination_address ?? '—')],
+        ['Preço atual', brl(ride.price)],
+        ['Distância', `${Number(ride.distance_km ?? 0).toFixed(1)} km`],
+        ['Solicitada em', fmtDate(ride.requested_at)],
+      ])}
+    </div>
+  `;
+
+  const changeRows = changes.map((c) => [
+    fmtDate(c.created_at),
+    c.changed_by_role === 'driver' ? 'Motorista' : 'Passageiro',
+    esc(names[c.changed_by] ?? '—'),
+    esc(c.previous_address ?? '—'),
+    esc(c.new_address ?? '—'),
+    `${c.previous_price == null ? '—' : brl(c.previous_price)} → ${c.new_price == null ? '—' : brl(c.new_price)}`,
+    `${Number(c.previous_distance_km ?? 0).toFixed(1)} km → ${Number(c.new_distance_km ?? 0).toFixed(1)} km`,
+  ]);
+
+  const changesCard = `
+    <div class="card">
+      <h2>Alterações de rota (${changes.length})</h2>
+      ${changes.length
+        ? table(['Quando', 'Quem', 'Nome', 'Destino anterior', 'Novo destino', 'Preço', 'Distância'], changeRows)
+        : '<p style="color:var(--mut);font-size:13px;">Nenhuma alteração de rota nesta corrida.</p>'}
+    </div>
+  `;
+
+  const body = `
+    <p style="margin-bottom:16px;"><a href="/rides">&larr; Voltar para corridas</a></p>
+    ${summary}
+    ${changesCard}
+  `;
+  render(res, layout({ title: 'Corrida', active: '/rides', email: req.session.email, body }));
 });
 
 adminRouter.post('/rides/:id/mark-paid', requireAuth, async (req, res) => {

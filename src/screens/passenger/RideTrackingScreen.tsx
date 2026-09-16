@@ -46,6 +46,7 @@ import { openSupportTicket } from '../../services/profile';
 import { friendlyError } from '../../lib/errors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ChatModal from '../../components/ChatModal';
+import RouteChangeLog from '../../components/RouteChangeLog';
 import { subscribeMessages, currentUserId } from '../../services/chat';
 
 interface RideTrackingScreenProps {
@@ -110,6 +111,8 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
   const [routeSuggestions, setRouteSuggestions] = useState<PlaceSuggestion[]>([]);
   const [routeSearching, setRouteSearching] = useState(false);
   const [routeSaving, setRouteSaving] = useState(false);
+  // Bumped after a successful change so the log reloads with the new entry.
+  const [routeChangeKey, setRouteChangeKey] = useState(0);
 
   const canChangeRoute = rideId && (rideStatus === 'on_way' || rideStatus === 'arrived' || rideStatus === 'in_ride');
 
@@ -158,6 +161,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
         distanceKm: updated.distance_km,
         durationMin: updated.duration_min,
       });
+      setRouteChangeKey((key) => key + 1);
       setRouteEditorOpen(false);
       setRouteQuery('');
       setRouteSuggestions([]);
@@ -421,6 +425,8 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
             <Text style={styles.changeRouteTxt}>Alterar destino</Text>
           </TouchableOpacity>
         )}
+
+        <RouteChangeLog rideId={rideId ?? null} refreshKey={routeChangeKey} />
 
         {rideId && (
           <TouchableOpacity style={styles.cancelRideBtn} onPress={() => setCancelOpen(true)} activeOpacity={0.8}>

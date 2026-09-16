@@ -75,6 +75,38 @@ export async function updateRideDestination(
   return first<RideRow>(data)!;
 }
 
+export interface RideDestinationChange {
+  id: string;
+  changedByRole: 'passenger' | 'driver';
+  previousAddress: string | null;
+  previousPrice: number | null;
+  newAddress: string;
+  newPrice: number | null;
+  createdAt: string;
+}
+
+/**
+ * Destination changes logged for a ride, oldest first. RLS limits it to the
+ * ride's own passenger/driver (and admins).
+ */
+export async function getRideDestinationChanges(rideId: string): Promise<RideDestinationChange[]> {
+  const { data, error } = await (supabase as any)
+    .from('ride_destination_changes')
+    .select('id, changed_by_role, previous_address, previous_price, new_address, new_price, created_at')
+    .eq('ride_id', rideId)
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []).map((row: any) => ({
+    id: row.id,
+    changedByRole: row.changed_by_role,
+    previousAddress: row.previous_address ?? null,
+    previousPrice: row.previous_price == null ? null : Number(row.previous_price),
+    newAddress: row.new_address,
+    newPrice: row.new_price == null ? null : Number(row.new_price),
+    createdAt: row.created_at,
+  }));
+}
+
 export async function cancelRide(rideId: string, reason?: string): Promise<void> {
   // Only text reaches the RPC: a press event passed by mistake is a cyclic
   // object and breaks the JSON body, so the ride could never be cancelled.

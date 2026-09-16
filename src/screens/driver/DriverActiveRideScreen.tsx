@@ -44,6 +44,7 @@ import {
   type RideCounterpart,
 } from '../../services/rides';
 import { subscribeMessages, currentUserId } from '../../services/chat';
+import RouteChangeLog from '../../components/RouteChangeLog';
 import { friendlyError } from '../../lib/errors';
 
 // ── Geo helpers ───────────────────────────────────────────────────────────────
@@ -155,6 +156,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   const [routeSuggestions, setRouteSuggestions] = useState<PlaceSuggestion[]>([]);
   const [routeSearching, setRouteSearching] = useState(false);
   const [routeSaving, setRouteSaving] = useState(false);
+  // Bumped after a successful change so the log reloads with the new entry.
+  const [routeChangeKey, setRouteChangeKey] = useState(0);
 
   const chatOpenRef = useRef(false);
   chatOpenRef.current = chatOpen;
@@ -406,6 +409,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         distanceKm: updated.distance_km,
         durationMin: updated.duration_min,
       });
+      setRouteChangeKey((key) => key + 1);
       setRouteEditorOpen(false);
       setRouteQuery('');
       setRouteSuggestions([]);
@@ -506,6 +510,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
               <Text style={styles.changeRouteTxt}>Alterar a rota</Text>
             </TouchableOpacity>
           )}
+          <RouteChangeLog rideId={rideId ?? null} refreshKey={routeChangeKey} />
           {/* Payment method (how the driver gets paid) */}
           {paymentMethod && (
             <View style={styles.payRow}>
