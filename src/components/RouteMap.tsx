@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ViewStyle } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, ViewStyle, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../constants';
 import { Flag } from 'lucide-react-native';
 import { DEFAULT_SERVICE_AREA, getServiceArea, serviceAreaBbox, type ServiceArea } from '../services/serviceArea';
@@ -48,8 +49,16 @@ interface RouteMapProps {
   paddingBottom?: number;
   driverLocation?: LngLat;
   secondaryRoute?: { type: 'LineString'; coordinates: LngLat[] } | null;
+  /** Street route from the driver to the pickup, drawn in blue above the trip route. */
+  approachRoute?: { type: 'LineString'; coordinates: LngLat[] } | null;
   style?: ViewStyle;
 }
+
+// Line sources stay mounted with an empty shape while their route is missing,
+// so the layers keep the JSX order no matter which route arrives first.
+const EMPTY_SHAPE = { type: 'FeatureCollection', features: [] };
+const lineShape = (line?: { type: 'LineString'; coordinates: LngLat[] } | null) =>
+  line && line.coordinates?.length > 1 ? { type: 'Feature', properties: {}, geometry: line } : EMPTY_SHAPE;
 
 export const isMapAvailable = () => MAP_READY;
 
@@ -59,8 +68,24 @@ export const homeMapPadding = (topInset: number, screenHeight: number) => ({
   paddingBottom: Math.round(screenHeight * 0.5),
 });
 
-/** Driver and passenger ride maps frame the trip the same way. */
-export const RIDE_MAP_PADDING = { paddingTop: 80, paddingBottom: 320 };
+/**
+ * Driver and passenger ride maps frame the trip below the status bar and above
+ * the bottom sheet. Pass `onSheetLayout` to the sheet so the real height is used.
+ */
+export function useRideMapPadding() {
+  const insets = useSafeAreaInsets();
+  const { height } = useWindowDimensions();
+  const [sheetHeight, setSheetHeight] = useState(0);
+  const onSheetLayout = useCallback((e: LayoutChangeEvent) => {
+    const h = Math.round(e.nativeEvent.layout.height);
+    // Ignore tiny changes: each new padding re-frames the camera.
+    setSheetHeight((current) => (Math.abs(current - h) > 4 ? h : current));
+  }, []);
+  const paddingTop = insets.top + 64;
+  // Keep at least 180 px of map between the paddings to frame the trip in.
+  const paddingBottom = Math.min(sheetHeight || 320, Math.max(0, height - paddingTop - 180));
+  return { mapPadding: { paddingTop, paddingBottom }, onSheetLayout };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared service-area limit.
@@ -118,7 +143,7 @@ function useMapLimits(enabled: boolean): MapLimits | null {
   return enabled ? limits : null;
 }
 
-const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, driverLocation, secondaryRoute, style }) => {
+const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, driverLocation, secondaryRoute, approachRoute, style }) => {
   const limits = useMapLimits(restrictToSinop);
 
   if (!MAP_READY) {
@@ -143,6 +168,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
   const basePts: LngLat[] =
     route && route.coordinates.length > 1 ? [...route.coordinates]
       : (origin && destination ? [origin, destination] : []);
+  if (approachRoute && approachRoute.coordinates.length > 1) basePts.push(...approachRoute.coordinates);
   if (driverLocation && basePts.length > 0) basePts.push(driverLocation);
   const framePts: LngLat[] | null = basePts.length > 1 ? basePts : null;
   let bounds: any = null;
@@ -214,8 +240,11 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
       )}
       {destination && (
         <Mapbox.PointAnnotation id="destination" coordinate={destination} anchor={{ x: 0.5, y: 1 }}>
-          <View style={styles.flagPin}>
-            <Flag size={15} color="#000000" fill="#000000" strokeWidth={2.4} />
+          <View style={styles.destPin}>
+            <View style={styles.flagPin}>
+              <Flag size={15} color="#FFFFFF" fill="#FFFFFF" strokeWidth={2.4} />
+            </View>
+            <View style={styles.pinStem} />
           </View>
         </Mapbox.PointAnnotation>
       )}
@@ -226,24 +255,32 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
         </Mapbox.PointAnnotation>
       ))}
 
-      {route && route.coordinates?.length > 1 && (
-        <Mapbox.ShapeSource id="route" shape={{ type: 'Feature', properties: {}, geometry: route }}>
-          <Mapbox.LineLayer
-            id="routeLine"
-            style={{ lineColor: '#000000', lineWidth: 6, lineCap: 'round', lineJoin: 'round' }}
-          />
-        </Mapbox.ShapeSource>
-      )}
+      <Mapbox.ShapeSource id="route" shape={lineShape(route)}>
+        <Mapbox.LineLayer
+          id="routeLine"
+          style={{ lineColor: '#000000', lineWidth: 6, lineCap: 'round', lineJoin: 'round' }}
+        />
+      </Mapbox.ShapeSource>
+
+      {/* driver -> pickup along the streets, above the trip route */}
+      <Mapbox.ShapeSource id="approach" shape={lineShape(approachRoute)}>
+        <Mapbox.LineLayer
+          id="approachCasing"
+          style={{ lineColor: '#FFFFFF', lineWidth: 10, lineCap: 'round', lineJoin: 'round' }}
+        />
+        <Mapbox.LineLayer
+          id="approachLine"
+          style={{ lineColor: Colors.info, lineWidth: 6, lineCap: 'round', lineJoin: 'round' }}
+        />
+      </Mapbox.ShapeSource>
 
       {/* driver -> pickup line (the approaching car) */}
-      {secondaryRoute && secondaryRoute.coordinates?.length > 1 && (
-        <Mapbox.ShapeSource id="route2" shape={{ type: 'Feature', properties: {}, geometry: secondaryRoute }}>
-          <Mapbox.LineLayer
-            id="routeLine2"
-            style={{ lineColor: '#555555', lineWidth: 4, lineDasharray: [2, 2], lineCap: 'round' }}
-          />
-        </Mapbox.ShapeSource>
-      )}
+      <Mapbox.ShapeSource id="route2" shape={lineShape(secondaryRoute)}>
+        <Mapbox.LineLayer
+          id="routeLine2"
+          style={{ lineColor: '#555555', lineWidth: 4, lineDasharray: [2, 2], lineCap: 'round' }}
+        />
+      </Mapbox.ShapeSource>
       {driverLocation && (
         <Mapbox.PointAnnotation id="liveDriver" coordinate={driverLocation}>
           <View style={styles.carPin} />
@@ -270,12 +307,16 @@ const styles = StyleSheet.create({
     width: 16, height: 16, borderRadius: 4, backgroundColor: Colors.primary,
     borderWidth: 2, borderColor: '#fff', transform: [{ rotate: '45deg' }],
   },
+  // Red pin, matching the red "Destino" dot of the ride cards. The side padding
+  // keeps the shadow inside the bitmap Android draws for the annotation.
+  destPin: { alignItems: 'center', paddingHorizontal: 6, paddingTop: 2 },
   flagPin: {
-    width: 30, height: 30, borderRadius: 15,
-    backgroundColor: Colors.primary, borderWidth: 2.5, borderColor: '#FFFFFF',
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: Colors.danger, borderWidth: 2.5, borderColor: '#FFFFFF',
     alignItems: 'center', justifyContent: 'center',
     boxShadow: '0 3px 8px rgba(0,0,0,0.3)',
   },
+  pinStem: { width: 4, height: 9, marginTop: -1, backgroundColor: Colors.danger, borderBottomLeftRadius: 2, borderBottomRightRadius: 2 },
 });
 
 export default RouteMap;

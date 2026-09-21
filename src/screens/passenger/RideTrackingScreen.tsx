@@ -38,7 +38,7 @@ import {
 } from 'lucide-react-native';
 import { Avatar, Rating, Card } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
-import RouteMap, { RIDE_MAP_PADDING } from '../../components/RouteMap';
+import RouteMap, { useRideMapPadding } from '../../components/RouteMap';
 import { getRoute, isCoordinateWithinServiceArea, placeLabel, resolvePlace, searchPlaces, type LngLat, type PlaceSuggestion } from '../../services/geo';
 import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
 import { getRideDriverLocation, getRideCounterpart, updateRideDestination, type RideCounterpart } from '../../services/rides';
@@ -82,6 +82,23 @@ function haversineKm(a: [number, number], b: [number, number]): number {
   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
+/** Share of the route already covered, up to the route point closest to `pos`. */
+function routeProgress(coords: [number, number][], pos: [number, number]): number | null {
+  if (coords.length < 2) return null;
+  let closest = 0, closestKm = Infinity;
+  coords.forEach((c, i) => {
+    const km = haversineKm(c, pos);
+    if (km < closestKm) { closestKm = km; closest = i; }
+  });
+  let done = 0, total = 0;
+  for (let i = 1; i < coords.length; i++) {
+    const km = haversineKm(coords[i - 1], coords[i]);
+    total += km;
+    if (i <= closest) done += km;
+  }
+  return total > 0 ? done / total : null;
+}
+
 const REPORT_REASONS = [
   'Comportamento inadequado',
   'Rota diferente do combinado',
@@ -101,6 +118,7 @@ const CANCEL_REASONS = [
 
 const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted, onCancel, onPanic, origin, destination, rideId, status, price, distanceKm, durationMin, destinationAddress, onDestinationChanged }) => {
   const insets = useSafeAreaInsets();
+  const { mapPadding, onSheetLayout } = useRideMapPadding();
   const [rideStatus, setRideStatus] = useState<RideStatus>('on_way');
   const [route, setRoute] = useState<{ type: 'LineString'; coordinates: [number, number][] } | null>(null);
   const [driverLoc, setDriverLoc] = useState<[number, number] | null>(null);
@@ -311,6 +329,14 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     ? Math.max(1, Math.round((haversineKm(driverLoc, origin) / 30) * 60))
     : null;
 
+  // Trip progress and time left, from the driver's last known position.
+  const rideProgress = rideStatus === 'in_ride' && route && driverLoc
+    ? routeProgress(route.coordinates, driverLoc)
+    : null;
+  const arrivalMin = durationMin != null && rideProgress != null
+    ? Math.max(1, Math.ceil(durationMin * (1 - rideProgress)))
+    : durationMin;
+
   // ── Status config ─────────────────────────────────────────
   const statusConfig = {
     on_way: { label: 'Motorista a caminho', color: Colors.info, eta: '3 min' },
@@ -323,7 +349,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
       {/* Mapa (Mapbox no dev build; placeholder no Expo Go) com a rota traçada */}
-      <RouteMap origin={origin} destination={destination} route={route} restrictToSinop driverLocation={driverLoc ?? undefined} secondaryRoute={driverLine} {...RIDE_MAP_PADDING} style={styles.map} />
+      <RouteMap origin={origin} destination={destination} route={route} restrictToSinop driverLocation={driverLoc ?? undefined} secondaryRoute={driverLine} {...mapPadding} style={styles.map} />
 
       {/* Panic button */}
       <TouchableOpacity style={[styles.panicBtn, { top: insets.top + 8 }]} onPress={onPanic}>
@@ -331,7 +357,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
       </TouchableOpacity>
 
       {/* ── Bottom Sheet ──────────────────────────────────────── */}
-      <View style={styles.sheet}>
+      <View style={styles.sheet} onLayout={onSheetLayout}>
         <View style={styles.handle} />
 
         {/* ── ON WAY state ─────────────────────────── */}
@@ -375,6 +401,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
               onChat={openChat}
               unreadCount={unreadCount}
             />
+            <TripSummary price={fmtMoney(price)} distance={distanceKm != null ? `${distanceKm.toFixed(1)} km` : '—'} duration={durationMin != null ? `~${durationMin} min` : '—'} />
             <View style={styles.boardHint}>
               <Clock size={14} color={Colors.textMuted} />
               <Text style={styles.boardHintTxt}>Entre no veículo. A corrida inicia quando o motorista confirmar.</Text>
@@ -390,13 +417,13 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
                 <Car size={15} color={Colors.primaryDark} />
                 <Text style={styles.inRidePillTxt}>Em corrida</Text>
               </LinearGradient>
-              <Text style={styles.inRideEta}>{durationMin != null ? `Chegada em ~${durationMin} min` : 'Em andamento'}</Text>
+              <Text style={styles.inRideEta}>{arrivalMin != null ? `Chegada em ~${arrivalMin} min` : 'Em andamento'}</Text>
             </View>
             {/* Progress */}
             <View style={styles.progressRow}>
               <View style={[styles.progressDot, { backgroundColor: Colors.primary }]} />
               <View style={styles.progressTrack}>
-                <View style={[styles.progressFill, { width: '50%' }]} />
+                <View style={[styles.progressFill, { width: `${Math.round((rideProgress ?? 0) * 100)}%` }]} />
               </View>
               <View style={[styles.progressDot, { backgroundColor: Colors.danger }]} />
             </View>

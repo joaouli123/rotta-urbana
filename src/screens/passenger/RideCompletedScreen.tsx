@@ -20,10 +20,18 @@ import { Colors, Radius } from '../../constants';
 import { rateRide, getRideCounterpart, type RideCounterpart } from '../../services/rides';
 import { createRideCheckout, getRidePayment, type RidePayment } from '../../services/payments';
 import { playSound } from '../../lib/sounds';
-import type { RideRow, RideTypeDb } from '../../types/db';
+import type { PaymentMethodDb, RideRow, RideTypeDb } from '../../types/db';
 
 const fmtMoney = (v?: number | null) =>
   v != null ? 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+
+// How the passenger settles the fare, shown under the value.
+const PAY_HINT: Partial<Record<PaymentMethodDb, string>> = {
+  cash: 'Pague em dinheiro ao motorista',
+  card: 'Pague no cartão, na maquininha do motorista',
+  pix: 'Pague por PIX na chave do motorista',
+  mercadopago: 'Pague pelo Mercado Pago logo abaixo',
+};
 
 const imgEconomico = require('../../../assets/icons/icone_economico.png');
 const imgConforto  = require('../../../assets/icons/icone_conforto.png');
@@ -192,7 +200,14 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
         <View style={styles.successSection}>
           <IllustrationRideComplete rideType={effectiveType} />
           <Text style={styles.successTitle}>Chegou ao destino!</Text>
-          <Text style={styles.successSub}>Corrida concluida com sucesso</Text>
+          <Text style={styles.successSub}>Corrida concluída com sucesso</Text>
+          <View style={styles.fareHero}>
+            <Text style={styles.fareHeroLabel}>Valor da corrida</Text>
+            <Text style={styles.fareHeroValue}>{fmtMoney(ride?.price)}</Text>
+            {ride?.payment_method && PAY_HINT[ride.payment_method] && (
+              <Text style={styles.fareHeroPay}>{PAY_HINT[ride.payment_method]}</Text>
+            )}
+          </View>
         </View>
 
         {/* Trip Summary Card */}
@@ -201,23 +216,18 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
           <View style={styles.summaryRow}>
             <View style={styles.summaryItem}>
               <Text style={styles.summaryValue}>{ride?.distance_km != null ? `${ride.distance_km.toFixed(1)} km` : '—'}</Text>
-              <Text style={styles.summaryLabel}>Distancia</Text>
+              <Text style={styles.summaryLabel}>Distância</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.summaryItem}>
               <Text style={styles.summaryValue}>{ride?.duration_min != null ? `${ride.duration_min} min` : '—'}</Text>
-              <Text style={styles.summaryLabel}>Duracao</Text>
+              <Text style={styles.summaryLabel}>Duração</Text>
             </View>
             <View style={styles.divider} />
             <View style={styles.summaryItem}>
               <Text style={styles.summaryValue} numberOfLines={1}>{destShort}</Text>
               <Text style={styles.summaryLabel}>Destino</Text>
             </View>
-          </View>
-
-          <View style={styles.priceBox}>
-            <Text style={styles.priceLabel}>Total cobrado</Text>
-            <Text style={styles.priceValue}>{fmtMoney(ride?.price)}</Text>
           </View>
 
           <View style={styles.originDestRow}>
@@ -303,7 +313,7 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
             </View>
             {rating > 0 && (
               <Text style={styles.ratingHint}>
-                {rating >= 4 ? 'Que otimo! Motorista excelente!' : rating >= 3 ? 'Obrigado pela avaliacao!' : 'Sentimos muito. Vamos melhorar!'}
+                {rating >= 4 ? 'Que ótimo! Motorista excelente!' : rating >= 3 ? 'Obrigado pela avaliação!' : 'Sentimos muito. Vamos melhorar!'}
               </Text>
             )}
             <TextInput
@@ -341,11 +351,11 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
               <View style={styles.thankIconWrap}>
                 <Star size={28} color={Colors.textInverse} fill={Colors.textInverse} />
               </View>
-              <Text style={styles.thankYou}>Obrigado pela avaliacao!</Text>
+              <Text style={styles.thankYou}>Obrigado pela avaliação!</Text>
               <Text style={styles.redirecting}>
                 {ride?.payment_method === 'mercadopago' && ridePayment?.status !== 'approved'
                   ? 'Finalize o pagamento acima ou volte ao início quando quiser.'
-                  : 'Voltando para o inicio...'}
+                  : 'Voltando para o início...'}
               </Text>
               {ride?.payment_method === 'mercadopago' && ridePayment?.status !== 'approved' && (
                 <Button title="Voltar ao início" onPress={onGoHome} variant="ghost" style={{ marginTop: 12 }} />
@@ -407,6 +417,15 @@ const styles = StyleSheet.create({
   successSection: { alignItems: 'center', marginBottom: 24 },
   successTitle: { fontSize: 26, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary, marginBottom: 6, marginTop: 8 },
   successSub: { fontSize: 15, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary },
+  fareHero: {
+    alignSelf: 'stretch', alignItems: 'center', marginTop: 16,
+    paddingVertical: 14, paddingHorizontal: 16,
+    backgroundColor: Colors.primary + '1A', borderRadius: Radius.md,
+    borderWidth: 1.5, borderColor: Colors.primary + '55',
+  },
+  fareHeroLabel: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary },
+  fareHeroValue: { fontSize: 36, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
+  fareHeroPay: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary, textAlign: 'center' },
 
   summaryCard: { marginBottom: 16, padding: 20 },
   cardTitle: { fontSize: 16, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary, marginBottom: 16 },
@@ -415,14 +434,6 @@ const styles = StyleSheet.create({
   summaryLabel: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: Colors.textMuted },
   summaryValue: { fontSize: 16, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
   divider: { width: 1, height: 36, backgroundColor: Colors.border },
-  priceBox: {
-    backgroundColor: Colors.primary + '1A', borderRadius: Radius.md,
-    padding: 16, flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', marginBottom: 16,
-    borderWidth: 1.5, borderColor: Colors.primary + '55',
-  },
-  priceLabel: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary },
-  priceValue: { fontSize: 26, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
   originDestRow: { gap: 4 },
   odPoint: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   odDot: { width: 10, height: 10, borderRadius: 5 },

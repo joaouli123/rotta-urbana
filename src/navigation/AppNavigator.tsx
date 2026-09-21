@@ -484,7 +484,6 @@ const DriverFlow: React.FC = () => {
   const [ratingRide, setRatingRide] = useState<RideRow | null>(null);
   const [subscriptionAccess, setSubscriptionAccess] = useState<'loading' | 'active' | 'blocked'>('loading');
   const [activePoints, setActivePoints] = useState<{ origin: [number, number]; dest: [number, number] } | null>(null);
-  const watchRef = useRef<Location.LocationSubscription | null>(null);
   const screenRef = useRef(screen);
   screenRef.current = screen;
   // Rides this driver has already declined — kept out of the poll/realtime
@@ -498,8 +497,6 @@ const DriverFlow: React.FC = () => {
       : loaded;
     setSubscriptionAccess(isSubscriptionCurrent(current) ? 'active' : 'blocked');
     if (!isSubscriptionCurrent(current)) {
-      watchRef.current?.remove();
-      watchRef.current = null;
       setOnline(false);
       setPendingRequest(null);
       await setStatus('offline').catch(() => {});
@@ -601,6 +598,9 @@ const DriverFlow: React.FC = () => {
     registerForPushNotifications();
     Promise.all([getMyDriver(), getActiveRide()]).then(([d, current]) => {
       if (current?.driver_id && current.driver_id === d?.id) {
+        // The driver was online to accept it, and finishing it puts them
+        // back online on the server.
+        setOnline(true);
         setActiveRide(current);
         setScreen('driver_active_ride');
       } else if (d?.status === 'online') {
@@ -609,8 +609,28 @@ const DriverFlow: React.FC = () => {
     }).catch(() => {});
   }, []);
 
-  // Stop the GPS watch when leaving the driver area.
-  useEffect(() => () => { watchRef.current?.remove(); }, []);
+  // Send the location while online and during a ride, including a ride
+  // restored after a restart or kept after the subscription expired.
+  const tracking = online || !!activeRide;
+  useEffect(() => {
+    if (!tracking) return;
+    let cancelled = false;
+    let sub: Location.LocationSubscription | null = null;
+    (async () => {
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (cancelled || status !== 'granted') return;
+      const next = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, distanceInterval: 0, timeInterval: 4000 },
+        (pos) => {
+          setDriverCoords([pos.coords.longitude, pos.coords.latitude]);
+          updateLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.heading ?? undefined).catch(() => {});
+        },
+      );
+      if (cancelled) next.remove();
+      else sub = next;
+    })().catch(() => {});
+    return () => { cancelled = true; sub?.remove(); };
+  }, [tracking]);
 
   const handleLogout = async () => { await clearPushToken(); await signOut(); };
 
@@ -648,19 +668,10 @@ const DriverFlow: React.FC = () => {
             setScreen('ride_notification');
           }
         } catch { /* no existing rides or not verified */ }
-        watchRef.current = await Location.watchPositionAsync(
-          { accuracy: Location.Accuracy.High, distanceInterval: 0, timeInterval: 4000 },
-          (pos) => {
-            setDriverCoords([pos.coords.longitude, pos.coords.latitude]);
-            updateLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.heading ?? undefined).catch(() => {});
-          },
-        );
       } catch (e: any) {
         Alert.alert('Não foi possível ficar online', `${friendlyError(e?.message)}\nSeu cadastro precisa estar verificado pelo admin.`);
       }
     } else {
-      watchRef.current?.remove();
-      watchRef.current = null;
       try { await setStatus('offline'); } catch { /* ignore */ }
       setOnline(false);
     }
@@ -684,6 +695,9 @@ const DriverFlow: React.FC = () => {
 
   const completeRide = () => {
     playSound('complete');
+    // Finishing a ride puts the driver back online on the server only while the
+    // subscription is current. Follow what the server decided.
+    getMyDriver().then((d) => setOnline(d?.status === 'online')).catch(() => {});
     // The ride was already marked 'completed' inside DriverActiveRideScreen (goNext).
     // Re-calling updateRideStatus here would fail and show a false error — instead,
     // move to the passenger-rating step.
@@ -776,6 +790,8 @@ const DriverFlow: React.FC = () => {
           originAddress={activeRide?.origin_address}
           destinationAddress={activeRide?.destination_address}
           paymentMethod={activeRide?.payment_method}
+          price={activeRide?.price}
+          rideStatus={activeRide?.status}
           onDestinationChanged={(nextDestination, nextAddress, pricing) => {
             setActivePoints((current) => current ? { ...current, dest: nextDestination } : current);
             setActiveRide((current) => current ? {
@@ -797,6 +813,8 @@ const DriverFlow: React.FC = () => {
       return (
         <DriverRatePassengerScreen
           rideId={ratingRide?.id}
+          price={ratingRide?.price}
+          paymentMethod={ratingRide?.payment_method}
           onDone={() => { setRatingRide(null); setScreen('driver_home'); }}
         />
       );

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -30,8 +30,9 @@ import {
 import * as Location from 'expo-location';
 import { Avatar, Button, Card } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
-import RouteMap, { RIDE_MAP_PADDING } from '../../components/RouteMap';
+import RouteMap, { useRideMapPadding } from '../../components/RouteMap';
 import type { LngLat } from '../../components/RouteMap';
+import type { RideStatusDb } from '../../types/db';
 import { getRoute, isCoordinateWithinServiceArea, placeLabel, resolvePlace, searchPlaces, type PlaceSuggestion } from '../../services/geo';
 import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -76,10 +77,22 @@ function trimPolyline(coords: LngLat[], pos: LngLat): LngLat[] {
   return coords.slice(Math.max(0, best - 1));
 }
 
+const fmtMoney = (v?: number | null) =>
+  v != null ? 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type RouteGeometry = { type: 'LineString'; coordinates: LngLat[] };
 type DriverRideStatus = 'to_passenger' | 'passenger_pickup' | 'in_ride' | 'completed';
+
+// A ride reopened after an app restart resumes at the step saved in the database.
+const STEP_BY_RIDE_STATUS: Partial<Record<RideStatusDb, DriverRideStatus>> = {
+  driver_arrived: 'passenger_pickup',
+  in_progress: 'in_ride',
+};
+const STEP_ORDER: DriverRideStatus[] = ['to_passenger', 'passenger_pickup', 'in_ride', 'completed'];
+
+const APPROACH_RETRY_MS = 8_000;
 
 interface DriverActiveRideProps {
   onCompleted: () => void;
@@ -91,6 +104,10 @@ interface DriverActiveRideProps {
   originAddress?: string;
   destinationAddress?: string;
   paymentMethod?: 'pix' | 'cash' | 'card' | 'boleto' | 'mercadopago';
+  /** Current fare of the ride, shown during the whole ride. */
+  price?: number | null;
+  /** Ride status in the database, kept fresh by the navigator. */
+  rideStatus?: RideStatusDb;
   onDestinationChanged?: (
     destination: LngLat,
     address: string,
@@ -127,10 +144,15 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   originAddress,
   destinationAddress,
   paymentMethod,
+  price,
+  rideStatus,
   onDestinationChanged,
 }) => {
   const insets = useSafeAreaInsets();
-  const [status, setStatus] = useState<DriverRideStatus>('to_passenger');
+  const { mapPadding, onSheetLayout } = useRideMapPadding();
+  const [status, setStatus] = useState<DriverRideStatus>(
+    () => (rideStatus && STEP_BY_RIDE_STATUS[rideStatus]) || 'to_passenger',
+  );
   const [tripRoute, setTripRoute] = useState<RouteGeometry | null>(null);
   const [approachRoute, setApproachRoute] = useState<RouteGeometry | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
@@ -139,6 +161,9 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   const [busy, setBusy] = useState(false);
   const [currentDestination, setCurrentDestination] = useState<LngLat | undefined>(destination);
   const [currentDestinationAddress, setCurrentDestinationAddress] = useState(destinationAddress);
+  // Saved fare returned when the ride is completed, shown to settle the payment.
+  const [finalPrice, setFinalPrice] = useState<number | null>(null);
+  const [approachRetry, setApproachRetry] = useState(0);
 
   // Driver live position
   const [driverPos, setDriverPos] = useState<LngLat | null>(null);
@@ -163,7 +188,34 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   chatOpenRef.current = chatOpen;
   const meRef = useRef<string | null>(null);
   const totalDistRef = useRef(0);          // full trip distance (meters)
-  const lastApproachPosRef = useRef<LngLat | null>(null);
+  const approachRef = useRef<{ req: number; from: LngLat | null; retryAt: number; timer?: ReturnType<typeof setTimeout> }>(
+    { req: 0, from: null, retryAt: 0 },
+  );
+  const finishedRef = useRef(false);
+  const finishTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const onCompletedRef = useRef(onCompleted);
+  onCompletedRef.current = onCompleted;
+
+  // Shows the fare, then moves on to the rating. Runs once, whether the
+  // completion came from the button or from the saved ride.
+  const finish = useCallback((fare: number | null) => {
+    if (finishedRef.current) return;
+    finishedRef.current = true;
+    setFinalPrice(fare);
+    setStatus('completed');
+    finishTimerRef.current = setTimeout(() => onCompletedRef.current(), 3000);
+  }, []);
+
+  useEffect(() => () => clearTimeout(finishTimerRef.current), []);
+
+  // The navigator follows the saved ride (realtime and polling). Move forward
+  // to its step, never back, so a lost answer can't leave the driver stuck.
+  useEffect(() => {
+    if (rideStatus === 'completed') { finish(price ?? null); return; }
+    const step = rideStatus && STEP_BY_RIDE_STATUS[rideStatus];
+    if (step) setStatus((cur) => (STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(cur) ? step : cur));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rideStatus]);
 
   // The navigator receives realtime updates too. Keep the local map/card in
   // sync when the ride row changes outside this screen.
@@ -172,50 +224,83 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     setCurrentDestinationAddress(destinationAddress);
   }, [destination?.[0], destination?.[1], destinationAddress]);
 
-  // ── Fetch trip route (pickup → destination) once ────────────────────────────
+  // ── Fetch trip route (pickup → destination), retrying while it fails ────────
   useEffect(() => {
     if (!origin || !currentDestination) return;
     let active = true;
-    getRoute(origin, currentDestination)
-      .then((r) => {
-        if (!active || !r) return;
-        setTripRoute(r.geometry as RouteGeometry);
-        totalDistRef.current = polyLen(r.geometry.coordinates as LngLat[]);
-      })
-      .catch(() => {});
-    return () => { active = false; };
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    // A route to the previous destination would contradict the moved flag.
+    setTripRoute(null);
+    const load = (attempt: number) => {
+      getRoute(origin, currentDestination)
+        .then((r) => {
+          if (!active) return;
+          if (!r) throw new Error('route unavailable');
+          setTripRoute(r.geometry as RouteGeometry);
+          totalDistRef.current = polyLen(r.geometry.coordinates as LngLat[]);
+        })
+        .catch(() => {
+          // Offline or timed out: try again after 3 s, 6 s, 12 s… up to 30 s.
+          if (active) retry = setTimeout(() => load(attempt + 1), Math.min(30_000, 3_000 * 2 ** attempt));
+        });
+    };
+    load(0);
+    return () => { active = false; clearTimeout(retry); };
   }, [origin?.[0], origin?.[1], currentDestination?.[0], currentDestination?.[1]]);
 
   // ── Fetch approach route (driver → pickup) when heading to passenger ─────────
-  // Re-fetch only when driver moves > 80m to avoid hammering the API.
+  // Re-fetch only when driver moves > 80m to avoid hammering the API. A newer
+  // GPS fix must not discard the request in flight; only a newer request does.
   useEffect(() => {
     if (status !== 'to_passenger' || !driverPos || !origin) return;
-    const last = lastApproachPosRef.current;
-    if (last && haversineM(last, driverPos) < 80) return;
-    lastApproachPosRef.current = driverPos;
-    let active = true;
+    const s = approachRef.current;
+    if (s.from ? haversineM(s.from, driverPos) < 80 : Date.now() < s.retryAt) return;
+    s.from = driverPos;
+    const req = ++s.req;
+    const failed = () => {
+      if (req !== approachRef.current.req) return;
+      // Offline or timed out: retry soon, even if the car is standing still.
+      approachRef.current.from = null;
+      approachRef.current.retryAt = Date.now() + APPROACH_RETRY_MS;
+      approachRef.current.timer = setTimeout(() => {
+        approachRef.current.retryAt = 0;
+        setApproachRetry((n) => n + 1);
+      }, APPROACH_RETRY_MS);
+    };
     getRoute(driverPos, origin)
-      .then((r) => { if (active && r) setApproachRoute(r.geometry as RouteGeometry); })
-      .catch(() => {});
-    return () => { active = false; };
+      .then((r) => {
+        if (req !== approachRef.current.req) return;
+        if (r) setApproachRoute(r.geometry as RouteGeometry);
+        else failed();
+      })
+      .catch(failed);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [driverPos, status]);
+  }, [driverPos, status, origin?.[0], origin?.[1], approachRetry]);
+
+  useEffect(() => () => {
+    approachRef.current.req++;
+    clearTimeout(approachRef.current.timer);
+  }, []);
 
   // ── Live GPS watch ───────────────────────────────────────────────────────────
   useEffect(() => {
+    let cancelled = false;
     let sub: Location.LocationSubscription | null = null;
     (async () => {
       const { status: perm } = await Location.getForegroundPermissionsAsync();
-      if (perm !== 'granted') return;
-      sub = await Location.watchPositionAsync(
+      if (cancelled || perm !== 'granted') return;
+      const next = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, distanceInterval: 0, timeInterval: 3000 },
         (pos) => {
           setDriverPos([pos.coords.longitude, pos.coords.latitude]);
           setDriverSpeedMs(Math.max(0, pos.coords.speed ?? 0));
         },
       );
-    })();
-    return () => { sub?.remove(); };
+      // The screen may have closed while the watch was starting.
+      if (cancelled) next.remove();
+      else sub = next;
+    })().catch(() => {});
+    return () => { cancelled = true; sub?.remove(); };
   }, []);
 
   // ── Ride counterpart & chat ──────────────────────────────────────────────────
@@ -256,18 +341,19 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   }, [rideId]);
 
   // ── Computed: trimmed route + progress + ETA ─────────────────────────────────
-  const { activeRoute, progress, etaText } = useMemo(() => {
-    // --- approaching passenger ---
+  const { activeRoute, approachLine, progress, etaText } = useMemo(() => {
+    // --- approaching passenger: street route to the pickup over the whole trip ---
     if (status === 'to_passenger') {
       const base = approachRoute;
-      if (!base || !driverPos) return { activeRoute: base, progress: 0, etaText: null };
+      if (!base || !driverPos) return { activeRoute: tripRoute, approachLine: base, progress: 0, etaText: null };
       const trimmed: RouteGeometry = { ...base, coordinates: trimPolyline(base.coordinates, driverPos) };
       const remaining = polyLen(trimmed.coordinates);
       const total = polyLen(base.coordinates) || 1;
       const spd = driverSpeedMs > 0.5 ? driverSpeedMs : 8.33; // fallback 30 km/h
       const eta = Math.max(1, Math.ceil(remaining / spd / 60));
       return {
-        activeRoute: trimmed,
+        activeRoute: tripRoute,
+        approachLine: trimmed,
         progress: Math.min(1, (total - remaining) / total),
         etaText: `~${eta} min para o passageiro`,
       };
@@ -276,7 +362,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     // --- in ride: trim trip route as driver moves ---
     if (status === 'in_ride') {
       const base = tripRoute;
-      if (!base || !driverPos) return { activeRoute: base, progress: 0, etaText: null };
+      if (!base || !driverPos) return { activeRoute: base, approachLine: null, progress: 0, etaText: null };
       const trimmed: RouteGeometry = { ...base, coordinates: trimPolyline(base.coordinates, driverPos) };
       const remaining = polyLen(trimmed.coordinates);
       const total = totalDistRef.current || polyLen(base.coordinates) || 1;
@@ -284,13 +370,19 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       const eta = Math.max(1, Math.ceil(remaining / spd / 60));
       return {
         activeRoute: trimmed,
+        approachLine: null,
         progress: Math.min(1, (total - remaining) / total),
         etaText: `~${eta} min para o destino`,
       };
     }
 
-    return { activeRoute: tripRoute, progress: 0, etaText: null };
+    return { activeRoute: tripRoute, approachLine: null, progress: 0, etaText: null };
   }, [status, tripRoute, approachRoute, driverPos, driverSpeedMs]);
+
+  // Until the street route arrives, a dashed straight line links the car to the pickup.
+  const pickupLine: RouteGeometry | null = status === 'to_passenger' && !approachLine && driverPos && origin
+    ? { type: 'LineString', coordinates: [driverPos, origin] }
+    : null;
 
   // ── Advance status ───────────────────────────────────────────────────────────
   const callPassenger = () => {
@@ -310,9 +402,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         if (rideId) await updateRideStatus(rideId, 'in_progress');
         setStatus('in_ride');
       } else if (status === 'in_ride') {
-        if (rideId) await updateRideStatus(rideId, 'completed');
-        setStatus('completed');
-        setTimeout(onCompleted, 3000);
+        const done = rideId ? await updateRideStatus(rideId, 'completed') : null;
+        finish(done?.price ?? price ?? null);
       }
     } catch (e: any) {
       Alert.alert('Erro ao atualizar corrida', friendlyError(e?.message));
@@ -343,6 +434,9 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     }
   };
 
+  // The saved fare wins once the ride is completed.
+  const fare = finalPrice ?? price ?? null;
+
   // ── Status config ────────────────────────────────────────────────────────────
   const statusConfig: Record<DriverRideStatus, { label: string; sub: string; color: string; nextLabel: string }> = {
     to_passenger: {
@@ -365,7 +459,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     },
     completed: {
       label: 'Corrida finalizada!',
-      sub: 'Aguardando avaliação do passageiro',
+      sub: fare != null ? `Valor da corrida: ${fmtMoney(fare)}` : 'Aguardando avaliação do passageiro',
       color: Colors.success,
       nextLabel: '',
     },
@@ -430,10 +524,12 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         origin={origin}
         destination={currentDestination}
         route={activeRoute}
+        approachRoute={approachLine}
+        secondaryRoute={pickupLine}
         restrictToSinop
         driverLocation={driverPos ?? undefined}
         followUser
-        {...RIDE_MAP_PADDING}
+        {...mapPadding}
         style={styles.map}
       />
 
@@ -452,7 +548,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       </TouchableOpacity>
 
       {/* Bottom sheet */}
-      <View style={[styles.bottomSheet, { paddingBottom: insets.bottom + 16 }]}>
+      <View style={[styles.bottomSheet, { paddingBottom: insets.bottom + 16 }]} onLayout={onSheetLayout}>
         <View style={styles.handle} />
 
         {/* Progress bar — visible when route is active */}
@@ -511,11 +607,17 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
             </TouchableOpacity>
           )}
           <RouteChangeLog rideId={rideId ?? null} refreshKey={routeChangeKey} />
-          {/* Payment method (how the driver gets paid) */}
-          {paymentMethod && (
-            <View style={styles.payRow}>
-              <DollarSign size={12} color={Colors.success} />
-              <Text style={styles.payTxt}>Recebimento: {PAYMENT_LABEL[paymentMethod] ?? paymentMethod}</Text>
+          {/* Fare and how the driver gets paid, during the whole ride */}
+          {status !== 'completed' && (
+            <View style={styles.fareRow}>
+              <DollarSign size={14} color={Colors.success} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.fareLabel}>Valor da corrida</Text>
+                {paymentMethod && (
+                  <Text style={styles.fareSub}>Recebimento: {PAYMENT_LABEL[paymentMethod] ?? paymentMethod}</Text>
+                )}
+              </View>
+              <Text style={styles.fareValue}>{fmtMoney(fare)}</Text>
             </View>
           )}
           {/* ETA row */}
@@ -552,8 +654,15 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 
         {status === 'completed' && (
           <View style={styles.completedBox}>
-            <CheckCircle size={24} color={Colors.success} />
-            <Text style={styles.completedText}>Corrida concluída! Aguardando avaliação...</Text>
+            <CheckCircle size={26} color={Colors.success} />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.completedText}>Corrida concluída!</Text>
+              <Text style={styles.completedFareLabel}>Valor da corrida</Text>
+              <Text style={styles.completedFare}>{fmtMoney(fare)}</Text>
+              {paymentMethod && (
+                <Text style={styles.completedPay}>{PAYMENT_LABEL[paymentMethod] ?? paymentMethod}</Text>
+              )}
+            </View>
           </View>
         )}
       </View>
@@ -769,8 +878,10 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: Colors.primary + '55', backgroundColor: Colors.primary + '0D',
   },
   changeRouteTxt: { ...Typography.smallMedium, color: Colors.primary, fontWeight: '700' },
-  payRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.borderLight },
-  payTxt: { ...Typography.caption, color: Colors.textSecondary, flex: 1 },
+  fareRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  fareLabel: { ...Typography.caption, color: Colors.textSecondary },
+  fareSub: { ...Typography.caption, color: Colors.textMuted },
+  fareValue: { fontSize: 18, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
   etaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.borderLight },
   etaTxt: { ...Typography.caption, color: Colors.primary, flex: 1 },
   progressTxt: { ...Typography.caption, color: Colors.textMuted },
@@ -783,11 +894,14 @@ const styles = StyleSheet.create({
   },
   cancelBtnTxt: { ...Typography.smallMedium, color: Colors.danger, fontWeight: '600' },
   completedBox: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
+    flexDirection: 'row', alignItems: 'center', gap: 14,
     padding: 16, backgroundColor: Colors.success + '22', borderRadius: Radius.md,
     borderWidth: 1, borderColor: Colors.success + '44',
   },
-  completedText: { ...Typography.bodyMedium, color: Colors.success },
+  completedText: { ...Typography.bodyMedium, color: Colors.success, fontWeight: '700' },
+  completedFareLabel: { ...Typography.caption, color: Colors.textSecondary, marginTop: 6 },
+  completedFare: { fontSize: 28, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
+  completedPay: { ...Typography.caption, color: Colors.textSecondary },
 
   // Cancel modal
   modalWrap: { flex: 1, justifyContent: 'flex-end' },

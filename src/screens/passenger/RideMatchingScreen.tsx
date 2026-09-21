@@ -145,7 +145,7 @@ const RideMatchingScreen: React.FC<RideMatchingScreenProps> = ({ onDriverFound, 
   const arcRotate = arcSpin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
 
   const destText = destinationAddress ? destinationAddress.split(',')[0] : 'Destino';
-  const priceText = price != null ? `R$ ${Math.round(price)}` : '—';
+  const priceText = price != null ? 'R$ ' + Number(price).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
   const distText = distanceKm != null ? `${distanceKm.toFixed(1)} km` : '—';
   const etaText = durationMin != null ? `~${durationMin} min` : '—';
 
