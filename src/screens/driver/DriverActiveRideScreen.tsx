@@ -38,6 +38,7 @@ import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ChatModal from '../../components/ChatModal';
 import {
+  getRide,
   getRideCounterpart,
   updateRideStatus,
   updateRideDestination,
@@ -406,7 +407,13 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         finish(done?.price ?? price ?? null);
       }
     } catch (e: any) {
-      Alert.alert('Erro ao atualizar corrida', friendlyError(e?.message));
+      // With a weak signal the server can save the step while the answer never
+      // arrives. Check the saved ride before reporting an error.
+      const saved = rideId ? await getRide(rideId).catch(() => null) : null;
+      const step = saved && (saved.status === 'completed' ? 'completed' : STEP_BY_RIDE_STATUS[saved.status]);
+      if (step === 'completed') finish(saved?.price ?? price ?? null);
+      else if (step && STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(status)) setStatus(step);
+      else Alert.alert('Erro ao atualizar corrida', friendlyError(e?.message));
     } finally {
       setBusy(false);
     }
