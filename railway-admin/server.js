@@ -1537,7 +1537,7 @@ adminRouter.get('/leads', requireAuth, async (req, res) => {
       `<a href="mailto:${esc(l.email)}" style="color:var(--pri);font-weight:600;">${esc(l.email)}</a>`,
       esc(fmtPhone(l.phone)),
       esc(l.subject || 'Geral'),
-      `<span title="${esc(l.message)}">${esc((l.message || '').slice(0, 60))}${ (l.message || '').length > 60 ? '...' : ''}</span>`,
+      `<button type="button" class="lead-message-preview" data-lead-message="${esc(l.message || '')}" title="Clique para ler a mensagem completa">${esc((l.message || '').slice(0, 60))}${ (l.message || '').length > 60 ? '...' : ''}</button>`,
       badge(l.status || 'novo'),
       `<div style="display:flex;gap:6px;align-items:center;">${waButton} ${toggleStatusBtn} ${deleteBtn}</div>`
     ];
@@ -1567,6 +1567,21 @@ adminRouter.get('/leads', requireAuth, async (req, res) => {
       ${table(['Data/Hora', 'Nome', 'E-mail', 'Telefone', 'Assunto', 'Mensagem', 'Status', 'Ações'], rows)}
       ${pageControls}
     </div>
+    <div class="lead-modal" id="lead-message-modal" hidden role="dialog" aria-modal="true" aria-labelledby="lead-message-title">
+      <div class="lead-modal-backdrop" data-close-lead-modal></div>
+      <div class="lead-modal-card"><div class="lead-modal-head"><h2 id="lead-message-title">Mensagem completa</h2><button type="button" class="lead-modal-close" data-close-lead-modal aria-label="Fechar">×</button></div><div class="lead-modal-body" id="lead-message-content"></div></div>
+    </div>
+    <script>
+      (() => {
+        const modal = document.getElementById('lead-message-modal');
+        const content = document.getElementById('lead-message-content');
+        if (!modal || !content) return;
+        const close = () => { modal.hidden = true; document.body.classList.remove('modal-open'); };
+        document.querySelectorAll('[data-lead-message]').forEach((button) => button.addEventListener('click', () => { content.textContent = button.dataset.leadMessage || 'Mensagem vazia.'; modal.hidden = false; document.body.classList.add('modal-open'); }));
+        modal.querySelectorAll('[data-close-lead-modal]').forEach((element) => element.addEventListener('click', close));
+        document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !modal.hidden) close(); });
+      })();
+    </script>
   `;
   render(res, layout({ title: 'Leads / Contatos', active: '/leads', email: req.session.email, body }));
 });
