@@ -380,6 +380,12 @@ export const layout = ({ title, active, body, email, head = '' }) => `<!doctype 
   .progress{height:7px;background:#E2E8F0;border-radius:99px;overflow:hidden}.progress>span{display:block;height:100%;background:var(--pri);border-radius:99px}
   @media (max-width:900px){.main{margin-left:0;padding:24px 16px}.side{position:relative;width:100%;height:auto;min-height:0}.app{display:block}.side>div:first-child{display:flex;flex-wrap:wrap;align-items:center;gap:10px}.brand{padding-bottom:8px!important}.nav{display:flex;flex-wrap:wrap}.nav a{padding:8px 10px}.side-logout{margin:8px 0 0;padding-top:8px}.side>div:last-child{display:none}.split{grid-template-columns:1fr}.row2{grid-template-columns:1fr}}
   .filters a{padding:8px 16px;border:1px solid var(--line);border-radius:100px;font-size:13px;font-weight:600;color:var(--mut);margin-right:8px;background:var(--panel);transition:all .15s ease}
+  .subscription-filters{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 20px}
+  .subscription-status-filters{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+  .subscription-status-filters a{margin-right:0;white-space:nowrap}
+  .subscription-search{display:flex;align-items:center;gap:8px;flex:0 0 auto;margin-left:auto}
+  .subscription-search input{width:230px}
+  @media (max-width:900px){.subscription-filters{align-items:stretch;flex-direction:column}.subscription-search{width:100%;margin-left:0}.subscription-search input{flex:1;width:auto}}
   .filters a.on,.filters a:hover{background:var(--pri);color:#03130c;border-color:var(--pri)}
   
   /* Pagination Styling */
