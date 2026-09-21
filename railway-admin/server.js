@@ -1537,7 +1537,7 @@ adminRouter.get('/leads', requireAuth, async (req, res) => {
       `<a href="mailto:${esc(l.email)}" style="color:var(--pri);font-weight:600;">${esc(l.email)}</a>`,
       esc(fmtPhone(l.phone)),
       esc(l.subject || 'Geral'),
-      `<button type="button" class="lead-message-preview" data-lead-message="${esc(l.message || '')}" title="Clique para ler a mensagem completa">${esc((l.message || '').slice(0, 60))}${ (l.message || '').length > 60 ? '...' : ''}</button>`,
+      `<div class="lead-message-cell"><button type="button" class="lead-message-preview" data-lead-message="${esc(l.message || '')}" title="Clique para ler a mensagem completa">${esc((l.message || '').slice(0, 60))}${ (l.message || '').length > 60 ? '...' : ''}</button><button type="button" class="lead-message-open" data-lead-message="${esc(l.message || '')}">Ver mensagem completa</button></div>`,
       badge(l.status || 'novo'),
       `<div style="display:flex;gap:6px;align-items:center;">${waButton} ${toggleStatusBtn} ${deleteBtn}</div>`
     ];
