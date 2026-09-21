@@ -118,7 +118,8 @@ const CANCEL_REASONS = [
 
 const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted, onCancel, onPanic, origin, destination, rideId, status, price, distanceKm, durationMin, destinationAddress, onDestinationChanged }) => {
   const insets = useSafeAreaInsets();
-  const { mapPadding, onSheetLayout } = useRideMapPadding();
+  // The panic button ends 54 px below the status bar (top 8 + 46 px).
+  const { mapPadding, onSheetLayout } = useRideMapPadding(54);
   const [rideStatus, setRideStatus] = useState<RideStatus>('on_way');
   const [route, setRoute] = useState<{ type: 'LineString'; coordinates: [number, number][] } | null>(null);
   const [driverLoc, setDriverLoc] = useState<[number, number] | null>(null);
@@ -218,7 +219,8 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     return () => { active = false; clearInterval(iv); };
   }, [rideId]);
 
-  const driverLine = driverLoc && origin
+  // Only while the driver is coming: after pickup the line would point back.
+  const driverLine = rideStatus === 'on_way' && driverLoc && origin
     ? { type: 'LineString' as const, coordinates: [driverLoc, origin] as [number, number][] }
     : null;
 

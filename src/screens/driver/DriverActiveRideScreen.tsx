@@ -150,7 +150,9 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   onDestinationChanged,
 }) => {
   const insets = useSafeAreaInsets();
-  const { mapPadding, onSheetLayout } = useRideMapPadding();
+  // The status pill ends 66 px below the status bar; the SOS button under it
+  // takes 64 px of the right edge (16 px margin + 48 px button).
+  const { mapPadding, onSheetLayout } = useRideMapPadding(66, 64);
   const [status, setStatus] = useState<DriverRideStatus>(
     () => (rideStatus && STEP_BY_RIDE_STATUS[rideStatus]) || 'to_passenger',
   );

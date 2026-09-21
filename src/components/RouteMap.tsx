@@ -47,6 +47,8 @@ interface RouteMapProps {
   restrictToSinop?: boolean;
   paddingTop?: number;
   paddingBottom?: number;
+  /** Room taken by buttons along the right edge of the map. */
+  paddingRight?: number;
   driverLocation?: LngLat;
   secondaryRoute?: { type: 'LineString'; coordinates: LngLat[] } | null;
   /** Street route from the driver to the pickup, drawn in blue above the trip route. */
@@ -69,10 +71,12 @@ export const homeMapPadding = (topInset: number, screenHeight: number) => ({
 });
 
 /**
- * Driver and passenger ride maps frame the trip below the status bar and above
- * the bottom sheet. Pass `onSheetLayout` to the sheet so the real height is used.
+ * Driver and passenger ride maps frame the trip below the buttons at the top and
+ * above the bottom sheet. `topControls` is where the top buttons end below the
+ * status bar, and `rightControls` the width of the buttons on the right edge.
+ * Pass `onSheetLayout` to the sheet so the real height is used.
  */
-export function useRideMapPadding() {
+export function useRideMapPadding(topControls: number, rightControls = 0) {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
   const [sheetHeight, setSheetHeight] = useState(0);
@@ -81,10 +85,12 @@ export function useRideMapPadding() {
     // Ignore tiny changes: each new padding re-frames the camera.
     setSheetHeight((current) => (Math.abs(current - h) > 4 ? h : current));
   }, []);
-  const paddingTop = insets.top + 64;
+  // The destination flag stands 42 px above its point and the map adds a 24 px
+  // margin, so 26 px more keeps the whole flag 8 px below the buttons.
+  const paddingTop = insets.top + topControls + 26;
   // Keep at least 180 px of map between the paddings to frame the trip in.
   const paddingBottom = Math.min(sheetHeight || 320, Math.max(0, height - paddingTop - 180));
-  return { mapPadding: { paddingTop, paddingBottom }, onSheetLayout };
+  return { mapPadding: { paddingTop, paddingBottom, paddingRight: rightControls }, onSheetLayout };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -143,7 +149,7 @@ function useMapLimits(enabled: boolean): MapLimits | null {
   return enabled ? limits : null;
 }
 
-const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, driverLocation, secondaryRoute, approachRoute, style }) => {
+const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, paddingRight, driverLocation, secondaryRoute, approachRoute, style }) => {
   const limits = useMapLimits(restrictToSinop);
 
   if (!MAP_READY) {
@@ -161,7 +167,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
   const center = origin ?? (drivers[0] ? [drivers[0].lng, drivers[0].lat] as LngLat : [-55.5024, -11.8642] as LngLat);
   // Follow the live GPS puck only when we have no fixed points to frame.
   const follow = !restrictToSinop && !!followUser && !origin && !destination && !route;
-  const pad = { paddingTop: paddingTop ?? 0, paddingBottom: paddingBottom ?? 0, paddingLeft: 0, paddingRight: 0 };
+  const pad = { paddingTop: paddingTop ?? 0, paddingBottom: paddingBottom ?? 0, paddingLeft: 0, paddingRight: paddingRight ?? 0 };
 
   // Frame the WHOLE trip when we have a route or both endpoints.
   // Also extend bounds to include the live driver position so the pin stays on screen.
@@ -184,7 +190,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
     bounds = {
       ne: [maxLng, maxLat], sw: [minLng, minLat],
       paddingTop: (paddingTop ?? 0) + 24, paddingBottom: (paddingBottom ?? 0) + 24,
-      paddingLeft: 40, paddingRight: 40,
+      paddingLeft: 40, paddingRight: (paddingRight ?? 0) + 40,
     };
     boundsKey = [
       origin?.map((n) => n.toFixed(5)).join(',') ?? 'no-origin',
@@ -192,6 +198,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
       route?.coordinates.length ?? 0,
       paddingTop ?? 0,
       paddingBottom ?? 0,
+      paddingRight ?? 0,
     ].join(':');
   }
 
