@@ -25,6 +25,60 @@ const scopeLabel = (manager) => manager.manager_type === 'network'
     : '<span class="muted">Cidade não informada</span>';
 const errorRedirect = (res, message) => res.redirect(`/managers?error=${encodeURIComponent(message || 'Não foi possível concluir a operação.')}`);
 
+const BRAZIL_STATES = [
+  ['AC', 'Acre'], ['AL', 'Alagoas'], ['AP', 'Amapá'], ['AM', 'Amazonas'], ['BA', 'Bahia'], ['CE', 'Ceará'],
+  ['DF', 'Distrito Federal'], ['ES', 'Espírito Santo'], ['GO', 'Goiás'], ['MA', 'Maranhão'], ['MT', 'Mato Grosso'],
+  ['MS', 'Mato Grosso do Sul'], ['MG', 'Minas Gerais'], ['PA', 'Pará'], ['PB', 'Paraíba'], ['PR', 'Paraná'],
+  ['PE', 'Pernambuco'], ['PI', 'Piauí'], ['RJ', 'Rio de Janeiro'], ['RN', 'Rio Grande do Norte'], ['RS', 'Rio Grande do Sul'],
+  ['RO', 'Rondônia'], ['RR', 'Roraima'], ['SC', 'Santa Catarina'], ['SP', 'São Paulo'], ['SE', 'Sergipe'], ['TO', 'Tocantins'],
+];
+
+const cityPicker = (cities = [], id = `city-picker-${Math.random().toString(36).slice(2)}`) => {
+  const initial = cities.map((item) => ({ city: item.city, state: item.state || '' }));
+  const stateOptions = BRAZIL_STATES.map(([uf, name]) => `<option value="${uf}">${name} (${uf})</option>`).join('');
+  const chips = initial.map((item) => `<span class="chip" data-city-chip="${esc(`${item.city}|${item.state}`)}">${esc(item.city)}${item.state ? ` · ${esc(item.state)}` : ''}<button type="button" data-remove-city="${esc(`${item.city}|${item.state}`)}" aria-label="Remover ${esc(item.city)}">×</button></span>`).join('');
+  return `<div class="city-picker" id="${id}" data-cities="${esc(JSON.stringify(initial))}">
+    <div class="row2" style="margin-bottom:8px;"><select data-city-state aria-label="Estado"><option value="">Selecione o estado</option>${stateOptions}</select><select data-city-name aria-label="Cidade" disabled><option value="">Selecione primeiro o estado</option></select></div>
+    <button type="button" class="act gray" data-add-city style="margin-bottom:8px;">Adicionar cidade</button>
+    <input type="hidden" name="cities" data-city-value value="${esc(citiesToInput(initial))}">
+    <div class="chips" data-city-chips>${chips || '<span class="muted" data-city-empty>Nenhuma cidade selecionada.</span>'}</div>
+  </div>`;
+};
+
+const cityPickerScript = `
+<script>
+document.querySelectorAll('.city-picker').forEach((root) => {
+  const state = root.querySelector('[data-city-state]');
+  const city = root.querySelector('[data-city-name]');
+  const value = root.querySelector('[data-city-value]');
+  const chips = root.querySelector('[data-city-chips]');
+  let selected = JSON.parse(root.dataset.cities || '[]');
+  const key = (item) => String(item.city || '').trim().toLocaleLowerCase('pt-BR') + '|' + String(item.state || '').toUpperCase();
+  const render = () => {
+    value.value = selected.map((item) => item.city + (item.state ? '|' + item.state : '')).join(', ');
+    chips.innerHTML = selected.length ? selected.map((item) => '<span class="chip">' + item.city + (item.state ? ' · ' + item.state : '') + '<button type="button" data-remove-city="' + key(item) + '" aria-label="Remover ' + item.city + '">×</button></span>').join('') : '<span class="muted">Nenhuma cidade selecionada.</span>';
+    chips.querySelectorAll('[data-remove-city]').forEach((button) => button.addEventListener('click', () => { selected = selected.filter((item) => key(item) !== button.dataset.removeCity); render(); }));
+  };
+  state.addEventListener('change', async () => {
+    city.innerHTML = '<option value="">Carregando cidades...</option>'; city.disabled = true;
+    if (!state.value) { city.innerHTML = '<option value="">Selecione primeiro o estado</option>'; return; }
+    try {
+      const response = await fetch('/managers/cities?state=' + encodeURIComponent(state.value));
+      const cities = await response.json();
+      city.innerHTML = '<option value="">Selecione a cidade</option>' + cities.map((name) => '<option>' + name.replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])) + '</option>').join('');
+      city.disabled = false;
+    } catch (error) { city.innerHTML = '<option value="">Não foi possível carregar</option>'; }
+  });
+  root.querySelector('[data-add-city]').addEventListener('click', () => {
+    if (!state.value || !city.value) return;
+    const item = { city: city.value, state: state.value };
+    if (!selected.some((entry) => key(entry) === key(item))) selected.push(item);
+    render(); city.value = '';
+  });
+  render();
+});
+</script>`;
+
 const managerActions = (manager) => `
   <div class="actions">
     <a class="act" href="/managers/${manager.profile_id}">Acompanhar</a>
@@ -52,6 +106,21 @@ const renderManagers = async (req, res, { detailProfileId = null, admin } = {}) 
 };
 
 export function registerManagerRoutes({ adminRouter, requireAuth, render, admin }) {
+  adminRouter.get('/managers/cities', requireAuth, async (req, res) => {
+    const state = String(req.query.state || '').trim().toUpperCase();
+    if (!BRAZIL_STATES.some(([uf]) => uf === state)) return res.status(400).json({ error: 'Estado inválido.' });
+    try {
+      const response = await fetch(`https://servicodados.ibge.gov.br/api/v1/localidades/estados/${state}/municipios`);
+      if (!response.ok) throw new Error(`IBGE retornou ${response.status}`);
+      const municipalities = await response.json();
+      res.set('Cache-Control', 'public, max-age=86400');
+      return res.json(municipalities.map((item) => item.nome).sort((a, b) => a.localeCompare(b, 'pt-BR')));
+    } catch (error) {
+      console.error('[Manager cities]', error);
+      return res.status(502).json({ error: 'Não foi possível carregar os municípios.' });
+    }
+  });
+
   adminRouter.get('/managers', requireAuth, async (req, res) => {
     const loaded = await renderManagers(req, res, { admin });
     if (!loaded) return;
@@ -111,7 +180,7 @@ export function registerManagerRoutes({ adminRouter, requireAuth, render, admin 
           <p class="muted">Informe o e-mail de um usuário já existente. O painel não cria senha aqui: ele transforma o perfil cadastrado em gerente e configura seu escopo.</p>
           <form method="post" action="/managers/configure-user">
             <label>E-mail do usuário</label><input type="email" name="email" required placeholder="motorista@rottaurbana.app">
-            <div class="row2"><div><label>Tipo de gerente</label><select name="manager_type"><option value="city">Gerente por cidade</option><option value="network">Gerente de rede</option></select></div><div><label>Cidades (separe por vírgula; opcional para rede)</label><input name="cities" placeholder="São Paulo|SP, Guarulhos|SP"></div></div>
+            <div class="row2"><div><label>Tipo de gerente</label><select name="manager_type"><option value="city">Gerente por cidade</option><option value="network">Gerente de rede</option></select></div><div><label>Cidades vinculadas (opcional para rede)</label>${cityPicker()}</div></div>
             <label>Motoristas para vínculo direto (IDs separados por vírgula, opcional)</label><input name="driver_ids" placeholder="Use a edição do gerente para selecionar com nomes e veículos">
             <button class="act" type="submit" style="margin-top:16px;">Configurar gerente</button>
           </form>
@@ -126,7 +195,7 @@ export function registerManagerRoutes({ adminRouter, requireAuth, render, admin 
       </div>
       ${filterBar}
       <div class="card"><h2>Gerentes e suas equipes (${managers.length})</h2>${table(['Gerente', 'Escopo', 'Motoristas', 'Status / presença', 'Cadastro', 'Ações'], rows)}</div>
-      <div class="card" id="sem-gerente"><h2>Motoristas sem gerente no escopo (${summary.unassignedDrivers.length})</h2><p class="muted">Essa lista ajuda o administrador a identificar quem precisa ser atribuído a uma cidade ou gerente responsável.</p>${table(['Motorista', 'Cidade', 'Veículo / status', 'Verificação', 'Abrir'], unassignedRows)}</div>`;
+      <div class="card" id="sem-gerente"><h2>Motoristas sem gerente no escopo (${summary.unassignedDrivers.length})</h2><p class="muted">Essa lista ajuda o administrador a identificar quem precisa ser atribuído a uma cidade ou gerente responsável.</p>${table(['Motorista', 'Cidade', 'Veículo / status', 'Verificação', 'Abrir'], unassignedRows)}</div>${cityPickerScript}`;
     render(res, layout({ title: 'Gerenciamento de Gerentes', active: '/managers', email: req.session.email, body }));
   });
 
@@ -150,12 +219,12 @@ export function registerManagerRoutes({ adminRouter, requireAuth, render, admin 
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:20px;"><div><a href="/managers" class="muted">← Voltar para gerentes</a><h2 style="margin:10px 0 4px;font-size:22px;">${esc(manager.profile.full_name || 'Gerente')}</h2><div class="muted">${esc(manager.profile.email || '')} · ${esc(fmtPhone(manager.profile.phone))}</div></div><div class="actions">${badge(manager.is_active ? 'active' : 'suspended')}<form class="inline" method="post" action="/managers/${manager.profile_id}/toggle"><input type="hidden" name="active" value="${manager.is_active ? '0' : '1'}"><button class="act ${manager.is_active ? 'red' : ''}" type="submit">${manager.is_active ? 'Desativar acesso' : 'Reativar acesso'}</button></form></div></div>
       <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));">${kpiCard('Motoristas no escopo', manager.effectiveDriverIds.length, `${manager.explicitDriverIds.length} vínculos diretos`)}${kpiCard('Online agora', manager.stats.online, `${manager.stats.verified} verificados`)}${kpiCard('Corridas em 30 dias', manager.stats.rides, `${manager.stats.completed} concluídas`)}${kpiCard('Receita em 30 dias', brl(manager.stats.revenue), 'corridas concluídas')}</div>
       <div class="split">
-        <div class="card"><h2>Configuração de acesso</h2><p class="muted">O tipo rede inclui todos os motoristas. O tipo cidade inclui quem está na cidade operacional/endereço informado e também os vínculos diretos.</p><form method="post" action="/managers/${manager.profile_id}/configure"><div class="row2"><div><label>Tipo de gerente</label><select name="manager_type"><option value="city" ${manager.manager_type === 'city' ? 'selected' : ''}>Gerente por cidade</option><option value="network" ${manager.manager_type === 'network' ? 'selected' : ''}>Gerente de rede</option></select></div><div><label>Cidades vinculadas</label><input name="cities" value="${esc(citiesToInput(manager.cities))}" placeholder="Cidade|UF, outra cidade|UF"></div></div><label>Buscar motoristas para vínculo direto</label><input id="driver-search" type="search" placeholder="Nome, e-mail, cidade, placa..." oninput="filterManagerDrivers(this.value)"><div class="driver-picker" style="margin-top:8px;">${picker || '<div class="empty">Nenhum motorista cadastrado.</div>'}</div><button class="act" type="submit" style="margin-top:16px;">Salvar escopo e vínculos</button></form></div>
+        <div class="card"><h2>Configuração de acesso</h2><p class="muted">O tipo rede inclui todos os motoristas. O tipo cidade inclui quem está na cidade operacional/endereço informado e também os vínculos diretos.</p><form method="post" action="/managers/${manager.profile_id}/configure"><div class="row2"><div><label>Tipo de gerente</label><select name="manager_type"><option value="city" ${manager.manager_type === 'city' ? 'selected' : ''}>Gerente por cidade</option><option value="network" ${manager.manager_type === 'network' ? 'selected' : ''}>Gerente de rede</option></select></div><div><label>Cidades vinculadas</label>${cityPicker(manager.cities, `city-picker-${manager.profile_id}`)}</div></div><label>Buscar motoristas para vínculo direto</label><input id="driver-search" type="search" placeholder="Nome, e-mail, cidade, placa..." oninput="filterManagerDrivers(this.value)"><div class="driver-picker" style="margin-top:8px;">${picker || '<div class="empty">Nenhum motorista cadastrado.</div>'}</div><button class="act" type="submit" style="margin-top:16px;">Salvar escopo e vínculos</button></form></div>
         <div><div class="manager-card"><h3>Escopo atual</h3><p>${esc(manager.manager_type === 'network' ? 'Toda a rede' : 'Cidades e vínculos diretos')}</p><div class="chips" style="margin-top:12px;">${manager.manager_type === 'network' ? '<span class="chip">Todos os motoristas</span>' : (scopeLabel(manager))}</div><p style="margin-top:14px;">Responsável pela criação: <strong>${esc(manager.assignedBy.full_name || 'Administrador')}</strong></p><p>Cadastro: ${esc(fmtDate(manager.created_at))}</p></div><div class="danger-zone"><h3 style="margin:0 0 8px;font-size:15px;color:#991B1B;">Zona de acesso</h3><p class="muted">Remover o gerente exclui cidades e vínculos e restaura o perfil para a função anterior, quando aplicável.</p><form method="post" action="/managers/${manager.profile_id}/remove" onsubmit="return confirm('Confirmar remoção definitiva do acesso de gerente?')"><button class="act red" type="submit">Remover acesso de gerente</button></form></div></div>
       </div>
       <div class="card"><h2>Todos os motoristas dentro deste gerente (${manager.drivers.length})</h2><p class="muted">Use “Vincular aqui” para transformar um motorista do escopo automático em vínculo direto. Ao mover, o vínculo direto ativo em outro gerente é desativado.</p>${table(['Motorista', 'Cidade', 'Veículo / status', 'Verificação', 'Origem no escopo', 'Ação'], driverRows)}</div>
       <div class="card"><h2>Histórico administrativo</h2>${table(['Ação', 'Responsável', 'Data'], auditRows)}</div>
-      <script>function filterManagerDrivers(value){const needle=String(value||'').toLocaleLowerCase('pt-BR');document.querySelectorAll('[data-driver-search]').forEach((el)=>{el.style.display=(!needle||el.dataset.driverSearch.includes(needle))?'flex':'none';});}</script>`;
+      <script>function filterManagerDrivers(value){const needle=String(value||'').toLocaleLowerCase('pt-BR');document.querySelectorAll('[data-driver-search]').forEach((el)=>{el.style.display=(!needle||el.dataset.driverSearch.includes(needle))?'flex':'none';});}</script>${cityPickerScript}`;
     render(res, layout({ title: `Gerente · ${manager.profile.full_name || ''}`, active: '/managers', email: req.session.email, body }));
   };
 
