@@ -182,6 +182,26 @@ export async function setPlanWeeklyPrice(price: number): Promise<void> {
   if (error) throw error;
 }
 
+// ── Repasses do plano comissão ───────────────────────────────────────────────
+export interface AdminCommissionReportEntry {
+  driver_id: string;
+  full_name: string | null;
+  phone: string | null;
+  pending_count: number;
+  pending_amount: number;
+  paid_amount: number;
+  gross_amount: number;
+  commission_amount: number;
+  net_amount: number;
+  total_rides: number;
+}
+
+export async function getAdminCommissionReport(): Promise<AdminCommissionReportEntry[]> {
+  const { data, error } = await supabase.rpc('admin_commission_report');
+  if (error) throw error;
+  return (data as AdminCommissionReportEntry[]) ?? [];
+}
+
 // ── Managers ──────────────────────────────────────────────────────────────────
 export interface Manager {
   manager_id: string;

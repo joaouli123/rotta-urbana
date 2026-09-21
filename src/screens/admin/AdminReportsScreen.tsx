@@ -9,7 +9,10 @@ import {
 } from 'lucide-react-native';
 import { Card } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
-import { getAdminKpis, getFullReport, getDriverRanking, type AdminKpis, type FullReport, type DriverRankingEntry } from '../../services/admin';
+import {
+  getAdminKpis, getFullReport, getDriverRanking, getAdminCommissionReport,
+  type AdminKpis, type FullReport, type DriverRankingEntry, type AdminCommissionReportEntry,
+} from '../../services/admin';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -55,6 +58,7 @@ const AdminReportsScreen: React.FC<Props> = ({ onBack }) => {
   const [kpis, setKpis] = useState<AdminKpis | null>(null);
   const [report, setReport] = useState<FullReport | null>(null);
   const [ranking, setRanking] = useState<DriverRankingEntry[]>([]);
+  const [commissionReport, setCommissionReport] = useState<AdminCommissionReportEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('overview');
   const [rankBy, setRankBy] = useState<RankBy>('rating');
@@ -62,14 +66,16 @@ const AdminReportsScreen: React.FC<Props> = ({ onBack }) => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [k, r, rank] = await Promise.all([
+      const [k, r, rank, commissions] = await Promise.all([
         getAdminKpis(),
         getFullReport(),
         getDriverRanking(),
+        getAdminCommissionReport().catch(() => [] as AdminCommissionReportEntry[]),
       ]);
       setKpis(k);
       setReport(r);
       setRanking(rank);
+      setCommissionReport(commissions);
     } catch {
       // ignore
     } finally {
@@ -101,6 +107,14 @@ const AdminReportsScreen: React.FC<Props> = ({ onBack }) => {
   const supportInProgress = (report as any)?.complaints?.in_progress ?? 0;
   const supportClosed = (report as any)?.complaints?.closed ?? 0;
   const supportTotal = supportOpen + supportInProgress + supportClosed;
+
+  const commissionPending = commissionReport.reduce((total, row) => total + (Number(row.pending_amount) || 0), 0);
+  const commissionPaid = commissionReport.reduce((total, row) => total + (Number(row.paid_amount) || 0), 0);
+  const commissionGross = commissionReport.reduce((total, row) => total + (Number(row.gross_amount) || 0), 0);
+  const commissionTotal = commissionReport.reduce((total, row) => total + (Number(row.commission_amount) || 0), 0);
+  const commissionNet = commissionReport.reduce((total, row) => total + (Number(row.net_amount) || 0), 0);
+  const commissionRides = commissionReport.reduce((total, row) => total + (Number(row.total_rides) || 0), 0);
+  const commissionDrivers = commissionReport.filter((row) => Number(row.pending_amount) > 0).slice(0, 5);
 
   // ── Render ──────────────────────────────────────────────────────────────────
 
@@ -235,6 +249,46 @@ const AdminReportsScreen: React.FC<Props> = ({ onBack }) => {
                     </Text>
                   </View>
                 </View>
+              </Card>
+
+              {/* Repasses do plano comissão */}
+              <Card style={styles.card}>
+                <View style={styles.cardHeader}>
+                  <DollarSign size={18} color={Colors.warning} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cardTitle}>Repasses de comissão</Text>
+                    <Text style={styles.cardHint}>Valor que os motoristas devem enviar ao sistema</Text>
+                  </View>
+                </View>
+                <View style={styles.statsGrid}>
+                  <StatBox label="Total bruto" value={fmtMoneyShort(commissionGross)} />
+                  <StatBox label="Comissão sistema" value={fmtMoneyShort(commissionTotal)} color={Colors.warning} />
+                </View>
+                <View style={styles.statsGrid}>
+                  <StatBox label="Líquido motoristas" value={fmtMoneyShort(commissionNet)} color={Colors.success} />
+                  <StatBox label="A receber" value={fmtMoneyShort(commissionPending)} color={Colors.warning} />
+                </View>
+                <View style={styles.statsGrid}>
+                  <StatBox label="Recebido" value={fmtMoneyShort(commissionPaid)} color={Colors.success} />
+                  <StatBox label="Corridas" value={commissionRides} />
+                </View>
+                {commissionDrivers.length > 0 && (
+                  <View style={styles.commissionDriverList}>
+                    <Text style={styles.subLabel}>Pendências por motorista</Text>
+                    {commissionDrivers.map((row) => (
+                      <View key={row.driver_id} style={styles.commissionDriverRow}>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.commissionDriverName}>{row.full_name ?? 'Motorista'}</Text>
+                          <Text style={styles.commissionDriverMeta}>{row.pending_count} corridas pendentes</Text>
+                        </View>
+                        <Text style={styles.commissionDriverAmount}>{fmtMoney(Number(row.pending_amount) || 0)}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {commissionReport.length === 0 && (
+                  <Text style={styles.emptyText}>Nenhum repasse de comissão registrado</Text>
+                )}
               </Card>
 
               {/* Avaliações */}
@@ -611,6 +665,11 @@ const styles = StyleSheet.create({
     ...Typography.bodySemiBold,
     color: Colors.textPrimary,
   },
+  cardHint: {
+    ...Typography.caption,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
 
   // Stats grid
   statsGrid: {
@@ -694,6 +753,36 @@ const styles = StyleSheet.create({
   revenueValue: {
     ...Typography.h5,
     color: Colors.textPrimary,
+  },
+
+  // Commission report
+  commissionDriverList: {
+    borderTopWidth: 1,
+    borderTopColor: Colors.border,
+    marginTop: 4,
+    paddingTop: 12,
+  },
+  commissionDriverRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 9,
+    borderBottomWidth: 1,
+    borderBottomColor: Colors.borderLight,
+  },
+  commissionDriverName: {
+    ...Typography.smallMedium,
+    color: Colors.textPrimary,
+  },
+  commissionDriverMeta: {
+    ...Typography.caption,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  commissionDriverAmount: {
+    ...Typography.smallMedium,
+    color: Colors.warning,
+    fontWeight: '700',
   },
 
   // Rating

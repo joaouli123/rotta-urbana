@@ -56,6 +56,9 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
   const [savingCommission, setSavingCommission] = useState(false);
   const [savingWeekly, setSavingWeekly] = useState(false);
 
+  const commissionPreviewPct = Math.min(100, Math.max(0, parseFloat(commissionInput.replace(',', '.')) || 0));
+  const commissionPreviewAmount = (200 * commissionPreviewPct) / 100;
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -90,7 +93,7 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
     try {
       await setCommissionPct(val);
       setSettings((s) => s ? { ...s, commission_pct: val } : s);
-      Alert.alert('Salvo', `Comissão definida para ${val}%.`);
+      Alert.alert('Salvo', `Comissão da plataforma definida para ${val}%.`);
     } catch (e: any) {
       Alert.alert('Erro', e?.message ?? 'Não foi possível salvar.');
     } finally {
@@ -493,9 +496,9 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
 
                 {/* Commission % */}
                 <View style={styles.settingSection}>
-                  <Text style={styles.settingLabel}>Comissão por corrida (%)</Text>
+                  <Text style={styles.settingLabel}>Comissão da plataforma (%)</Text>
                   <Text style={styles.settingDesc}>
-                    Percentual cobrado do motorista por corrida concluída no plano comissão.{'\n'}
+                    Percentual que fica para o sistema em cada corrida concluída do plano comissão.{'\n'}
                     Atual: <Text style={{ fontFamily: 'Poppins_700Bold', color: Colors.textPrimary }}>
                       {settings.commission_pct ?? 15}%
                     </Text>
@@ -521,6 +524,32 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
                         ? <ActivityIndicator size="small" color="#fff" />
                         : <Text style={styles.saveBtnTxt}>Salvar</Text>}
                     </TouchableOpacity>
+                  </View>
+                  <View style={styles.commissionExample}>
+                    <Text style={styles.commissionExampleTitle}>Exemplo de fechamento</Text>
+                    <View style={styles.commissionExampleRow}>
+                      <View style={styles.commissionExampleCell}>
+                        <Text style={styles.commissionExampleLabel}>Total</Text>
+                        <Text style={styles.commissionExampleValue}>R$ 200,00</Text>
+                      </View>
+                      <Text style={styles.commissionExampleOperator}>−</Text>
+                      <View style={styles.commissionExampleCell}>
+                        <Text style={styles.commissionExampleLabel}>Comissão</Text>
+                        <Text style={[styles.commissionExampleValue, { color: Colors.warning }]}>
+                          R$ {commissionPreviewAmount.toFixed(2).replace('.', ',')}
+                        </Text>
+                      </View>
+                      <Text style={styles.commissionExampleOperator}>=</Text>
+                      <View style={styles.commissionExampleCell}>
+                        <Text style={styles.commissionExampleLabel}>Líquido</Text>
+                        <Text style={[styles.commissionExampleValue, { color: Colors.success }]}>
+                          R$ {(200 - commissionPreviewAmount).toFixed(2).replace('.', ',')}
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={styles.commissionExampleHint}>
+                      O motorista faz um único PIX do valor da comissão no fim do dia.
+                    </Text>
                   </View>
                 </View>
 
@@ -667,6 +696,17 @@ const styles = StyleSheet.create({
   numericUnit: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textMuted },
   saveBtn: { paddingHorizontal: 18, paddingVertical: 11, borderRadius: Radius.md, backgroundColor: Colors.primary },
   saveBtnTxt: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: '#fff' },
+  commissionExample: {
+    marginTop: 14, padding: 12, borderRadius: Radius.md,
+    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border,
+  },
+  commissionExampleTitle: { fontSize: 12, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary, marginBottom: 10 },
+  commissionExampleRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  commissionExampleCell: { flex: 1, minWidth: 0 },
+  commissionExampleLabel: { fontSize: 10, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginBottom: 3 },
+  commissionExampleValue: { fontSize: 12, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
+  commissionExampleOperator: { fontSize: 16, fontFamily: 'Poppins_500Medium', color: Colors.textMuted },
+  commissionExampleHint: { fontSize: 10, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, lineHeight: 15, marginTop: 10 },
 });
 
 export default AdminDriversScreen;

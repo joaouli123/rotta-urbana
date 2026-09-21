@@ -79,6 +79,7 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
   const [ridePayment, setRidePayment] = useState<RidePayment | null>(null);
   const [paymentLoading, setPaymentLoading] = useState(false);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [manualPaymentRequired, setManualPaymentRequired] = useState(false);
   const [paymentRetry, setPaymentRetry] = useState(0);
 
   const effectiveType = (ride?.ride_type as any) ?? rideType;
@@ -106,10 +107,18 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
         if (!current && createIfMissing) current = await createRideCheckout(ride.id);
         if (active) {
           setRidePayment(current);
-          setPaymentError(null);
+          if (current || createIfMissing) {
+            setPaymentError(null);
+            setManualPaymentRequired(false);
+          }
         }
       } catch (error) {
-        if (active && createIfMissing) setPaymentError(error instanceof Error ? error.message : 'Não foi possível preparar o pagamento.');
+        if (active && createIfMissing) {
+          const message = error instanceof Error ? error.message : 'Não foi possível preparar o pagamento.';
+          const requiresManualPayment = /não conectou a conta do mercado pago|repasse automático ainda não está configurado|conexão mercado pago ainda não está configurada/i.test(message);
+          setPaymentError(message);
+          setManualPaymentRequired(requiresManualPayment);
+        }
       } finally {
         if (active && createIfMissing) setPaymentLoading(false);
       }
@@ -123,7 +132,9 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
   const destShort = ride?.destination_address?.split(',')[0] ?? 'Destino';
 
   const finish = () => {
-    const waitingForPayment = ride?.payment_method === 'mercadopago' && ridePayment?.status !== 'approved';
+    const waitingForPayment = ride?.payment_method === 'mercadopago'
+      && !manualPaymentRequired
+      && ridePayment?.status !== 'approved';
     setSubmitted(true);
     if (!waitingForPayment) setTimeout(onGoHome, 1800);
   };
@@ -244,7 +255,7 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
               </View>
             ) : (
               <>
-                <View style={styles.paymentNotice}>
+                <View style={[styles.paymentNotice, manualPaymentRequired && styles.paymentManualNotice]}>
                   <Text style={styles.paymentNoticeText}>{paymentError || 'Finalize o pagamento para concluir a corrida e liberar o repasse ao motorista.'}</Text>
                 </View>
                 {ridePayment?.checkout_url && (
@@ -257,6 +268,11 @@ const RideCompletedScreen: React.FC<RideCompletedScreenProps> = ({ ride, onGoHom
                   <TouchableOpacity style={styles.paymentRetryButton} onPress={() => { setPaymentError(null); setPaymentRetry((value) => value + 1); }} activeOpacity={0.8}>
                     <Text style={styles.paymentRetryText}>Tentar preparar novamente</Text>
                   </TouchableOpacity>
+                )}
+                {manualPaymentRequired && (
+                  <Text style={styles.paymentManualHint}>
+                    O pagamento online não está disponível nesta corrida. Combine o pagamento diretamente com o motorista e não tente pagar novamente pelo Mercado Pago.
+                  </Text>
                 )}
               </>
             )}
@@ -427,7 +443,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: '#FFF9EC',
     borderRadius: Radius.sm, padding: 11, borderWidth: 1, borderColor: '#F59E0B40', marginBottom: 12,
   },
+  paymentManualNotice: { backgroundColor: '#FFF7ED', borderColor: '#F9731640' },
   paymentNoticeText: { flex: 1, fontSize: 12, lineHeight: 17, fontFamily: 'Poppins_500Medium', color: '#92400E' },
+  paymentManualHint: { fontSize: 12, lineHeight: 17, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary, marginBottom: 4 },
   paymentButton: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     backgroundColor: Colors.primary, borderRadius: Radius.md, paddingVertical: 13,

@@ -3,7 +3,6 @@ import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
   StatusBar, ActivityIndicator,
 } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ChevronLeft, TrendingUp, TrendingDown, Navigation, RefreshCw,
@@ -11,6 +10,8 @@ import {
 import { Card } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
 import { getDriverCompletedRides } from '../../services/rides';
+import { getDriverCommissions, getDriverRidePayments, type DriverCommissionRow, type DriverRidePaymentRow } from '../../services/earnings';
+import { getDriverPlanType, type PlanType } from '../../services/payments';
 import type { RideRow } from '../../types/db';
 
 interface DriverEarningsScreenProps {
@@ -33,7 +34,18 @@ const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'S
 const fmtMoney = (v: number, decimals = 2) =>
   'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
 
-const sumPrice = (rides: RideRow[]) => rides.reduce((s, r) => s + (Number(r.price) || 0), 0);
+interface EarningsRide {
+  ride: RideRow;
+  gross: number;
+  commission: number;
+  pendingCommission: number;
+  net: number;
+  settlement: 'manual' | 'automatic' | 'automatic_pending';
+  paymentStatus: DriverRidePaymentRow['status'] | null;
+}
+
+const sumValue = (rides: EarningsRide[], key: 'gross' | 'commission' | 'pendingCommission' | 'net') =>
+  rides.reduce((s, r) => s + r[key], 0);
 
 const PERIOD_LABEL: Record<Period, string> = { week: 'Total da semana', month: 'Total do mês', year: 'Total do ano' };
 
@@ -41,6 +53,9 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
   const insets = useSafeAreaInsets();
   const [period, setPeriod] = useState<Period>('week');
   const [rides, setRides] = useState<RideRow[]>([]);
+  const [commissions, setCommissions] = useState<DriverCommissionRow[]>([]);
+  const [ridePayments, setRidePayments] = useState<DriverRidePaymentRow[]>([]);
+  const [planType, setPlanType] = useState<PlanType | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,7 +63,16 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
     setLoading(true);
     setError(null);
     try {
-      setRides(await getDriverCompletedRides(500));
+      const [completedRides, commissionRows, splitPayments, currentPlan] = await Promise.all([
+        getDriverCompletedRides(500),
+        getDriverCommissions(500).catch(() => [] as DriverCommissionRow[]),
+        getDriverRidePayments(500).catch(() => [] as DriverRidePaymentRow[]),
+        getDriverPlanType().catch(() => null),
+      ]);
+      setRides(completedRides);
+      setCommissions(commissionRows);
+      setRidePayments(splitPayments);
+      setPlanType(currentPlan);
     } catch (e: any) {
       setError(e?.message ?? 'Erro ao carregar ganhos');
     } finally {
@@ -60,22 +84,51 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
 
   // ── Aggregations ─────────────────────────────────────────────────────────────
   const agg = useMemo(() => {
+      const commissionByRide = new Map(commissions.map((c) => [c.ride_id, c]));
+      const splitByRide = new Map(ridePayments.map((p) => [p.ride_id, p]));
+      const isCommissionPlan = planType === 'commission' || (planType == null && commissions.length > 0);
+      const earningsRides: EarningsRide[] = rides.map((ride) => {
+        const commissionRow = commissionByRide.get(ride.id);
+        const splitPayment = splitByRide.get(ride.id);
+        const isMercadoPagoRide = ride.payment_method === 'mercadopago';
+        const usesAutomaticSplit = isMercadoPagoRide && Boolean(splitPayment);
+        const automaticPaymentApproved = usesAutomaticSplit && splitPayment?.status === 'approved';
+        const gross = usesAutomaticSplit ? Number(splitPayment?.gross_amount) || Number(ride.price) || 0 : Number(ride.price) || 0;
+        const commission = usesAutomaticSplit
+          ? Number(splitPayment?.marketplace_fee) || 0
+          : !isMercadoPagoRide && isCommissionPlan && commissionRow?.status !== 'waived'
+          ? Number(commissionRow?.commission_amount) || 0
+          : 0;
+        const pendingCommission = isMercadoPagoRide ? 0 : commissionRow?.status === 'pending' ? commission : 0;
+        const settlement = !isMercadoPagoRide
+          ? 'manual'
+          : automaticPaymentApproved
+          ? 'automatic'
+          : 'automatic_pending';
+        const net = isMercadoPagoRide
+          ? automaticPaymentApproved ? Number(splitPayment?.driver_amount) || 0 : 0
+          : Math.max(0, gross - commission);
+        return {
+          ride, gross, commission, pendingCommission, net, settlement,
+          paymentStatus: splitPayment?.status ?? null,
+        };
+    });
     const now = new Date();
     const inRange = (from: Date, to: Date) =>
-      rides.filter(r => { const t = rideDate(r); return t >= from && t < to; });
+      earningsRides.filter(({ ride }) => { const t = rideDate(ride); return t >= from && t < to; });
 
     // Windows for the selected period + previous (for the delta)
     const weekStart = startOfWeek(now), monthStart = startOfMonth(now), yearStart = startOfYear(now);
     const dayStart = startOfDay(now);
 
-    let curRides: RideRow[], prevRides: RideRow[], chart: { label: string; amount: number; rides: number }[];
+    let curRides: EarningsRide[], prevRides: EarningsRide[], chart: { label: string; amount: number; rides: number }[];
 
     if (period === 'week') {
       curRides = inRange(weekStart, addDays(weekStart, 7));
       prevRides = inRange(addDays(weekStart, -7), weekStart);
       chart = WEEK_LABELS.map((label, i) => {
         const d0 = addDays(weekStart, i); const r = inRange(d0, addDays(d0, 1));
-        return { label, amount: sumPrice(r), rides: r.length };
+        return { label, amount: sumValue(r, 'net'), rides: r.length };
       });
     } else if (period === 'month') {
       const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
@@ -88,7 +141,7 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
         const wStart = addDays(monthStart, w * 7);
         const wEnd = w === weeks - 1 ? nextMonth : addDays(wStart, 7);
         const r = inRange(wStart, wEnd);
-        return { label: `S${w + 1}`, amount: sumPrice(r), rides: r.length };
+        return { label: `S${w + 1}`, amount: sumValue(r, 'net'), rides: r.length };
       });
     } else {
       const nextYear = new Date(now.getFullYear() + 1, 0, 1);
@@ -99,32 +152,49 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
         const mStart = new Date(now.getFullYear(), m, 1);
         const mEnd = new Date(now.getFullYear(), m + 1, 1);
         const r = inRange(mStart, mEnd);
-        return { label, amount: sumPrice(r), rides: r.length };
+        return { label, amount: sumValue(r, 'net'), rides: r.length };
       });
     }
 
-    const curTotal = sumPrice(curRides), prevTotal = sumPrice(prevRides);
+    const curTotal = sumValue(curRides, 'net'), prevTotal = sumValue(prevRides, 'net');
     const delta = prevTotal > 0 ? ((curTotal - prevTotal) / prevTotal) * 100 : (curTotal > 0 ? 100 : 0);
 
     // Always-on quick stats
     const today = inRange(dayStart, addDays(dayStart, 1));
     const week = inRange(weekStart, addDays(weekStart, 7));
     const month = inRange(monthStart, new Date(now.getFullYear(), now.getMonth() + 1, 1));
+    const all = earningsRides;
+
+    const summary = (items: EarningsRide[]) => {
+      const settled = items.filter((item) => item.settlement !== 'automatic_pending');
+      const waitingForMercadoPago = items.filter((item) => item.settlement === 'automatic_pending');
+      return {
+        count: items.length,
+        gross: sumValue(settled, 'gross'),
+        commission: sumValue(settled, 'commission'),
+        pending: sumValue(items, 'pendingCommission'),
+        net: sumValue(settled, 'net'),
+        waitingForMercadoPagoCount: waitingForMercadoPago.length,
+        waitingForMercadoPagoGross: sumValue(waitingForMercadoPago, 'gross'),
+      };
+    };
 
     return {
       chart,
       periodTotal: curTotal,
       periodCount: curRides.length,
       delta,
+      isCommissionPlan,
+      periodSummary: summary(curRides),
       quick: {
-        today: { total: sumPrice(today), count: today.length },
-        week: { total: sumPrice(week), count: week.length },
-        month: { total: sumPrice(month), count: month.length },
-        all: { total: sumPrice(rides), count: rides.length },
+        today: summary(today),
+        week: summary(week),
+        month: summary(month),
+        all: summary(all),
       },
-      recent: rides.slice(0, 6),
+      recent: earningsRides.slice(0, 6),
     };
-  }, [rides, period]);
+  }, [commissions, period, planType, ridePayments, rides]);
 
   const maxAmount = Math.max(1, ...agg.chart.map(c => c.amount));
   const deltaUp = agg.delta >= 0;
@@ -174,7 +244,9 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
 
           {/* Hero summary card — dark for readability */}
           <View style={styles.heroCard}>
-            <Text style={styles.heroLabel}>{PERIOD_LABEL[period]}</Text>
+            <Text style={styles.heroLabel}>
+              {agg.isCommissionPlan ? `${PERIOD_LABEL[period]} • líquido` : PERIOD_LABEL[period]}
+            </Text>
             <Text style={styles.heroValue}>{fmtMoney(agg.periodTotal)}</Text>
             <View style={styles.heroRow}>
               <View style={styles.heroItem}>
@@ -190,6 +262,52 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
               </View>
             </View>
           </View>
+
+          {agg.isCommissionPlan && (
+            <Card style={styles.commissionCard}>
+              <View style={styles.commissionHeader}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.commissionTitle}>Fechamento da comissão</Text>
+                  <Text style={styles.commissionSubtitle}>
+                    {agg.periodSummary.count} corridas • cartão direto gera PIX manual; Mercado Pago divide após confirmação
+                  </Text>
+                </View>
+                <Navigation size={18} color={Colors.primary} />
+              </View>
+              <View style={styles.calculationRow}>
+                <View style={styles.calculationCell}>
+                    <Text style={styles.calculationLabel}>Vendas liquidadas</Text>
+                  <Text style={styles.calculationValue}>{fmtMoney(agg.periodSummary.gross)}</Text>
+                </View>
+                <Text style={styles.calculationOperator}>−</Text>
+                <View style={styles.calculationCell}>
+                  <Text style={styles.calculationLabel}>Comissão</Text>
+                  <Text style={[styles.calculationValue, { color: Colors.warning }]}>
+                    {fmtMoney(agg.periodSummary.commission)}
+                  </Text>
+                </View>
+                <Text style={styles.calculationOperator}>=</Text>
+                <View style={styles.calculationCell}>
+                  <Text style={styles.calculationLabel}>Líquido</Text>
+                  <Text style={[styles.calculationValue, { color: Colors.success }]}>
+                    {fmtMoney(agg.periodSummary.net)}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.transferNote}>
+                <Text style={styles.transferNoteText}>Repasse pendente para o sistema</Text>
+                <Text style={styles.transferNoteValue}>{fmtMoney(agg.periodSummary.pending)}</Text>
+              </View>
+              {agg.periodSummary.waitingForMercadoPagoCount > 0 && (
+                <View style={[styles.transferNote, styles.paymentPendingNote]}>
+                  <Text style={styles.transferNoteText}>Mercado Pago aguardando confirmação</Text>
+                  <Text style={styles.transferNoteValue}>
+                    {agg.periodSummary.waitingForMercadoPagoCount} · {fmtMoney(agg.periodSummary.waitingForMercadoPagoGross)}
+                  </Text>
+                </View>
+              )}
+            </Card>
+          )}
 
           {/* Bar chart */}
           <Card style={styles.chartCard}>
@@ -223,10 +341,10 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
           {/* Quick stats */}
           <View style={styles.statsGrid}>
             {[
-              { label: 'Hoje', value: fmtMoney(agg.quick.today.total, 0), sub: `${agg.quick.today.count} corridas`, color: Colors.textPrimary },
-              { label: 'Semana', value: fmtMoney(agg.quick.week.total, 0), sub: `${agg.quick.week.count} corridas`, color: Colors.success },
-              { label: 'Mês', value: fmtMoney(agg.quick.month.total, 0), sub: `${agg.quick.month.count} corridas`, color: Colors.info },
-              { label: 'Total', value: fmtMoney(agg.quick.all.total, 0), sub: `${agg.quick.all.count} corridas`, color: Colors.warning },
+              { label: 'Hoje', value: fmtMoney(agg.quick.today.net, 0), sub: `${agg.quick.today.count} corridas`, color: Colors.textPrimary },
+              { label: 'Semana', value: fmtMoney(agg.quick.week.net, 0), sub: `${agg.quick.week.count} corridas`, color: Colors.success },
+              { label: 'Mês', value: fmtMoney(agg.quick.month.net, 0), sub: `${agg.quick.month.count} corridas`, color: Colors.info },
+              { label: 'Total', value: fmtMoney(agg.quick.all.net, 0), sub: `${agg.quick.all.count} corridas`, color: Colors.warning },
             ].map((stat) => (
               <Card key={stat.label} style={styles.statCard}>
                 <Text style={styles.statLabel}>{stat.label}</Text>
@@ -243,20 +361,29 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
           {agg.recent.length === 0 ? (
             <Text style={styles.emptyTxt}>Nenhuma corrida concluída ainda</Text>
           ) : (
-            agg.recent.map((r) => (
-              <Card key={r.id} style={styles.rideItem}>
+            agg.recent.map((item) => (
+              <Card key={item.ride.id} style={styles.rideItem}>
                 <View style={styles.rideIcon}>
                   <Navigation size={16} color={Colors.primary} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.rideDest} numberOfLines={1}>
-                    {r.destination_address.split(',')[0]}
+                    {item.ride.destination_address.split(',')[0]}
                   </Text>
                   <Text style={styles.rideTime}>
-                    {rideDate(r).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })} • {rideDate(r).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                    {rideDate(item.ride).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' })} • {rideDate(item.ride).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                   </Text>
+                  {agg.isCommissionPlan && (
+                    item.settlement === 'automatic_pending' ? (
+                      <Text style={[styles.rideBreakdown, { color: Colors.warning }]}>Mercado Pago sem confirmação • não entra no líquido</Text>
+                    ) : (
+                      <Text style={styles.rideBreakdown}>
+                        Total {fmtMoney(item.gross)} • comissão {fmtMoney(item.commission)}{item.settlement === 'automatic' ? ' • split automático' : ''}
+                      </Text>
+                    )
+                  )}
                 </View>
-                <Text style={styles.rideAmount}>{fmtMoney(Number(r.price) || 0)}</Text>
+                <Text style={styles.rideAmount}>{fmtMoney(item.net)}</Text>
               </Card>
             ))
           )}
@@ -301,6 +428,25 @@ const styles = StyleSheet.create({
   heroItemText: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: 'rgba(255,255,255,0.85)' },
   heroDivider: { width: 1, height: 20, backgroundColor: 'rgba(255,255,255,0.15)', marginHorizontal: 12 },
 
+  // Commission closing
+  commissionCard: { padding: 16, marginBottom: 16, borderWidth: 1, borderColor: Colors.border },
+  commissionHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  commissionTitle: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
+  commissionSubtitle: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 2 },
+  calculationRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  calculationCell: { flex: 1, minWidth: 0 },
+  calculationLabel: { fontSize: 10, fontFamily: 'Poppins_500Medium', color: Colors.textMuted, marginBottom: 4 },
+  calculationValue: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
+  calculationOperator: { fontSize: 18, fontFamily: 'Poppins_500Medium', color: Colors.textMuted },
+  transferNote: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    backgroundColor: Colors.warning + '14', borderRadius: Radius.sm, paddingHorizontal: 10, paddingVertical: 8,
+    marginTop: 14,
+  },
+  paymentPendingNote: { backgroundColor: Colors.info + '14', marginTop: 8 },
+  transferNoteText: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary },
+  transferNoteValue: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: Colors.warning },
+
   // Chart
   chartCard: { padding: 16, marginBottom: 16, borderWidth: 1, borderColor: Colors.border },
   chartTitle: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary, marginBottom: 16 },
@@ -330,6 +476,7 @@ const styles = StyleSheet.create({
   rideIcon: { width: 36, height: 36, borderRadius: Radius.sm, backgroundColor: Colors.primary + '22', alignItems: 'center', justifyContent: 'center' },
   rideDest: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
   rideTime: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 2 },
+  rideBreakdown: { fontSize: 10, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: 3 },
   rideAmount: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: Colors.success },
 });
 

@@ -371,16 +371,18 @@ adminRouter.get('/', requireAuth, async (req, res) => {
   const startISO = `${startDate}T00:00:00.000Z`;
   const endISO = `${endDate}T23:59:59.999Z`;
 
-  const [{ data: k }, { data: periodRides }, { data: periodPayments }, { data: leads }] = await Promise.all([
+  const [{ data: k }, { data: periodRides }, { data: periodPayments }, { data: periodCommissions }, { data: leads }] = await Promise.all([
     admin.rpc('admin_kpis'),
     admin.from('rides').select('*').gte('requested_at', startISO).lte('requested_at', endISO).order('requested_at', { ascending: false }),
     admin.from('payments').select('*').gte('created_at', startISO).lte('created_at', endISO),
+    admin.from('driver_commissions').select('driver_id,ride_id,ride_price,commission_pct,commission_amount,status,created_at,paid_at').gte('created_at', startISO).lte('created_at', endISO).order('created_at', { ascending: false }),
     getLeads()
   ]);
 
   const kpis = k ?? {};
   const rides = periodRides ?? [];
   const payments = periodPayments ?? [];
+  const commissions = periodCommissions ?? [];
 
   // Period Calculated Metrics
   const totalRidesPeriod = rides.length;
@@ -393,6 +395,10 @@ adminRouter.get('/', requireAuth, async (req, res) => {
   const successRate = totalRidesPeriod ? ((completedRidesPeriod.length / totalRidesPeriod) * 100).toFixed(1) : '100.0';
 
   const subRevenuePeriod = payments.filter(p => p.status === 'approved' || p.status === 'confirmed').reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+  const commissionGrossPeriod = commissions.reduce((sum, row) => sum + (Number(row.ride_price) || 0), 0);
+  const commissionPlatformPeriod = commissions.reduce((sum, row) => sum + (Number(row.commission_amount) || 0), 0);
+  const commissionDriverNetPeriod = Math.max(0, commissionGrossPeriod - commissionPlatformPeriod);
+  const commissionPendingPeriod = commissions.filter(row => row.status === 'pending').reduce((sum, row) => sum + (Number(row.commission_amount) || 0), 0);
 
   // Category breakdown for period
   const catCounts = { moto: 0, economy: 0, comfort: 0, premium: 0 };
@@ -441,6 +447,24 @@ adminRouter.get('/', requireAuth, async (req, res) => {
     esc(names[r.driver_id] ?? '—'),
     fmtDate(r.requested_at),
   ]);
+  const commissionNames = await profileNames(commissions.map(row => row.driver_id));
+  const commissionByDriver = Object.values(commissions.reduce((acc, row) => {
+    const id = row.driver_id;
+    const item = (acc[id] ??= { driverId: id, rides: 0, gross: 0, commission: 0, pending: 0 });
+    item.rides++;
+    item.gross += Number(row.ride_price) || 0;
+    item.commission += Number(row.commission_amount) || 0;
+    if (row.status === 'pending') item.pending += Number(row.commission_amount) || 0;
+    return acc;
+  }, {})).sort((a, b) => b.pending - a.pending || b.commission - a.commission);
+  const commissionRows = commissionByDriver.map((row) => [
+    esc(commissionNames[row.driverId] ?? 'Motorista'),
+    String(row.rides),
+    brl(row.gross),
+    brl(row.commission),
+    brl(Math.max(0, row.gross - row.commission)),
+    brl(row.pending),
+  ]);
 
   const presetLink = (key, label) => {
     const activeClass = (preset === key) ? 'on' : '';
@@ -482,6 +506,7 @@ adminRouter.get('/', requireAuth, async (req, res) => {
       ${kpiCard('Faturamento em Corridas', brl(grossFaresPeriod), `Ticket Médio ${brl(avgTicketPeriod)}`)}
       ${kpiCard('Taxa de Conclusão', `${successRate}%`, `${cancelledRidesPeriod.length} canceladas`)}
       ${kpiCard('Receita de Assinaturas', brl(subRevenuePeriod), 'pagamentos confirmados')}
+      ${kpiCard('Repasse de Comissões', brl(commissionPlatformPeriod), `${commissions.length} corridas no plano comissão`)}
     </div>
 
     <!-- KPIs Gerais da Plataforma -->
@@ -521,6 +546,20 @@ adminRouter.get('/', requireAuth, async (req, res) => {
           return [esc(catLabels[t]), String(count), brl(rev), `${share}%`];
         });
       })())}
+    </div>
+
+    <!-- Fechamento da comissão -->
+    <div class="card">
+      <h2>Fechamento do plano comissão</h2>
+      <p class="muted">Total das corridas − comissão da plataforma = líquido do motorista. O valor pendente é o PIX que ainda deve ser repassado ao sistema.</p>
+      ${table(['Motorista', 'Corridas', 'Total das corridas', 'Comissão / repasse', 'Líquido motorista', 'PIX pendente'], commissionRows)}
+      ${commissionRows.length === 0 ? '<p class="muted">Nenhuma corrida do plano comissão no período selecionado.</p>' : ''}
+      <div class="grid" style="margin-top:16px;">
+        ${kpiCard('Total bruto comissão', brl(commissionGrossPeriod), `${commissions.length} corridas`)}
+        ${kpiCard('Comissão plataforma', brl(commissionPlatformPeriod), 'repasse do sistema')}
+        ${kpiCard('Líquido motoristas', brl(commissionDriverNetPeriod), 'após a comissão')}
+        ${kpiCard('PIX pendente', brl(commissionPendingPeriod), 'fechamento do período')}
+      </div>
     </div>
 
     <!-- Corridas Recentes -->
@@ -1390,6 +1429,11 @@ adminRouter.get('/payments', requireAuth, async (req, res) => {
   const { data: ridePayments } = await admin.from('ride_payments').select('*').order('created_at', { ascending: false }).limit(300);
   const rideSource = ridePayments ?? [];
   const rideNames = await profileNames(rideSource.map((p) => p.driver_id));
+  const { data: commissionData } = await admin.from('driver_commissions')
+    .select('driver_id,ride_id,ride_price,commission_pct,commission_amount,status,created_at,paid_at')
+    .order('created_at', { ascending: false }).limit(1000);
+  const commissionSource = commissionData ?? [];
+  const commissionNames = await profileNames(commissionSource.map((row) => row.driver_id));
   const count = (status) => source.filter((p) => p.status === status).length;
   const notice = req.query.error ? `<div class="err">${esc(String(req.query.error))}</div>` : req.query.ok ? '<div class="ok">Operação concluída.</div>' : '';
   const rows = pagePayments.map((p) => [
@@ -1405,7 +1449,27 @@ adminRouter.get('/payments', requireAuth, async (req, res) => {
     p.paid_at ? fmtDate(p.paid_at) : '—', fmtDate(p.created_at),
   ]);
   const rideSection = `<div class="card"><h2>Repasses de corridas (${rideSource.length})</h2><p class="muted">Os pagamentos Mercado Pago são divididos pelo provedor. A coluna "Líquido motorista" é o valor atribuído ao motorista após a comissão do plano.</p>${table(['Motorista / corrida', 'Bruto', 'Comissão plataforma', 'Líquido motorista', 'Status', 'Status Mercado Pago', 'Pago em', 'Criado'], rideRows)}</div>`;
-  const body = `${notice}${kpis}${filters}<div class="card"><h2>Pagamentos de assinatura (${allPayments.length})</h2><p class="muted">Sincronizar consulta o status diretamente no Mercado Pago. Confirmar manualmente é uma exceção administrativa e também libera o período conforme o plano.</p>${table(['Motorista', 'Valor', 'Método', 'Provedor', 'Status local', 'Status Mercado Pago', 'Pago em', 'Criado', 'Ações'], rows)}${pagination(allPayments.length, page, pageSize, req.originalUrl)}</div>${rideSection}`;
+  const commissionByDriver = Object.values(commissionSource.reduce((acc, row) => {
+    const id = row.driver_id;
+    const item = (acc[id] ??= { driverId: id, rides: 0, gross: 0, commission: 0, pending: 0, last: row.created_at });
+    item.rides++;
+    item.gross += Number(row.ride_price) || 0;
+    item.commission += Number(row.commission_amount) || 0;
+    if (row.status === 'pending') item.pending += Number(row.commission_amount) || 0;
+    if (new Date(row.created_at) > new Date(item.last)) item.last = row.created_at;
+    return acc;
+  }, {})).sort((a, b) => b.pending - a.pending || b.last.localeCompare(a.last));
+  const commissionReportRows = commissionByDriver.map((row) => [
+    esc(commissionNames[row.driverId] ?? 'Motorista'),
+    String(row.rides),
+    brl(row.gross),
+    brl(row.commission),
+    brl(Math.max(0, row.gross - row.commission)),
+    brl(row.pending),
+    fmtDate(row.last),
+  ]);
+  const commissionSection = `<div class="card"><h2>Fechamento dos motoristas por comissão (${commissionSource.length} corridas)</h2><p class="muted">Total das corridas − comissão da plataforma = líquido do motorista. O PIX pendente é o valor que deve ser repassado ao sistema no fechamento do dia.</p>${table(['Motorista', 'Corridas', 'Total das corridas', 'Comissão / repasse', 'Líquido motorista', 'PIX pendente', 'Última corrida'], commissionReportRows)}${commissionReportRows.length === 0 ? '<p class="muted">Nenhum registro de comissão encontrado.</p>' : ''}</div>`;
+  const body = `${notice}${kpis}${filters}<div class="card"><h2>Pagamentos de assinatura (${allPayments.length})</h2><p class="muted">Sincronizar consulta o status diretamente no Mercado Pago. Confirmar manualmente é uma exceção administrativa e também libera o período conforme o plano.</p>${table(['Motorista', 'Valor', 'Método', 'Provedor', 'Status local', 'Status Mercado Pago', 'Pago em', 'Criado', 'Ações'], rows)}${pagination(allPayments.length, page, pageSize, req.originalUrl)}</div>${commissionSection}${rideSection}`;
   return render(res, layout({ title: 'Pagamentos', active: '/payments', email: req.session.email, body }));
 });
 
@@ -1647,8 +1711,8 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;">
             <div style="background:#F8FAFC;border:1px solid var(--line);border-radius:14px;padding:16px;">
               <div style="font-weight:800;color:#10B981;font-size:15px;margin-bottom:4px;">1. ECO Flex</div>
-              <p style="margin:0 0 12px 0;font-size:12px;color:var(--mut);">Porcentagem de comissão por corrida realizada.</p>
-              <label>Comissão (%)</label>
+              <p style="margin:0 0 12px 0;font-size:12px;color:var(--mut);">Percentual que fica para o sistema em cada corrida do plano comissão. O motorista repassa esse valor no fechamento do dia.</p>
+              <label>Comissão da plataforma (%)</label>
               <input name="commission_pct" value="${fmtVal(set.commission_pct ?? 15)}" style="font-weight:700;">
             </div>
 
@@ -1682,7 +1746,7 @@ adminRouter.get('/settings', requireAuth, async (req, res) => {
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;">
             <div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:14px;padding:16px;">
               <div style="font-weight:800;color:#047857;font-size:15px;margin-bottom:8px;">Moto</div>
-              <label>Comissão (%)</label>
+              <label>Comissão da plataforma (%)</label>
               <input name="moto_commission_pct" value="${fmtVal(set.moto_commission_pct ?? 15)}">
               <label>Diária (R$)</label>
               <input name="moto_daily_price" value="${fmtVal(set.moto_daily_price ?? 10)}">
