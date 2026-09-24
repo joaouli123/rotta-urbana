@@ -1,40 +1,52 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity, AppState,
-  StatusBar, ActivityIndicator, Alert, Linking,
+  StatusBar, ActivityIndicator, Alert,
 } from 'react-native';
-import * as ExpoLinking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-  ChevronLeft, CheckCircle, AlertCircle, Clock, RefreshCw,
-  Check, Calendar, Zap,
+  ChevronLeft, CheckCircle, AlertCircle, RefreshCw,
+  Check, Zap,
 } from 'lucide-react-native';
 import { Colors, Radius } from '../../constants';
 import {
   getSubscription, getAppSettings, selectPlan, createSubscriptionCheckout, syncSubscriptionStatus,
   getDriverPlanType, getDriverPlanSegment, getMercadoPagoConnectionStatus, startMercadoPagoConnection,
-  disconnectMercadoPago, type PlanType,
+  disconnectMercadoPago, watchDriverSubscription, type PlanType,
 } from '../../services/payments';
 import type { SubscriptionRow, AppSettings, PlanSegment } from '../../types/db';
 import type { MercadoPagoConnectionStatus } from '../../services/payments';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtBRL(v: number) { return 'R$ ' + Number(v).toFixed(2).replace('.', ','); }
-function fmtDate(iso?: string | null) {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
-}
 function daysUntil(iso?: string | null): number | null {
   if (!iso) return null;
   return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
 }
 
-function mercadoPagoCallbackStatus(url?: string): 'success' | 'error' | null {
-  if (!url?.startsWith('rotta-urbana://mercadopago/connected')) return null;
-  const status = url.split('?')[1]?.split('&').find((part) => part.startsWith('status='))?.split('=')[1];
-  return status === 'success' || status === 'error' ? status : null;
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
 }
+
+function mercadoPagoCallback(url?: string): { status: 'success' | 'error'; message: string | null } | null {
+  if (!url?.startsWith('rotta-urbana://mercadopago/connected')) return null;
+  try {
+    const parsed = new URL(url);
+    const status = parsed.searchParams.get('status');
+    return status === 'success' || status === 'error'
+      ? { status, message: parsed.searchParams.get('message') || parsed.searchParams.get('error_description') }
+      : null;
+  } catch { return null; }
+}
+
+const MERCADO_PAGO_APP_REDIRECT_URI = 'rotta-urbana://mercadopago/connected';
 
 // ── Plan definitions ──────────────────────────────────────────────────────────
 interface PlanDef {
@@ -94,14 +106,6 @@ const PLAN_LABELS: Record<PlanType, string> = {
   commission: 'Por Corrida', daily: 'Diário', weekly: 'Semanal', monthly: 'Mensal',
 };
 
-const STATUS_CONFIG: Record<string, { label: string; color: string; Icon: React.ElementType }> = {
-  pending:   { label: 'Aguardando pagamento', color: Colors.warning, Icon: Clock },
-  active:    { label: 'Ativo',    color: Colors.success, Icon: CheckCircle },
-  expired:   { label: 'Vencido', color: Colors.danger,  Icon: AlertCircle },
-  suspended: { label: 'Suspenso',color: Colors.warning,  Icon: Clock },
-  inactive:  { label: 'Inativo', color: Colors.textMuted, Icon: AlertCircle },
-};
-
 // ── Props ─────────────────────────────────────────────────────────────────────
 interface DriverSubscriptionScreenProps {
   onBack: () => void;
@@ -116,6 +120,9 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   const [currentPlan, setCurrentPlan] = useState<PlanType | null>(null);
   const [currentSegment, setCurrentSegment] = useState<PlanSegment | null>(null);
   const [loading, setLoading]   = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const loadInFlight = useRef(false);
+  const hasLoaded = useRef(false);
   const [mpConnection, setMpConnection] = useState<MercadoPagoConnectionStatus | null>(null);
   const [connectingMp, setConnectingMp] = useState(false);
 
@@ -124,27 +131,41 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   const [switching, setSwitching]       = useState(false);
   const [pixCode, setPixCode]           = useState<string | null>(null);
   const [pixAmount, setPixAmount]       = useState(0);
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
+  const checkoutBaselinePaidAt = useRef<string | null>(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (loadInFlight.current) return;
+    loadInFlight.current = true;
+    if (!hasLoaded.current) setLoading(true);
     try {
-      const [loadedSub, cfg, pt, segment, connection] = await Promise.all([
-        getSubscription(),
-        getAppSettings(),
-        getDriverPlanType(),
-        getDriverPlanSegment(),
-        getMercadoPagoConnectionStatus().catch(() => null),
-      ]);
-      const s = loadedSub?.provider_subscription_id
-        ? await syncSubscriptionStatus().catch(() => loadedSub)
-        : loadedSub;
+      setLoadError(null);
+      const result = await withTimeout((async () => {
+        const [loadedSub, cfg, pt, segment, connection] = await Promise.all([
+          getSubscription(),
+          getAppSettings(),
+          getDriverPlanType(),
+          getDriverPlanSegment(),
+          getMercadoPagoConnectionStatus().catch(() => null),
+        ]);
+        const s = loadedSub?.provider_subscription_id
+          ? await syncSubscriptionStatus().catch(() => loadedSub)
+          : loadedSub;
+        return { s, cfg, pt, segment, connection, loadedSub };
+      })(), 15000, 'A consulta demorou demais. Verifique sua conexão e toque em atualizar.');
+      const { s, cfg, pt, segment, connection, loadedSub } = result;
       setSub(s);
       setSettings(cfg);
       setCurrentPlan(pt);
       setCurrentSegment(segment ?? (loadedSub?.plan_segment ?? 'economy'));
       setMpConnection(connection);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
+      hasLoaded.current = true;
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : 'Não foi possível carregar seu plano. Tente novamente.');
+    } finally {
+      loadInFlight.current = false;
+      setLoading(false);
+    }
   }, []);
 
   const connectMercadoPago = async () => {
@@ -152,25 +173,22 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
     setConnectingMp(true);
     try {
       const url = await startMercadoPagoConnection();
-      const redirectUrl = ExpoLinking.createURL('mercadopago/connected');
-      const result = await WebBrowser.openAuthSessionAsync(url, redirectUrl, {
+      const result = await WebBrowser.openAuthSessionAsync(url, MERCADO_PAGO_APP_REDIRECT_URI, {
         showTitle: true,
         createTask: false,
       });
-      const callbackStatus = result.type === 'success' ? mercadoPagoCallbackStatus(result.url) : null;
-
-      if (callbackStatus === 'success') {
-        const status = await getMercadoPagoConnectionStatus().catch(() => null);
-        if (status) setMpConnection(status);
-        await load();
-        if (status?.connected) {
-          Alert.alert('Mercado Pago conectado', 'Sua conta foi vinculada e está pronta para receber os repasses automáticos.');
-        } else {
-          Alert.alert('Autorização recebida', 'A autorização foi recebida. Toque em atualizar se o status ainda não aparecer como conectado.');
-        }
-      } else if (callbackStatus === 'error') {
-        await load();
-        Alert.alert('Não foi possível conectar', 'O Mercado Pago recusou ou não concluiu a autorização. Tente novamente.');
+      const callback = result.type === 'success' ? mercadoPagoCallback(result.url) : null;
+      const status = await getMercadoPagoConnectionStatus().catch(() => null);
+      if (status) setMpConnection(status);
+      await load();
+      if (status?.connected) {
+        Alert.alert('Mercado Pago conectado', 'Sua conta foi vinculada e está pronta para receber os repasses automáticos.');
+      } else if (callback?.status === 'error') {
+        Alert.alert('Não foi possível conectar', callback.message || 'A autorização falhou. Confira se o endereço de retorno OAuth do app no Mercado Pago está cadastrado exatamente como no servidor e tente novamente.');
+      } else if (result.type === 'cancel' || result.type === 'dismiss') {
+        Alert.alert('Conexão não concluída', 'O navegador foi fechado antes de confirmar a autorização. Você pode tentar novamente.');
+      } else if (result.type === 'success') {
+        Alert.alert('Autorização não confirmada', 'O retorno chegou, mas o servidor ainda não confirmou a conta. Confira a URL de retorno OAuth e tente novamente.');
       }
     } catch (error) {
       Alert.alert('Não foi possível conectar', error instanceof Error ? error.message : 'Tente novamente.');
@@ -190,10 +208,26 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   useEffect(() => {
     load();
     const listener = AppState.addEventListener('change', (state) => {
-      if (state === 'active') load();
+      // Native alerts and payment sheets can briefly leave the active state.
+      // Refresh silently on return so dismissing an alert never replaces the
+      // whole screen with a blocking spinner.
+      if (state === 'active' && hasLoaded.current) load();
     });
     return () => listener.remove();
   }, [load]);
+
+  useEffect(() => {
+    if (!pixCode || !pendingPlan || paymentConfirmed) return;
+    return watchDriverSubscription((subscription) => {
+      if (subscription) setSub(subscription);
+      if (subscription?.status === 'active' && subscription.plan === pendingPlan
+          && subscription.paid_at && subscription.paid_at !== checkoutBaselinePaidAt.current) {
+        setCurrentPlan(pendingPlan);
+        setCurrentSegment(subscription.plan_segment ?? currentSegment);
+        setPaymentConfirmed(true);
+      }
+    });
+  }, [pixCode, pendingPlan, paymentConfirmed, currentSegment]);
 
   const plans = buildPlans(settings, currentSegment);
 
@@ -216,22 +250,30 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
     setSwitching(true);
     setPendingPlan(plan);
     setPixCode(null);
+    setPaymentConfirmed(false);
     try {
       const segment = currentSegment ?? 'economy';
-      await selectPlan(plan, segment);
-      setCurrentPlan(plan);
       if (plan === 'commission') {
+        await withTimeout(selectPlan(plan, segment), 15000, 'A atualização do plano demorou. Verifique a conexão e tente novamente.');
+        setCurrentPlan(plan);
         Alert.alert('Plano atualizado!', 'Você está no plano Por Corrida. Acesso imediato.');
         setPendingPlan(null);
         load();
         return;
       }
-      const result = await createSubscriptionCheckout(plan, segment);
+      if (plan !== 'daily') {
+        await withTimeout(selectPlan(plan, segment), 15000, 'A atualização do plano demorou. Verifique a conexão e tente novamente.');
+        setCurrentPlan(plan);
+      }
+      const beforeCheckout = await getSubscription();
+      checkoutBaselinePaidAt.current = beforeCheckout?.paid_at ?? null;
+      const result = await withTimeout(createSubscriptionCheckout(plan, segment), 20000, 'O checkout demorou para responder. Seu plano continua pendente; atualize a tela ou tente novamente.');
       setPixCode(result.init_point);
       setPixAmount(result.amount);
     } catch (err: unknown) {
       Alert.alert('Erro', err instanceof Error ? err.message : 'Tente novamente.');
       setPendingPlan(null);
+      load();
     } finally {
       setSwitching(false);
     }
@@ -240,14 +282,11 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
   const dismissPix = () => {
     setPixCode(null);
     setPendingPlan(null);
+    setPaymentConfirmed(false);
     load();
   };
 
   // ── Status card helpers ──────────────────────────────────────────────────────
-  const stKey   = sub?.status === 'active' && sub?.due_date && String(sub.due_date).slice(0, 10) < new Date().toISOString().slice(0, 10)
-    ? 'expired'
-    : (sub?.status ?? 'inactive');
-  const stConf  = STATUS_CONFIG[stKey] ?? STATUS_CONFIG.inactive;
   const days    = daysUntil(sub?.due_date);
   const isOverdue  = days !== null && days < 0;
   const isDueSoon  = days !== null && days <= 3 && days >= 0;
@@ -281,48 +320,12 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
         contentContainerStyle={[s.scroll, { paddingBottom: insets.bottom + 40 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── Status card ── */}
-        <View style={[s.statusCard, isOverdue && { borderColor: Colors.danger + '60' }]}>
-          {/* Row: plan + status pill */}
-          <View style={s.statusTop}>
-            <View>
-              <Text style={s.statusLabel}>Plano atual</Text>
-              <Text style={s.planName}>
-                {currentPlan ? PLAN_LABELS[currentPlan] : '—'}
-              </Text>
-            </View>
-            <View style={[s.statusPill, { backgroundColor: stConf.color + '18', borderColor: stConf.color + '44' }]}>
-              <stConf.Icon size={13} color={stConf.color} />
-              <Text style={[s.statusPillTxt, { color: stConf.color }]}>{stConf.label}</Text>
-            </View>
+        {loadError && (
+          <View style={s.loadError}>
+            <Text style={s.loadErrorText}>{loadError}</Text>
+            <TouchableOpacity onPress={load} style={s.loadRetry}><Text style={s.loadRetryText}>Tentar novamente</Text></TouchableOpacity>
           </View>
-
-          {/* Amount + due date (hidden for commission plan) */}
-          {currentPlan !== 'commission' && sub && (
-            <>
-              <Text style={s.amount}>
-                {fmtBRL(sub.amount)}
-                <Text style={s.amountUnit}> / {currentPlan ? PLAN_LABELS[currentPlan].toLowerCase() : '—'}</Text>
-              </Text>
-              <View style={s.dueRow}>
-                <Calendar size={13} color="#999" />
-                <Text style={s.dueTxt}>
-                  Vencimento: {fmtDate(sub.due_date)}
-                  {!isOverdue && days !== null && days <= 7 ? ('  ·  ' + days + 'd') : ''}
-                  {isOverdue ? '  ·  VENCIDO' : ''}
-                </Text>
-              </View>
-            </>
-          )}
-
-          {currentPlan === 'commission' && (
-            <View style={s.commissionRow}>
-              <Zap size={14} color="#6DC228" />
-              <Text style={s.commissionTxt}>Sem mensalidade fixa — comissão descontada por corrida.</Text>
-            </View>
-          )}
-        </View>
-
+        )}
         {/* ── Warning banner ── */}
         {(isOverdue || isDueSoon) && currentPlan !== 'commission' && (
           <View style={[s.banner, { backgroundColor: isOverdue ? '#FEE2E2' : '#FEF3C7', borderColor: isOverdue ? Colors.danger + '40' : Colors.warning + '40' }]}>
@@ -342,8 +345,8 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
               <Text style={s.mpTitle}>Repasse automático</Text>
               <Text style={s.mpSub}>
                 {mpConnection?.connected
-                  ? 'Mercado Pago conectado e pronto para receber corridas.'
-                  : 'Conecte sua conta para receber automaticamente após cada pagamento.'}
+                  ? 'Conectado para receber os repasses das corridas. Essa conexão não é necessária para pagar seu plano.'
+                  : 'Conecte para receber repasses das corridas. Você não precisa vincular a conta para pagar um plano.'}
               </Text>
             </View>
             <View style={[s.mpStatus, { backgroundColor: (mpConnection?.connected ? Colors.success : Colors.warning) + '18' }]}>
@@ -367,23 +370,37 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
         {/* ── PIX panel (shown after switching to a fixed plan) ── */}
         {pixCode !== null && pendingPlan && (
           <View style={s.pixPanel}>
-            <Text style={s.pixPanelTitle}>Pagamento seguro</Text>
+            <Text style={s.pixPanelTitle}>{paymentConfirmed ? 'Pagamento confirmado!' : 'Pagamento seguro'}</Text>
             <Text style={s.pixPanelSub}>
-              O Mercado Pago abre uma tela segura para pagar com cartão ou Pix no plano {PLAN_LABELS[pendingPlan]}.
+              {paymentConfirmed
+                ? `Plano ${PLAN_LABELS[pendingPlan]} ativado. Seu acesso já foi atualizado.`
+                : pendingPlan === 'daily'
+                ? 'Pague uma única diária com Pix ou cartão. O Checkout Pro permite pagar sem entrar na conta Mercado Pago.'
+                : `O Mercado Pago abrirá o checkout para pagar com Pix ou cartão no plano ${PLAN_LABELS[pendingPlan]}.`}
             </Text>
 
             <View style={s.pixAmountBox}>
-              <Text style={s.pixAmountLabel}>Valor a pagar</Text>
+              <Text style={s.pixAmountLabel}>{pendingPlan === 'daily' ? 'Valor da diária' : 'Valor a pagar'}</Text>
               <Text style={s.pixAmount}>{fmtBRL(pixAmount)}</Text>
             </View>
 
-            <TouchableOpacity style={s.copyBtn} onPress={() => Linking.openURL(pixCode)} activeOpacity={0.85}>
-              <Text style={s.copyBtnTxt}>Abrir checkout do Mercado Pago</Text>
-            </TouchableOpacity>
+            {!paymentConfirmed && (
+              <TouchableOpacity
+                style={s.copyBtn}
+                onPress={() => WebBrowser.openBrowserAsync(pixCode).catch(() => Alert.alert('Não foi possível abrir o pagamento', 'Verifique sua conexão e tente novamente.'))}
+                activeOpacity={0.85}
+              >
+                <Text style={s.copyBtnTxt}>{pendingPlan === 'daily' ? 'Pagar diária com Pix ou cartão' : 'Abrir checkout do Mercado Pago'}</Text>
+              </TouchableOpacity>
+            )}
 
             <View style={s.pixNote}>
               <Text style={s.pixNoteTxt}>
-                A cobrança recorrente e a confirmação são processadas automaticamente pelo Mercado Pago. Não digite os dados do cartão no app.
+                {paymentConfirmed
+                  ? 'O webhook confirmou o pagamento e ativou seu plano.'
+                  : pendingPlan === 'daily'
+                  ? 'A diária começa após a confirmação e não renova automaticamente. Para trabalhar outro dia, faça uma nova compra.'
+                  : 'A cobrança recorrente e a confirmação são processadas automaticamente pelo Mercado Pago. Não digite os dados do cartão no app.'}
               </Text>
             </View>
 
@@ -467,6 +484,10 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({ onB
 const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#F7F8FA' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F7F8FA' },
+  loadError: { marginBottom: 14, padding: 14, borderRadius: 12, backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA', gap: 8 },
+  loadErrorText: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: Colors.danger, lineHeight: 19 },
+  loadRetry: { alignSelf: 'flex-start', paddingVertical: 5 },
+  loadRetryText: { fontSize: 13, fontFamily: 'Poppins_600SemiBold', color: Colors.primary },
   topBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingHorizontal: 16, paddingBottom: 10, backgroundColor: '#F7F8FA',
@@ -474,27 +495,6 @@ const s = StyleSheet.create({
   iconBtn: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 4, elevation: 2 },
   topTitle: { fontSize: 16, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
   scroll: { paddingHorizontal: 16, paddingTop: 8 },
-
-  // Status card
-  statusCard: {
-    backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 12,
-    borderWidth: 1.5, borderColor: '#E8E8E8',
-    shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 6, elevation: 2,
-  },
-  statusTop: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 },
-  statusLabel: { fontSize: 11, fontFamily: 'Poppins_500Medium', color: '#999', marginBottom: 2 },
-  planName: { fontSize: 20, fontFamily: 'Poppins_700Bold', color: '#1A1A1A' },
-  statusPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 5,
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, borderWidth: 1,
-  },
-  statusPillTxt: { fontSize: 11, fontFamily: 'Poppins_700Bold' },
-  amount: { fontSize: 26, fontFamily: 'Poppins_700Bold', color: '#1A1A1A', marginBottom: 8 },
-  amountUnit: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: '#999' },
-  dueRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  dueTxt: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: '#888' },
-  commissionRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  commissionTxt: { fontSize: 13, fontFamily: 'Poppins_400Regular', color: '#555', flex: 1 },
 
   // Banner
   banner: {

@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  ActivityIndicator, Alert, StatusBar, Linking,
+  ActivityIndicator, Alert, StatusBar, AppState,
 } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import { Check } from 'lucide-react-native';
 import { Colors } from '../../constants';
 import {
-  getAppSettings, selectPlan, createSubscriptionCheckout, type PlanType,
+  getAppSettings, getSubscription, selectPlan, createSubscriptionCheckout,
+  watchDriverSubscription, type PlanType,
 } from '../../services/payments';
 import { getMyPrimaryVehicleSegment } from '../../services/drivers';
 import type { AppSettings, PlanSegment } from '../../types/db';
@@ -43,7 +45,7 @@ function buildPlans(settings: AppSettings | null, segment: PlanSegment): PlanDef
       comfort: settings?.car_comfort_monthly_price ?? 380,
       premium: settings?.car_premium_monthly_price ?? 450,
     } as const;
-    return (Object.keys(carMonthly) as Array<'economy' | 'comfort' | 'premium'>).map((carSegment) => ({
+    const carMonthlyPlans = (Object.keys(carMonthly) as Array<'economy' | 'comfort' | 'premium'>).map((carSegment) => ({
       id: 'monthly' as const,
       segment: carSegment,
       title: carSegment === 'economy' ? 'Econômico' : carSegment === 'comfort' ? 'Conforto' : 'Prêmio',
@@ -59,6 +61,21 @@ function buildPlans(settings: AppSettings | null, segment: PlanSegment): PlanDef
       accentColor: carSegment === 'premium' ? '#8B5CF6' : carSegment === 'comfort' ? '#F59E0B' : '#3B82F6',
       immediate: false,
     }));
+    return [
+      {
+        id: 'commission', segment: 'economy', title: 'Por Corrida',
+        description: 'Sem mensalidade fixa. Pague uma comissão só quando trabalhar.',
+        priceMain: pct + '%', priceUnit: 'por corrida',
+        badge: 'ACESSO IMEDIATO', badgeColor: '#6DC228', accentColor: '#6DC228', immediate: true,
+      },
+      {
+        id: 'daily', segment: 'economy', title: 'Diário',
+        description: 'Teste o aplicativo por um dia antes de escolher um plano mensal.',
+        priceMain: 'R$ ' + fmtBRL(daily), priceUnit: 'por dia',
+        badgeColor: '#3B82F6', accentColor: '#3B82F6', immediate: false,
+      },
+      ...carMonthlyPlans,
+    ];
   }
 
   const motoDaily = settings?.moto_daily_price ?? daily;
@@ -220,26 +237,47 @@ const pc = StyleSheet.create({
 interface PixPanelProps {
   code: string;
   amount: number;
+  plan: PlanType;
+  confirmed: boolean;
   onDone: () => void;
 }
 
-const PixPanel: React.FC<PixPanelProps> = ({ code, amount, onDone }) => (
+const PixPanel: React.FC<PixPanelProps> = ({ code, amount, plan, confirmed, onDone }) => {
+  const isDaily = plan === 'daily';
+  const openCheckout = async () => {
+    try { await WebBrowser.openBrowserAsync(code); }
+    catch { Alert.alert('Não foi possível abrir o pagamento', 'Verifique sua conexão e tente novamente.'); }
+  };
+
+  return (
   <View style={px.panel}>
-    <Text style={px.title}>Pagamento seguro</Text>
-    <Text style={px.sub}>O Mercado Pago abre uma tela segura para pagar com cartão ou Pix.</Text>
+    <Text style={px.title}>{confirmed ? 'Pagamento confirmado!' : 'Pagamento seguro'}</Text>
+    <Text style={px.sub}>
+      {confirmed
+        ? 'Seu plano foi ativado e o acesso já está atualizado.'
+        : isDaily
+        ? 'Pague uma única diária com Pix ou cartão. Não precisa entrar na sua conta Mercado Pago.'
+        : 'O Mercado Pago abrirá o checkout para pagar com Pix ou cartão.'}
+    </Text>
 
     <View style={px.amountBox}>
-      <Text style={px.amountLabel}>Valor da recorrência</Text>
+      <Text style={px.amountLabel}>{isDaily ? 'Valor da diária' : 'Valor da recorrência'}</Text>
       <Text style={px.amount}>R$ {fmtBRL(amount)}</Text>
     </View>
 
-    <TouchableOpacity style={px.copyBtn} onPress={() => Linking.openURL(code)} activeOpacity={0.85}>
-      <Text style={px.copyBtnTxt}>Abrir checkout do Mercado Pago</Text>
-    </TouchableOpacity>
+    {!confirmed && (
+      <TouchableOpacity style={px.copyBtn} onPress={openCheckout} activeOpacity={0.85}>
+        <Text style={px.copyBtnTxt}>{isDaily ? 'Pagar diária com Pix ou cartão' : 'Abrir checkout do Mercado Pago'}</Text>
+      </TouchableOpacity>
+    )}
 
     <View style={px.note}>
       <Text style={px.noteTxt}>
-        A cobrança recorrente e a confirmação são processadas automaticamente pelo Mercado Pago. Não digite os dados do cartão no app.
+        {confirmed
+          ? 'O webhook confirmou o pagamento e ativou seu plano.'
+          : isDaily
+          ? 'A diária começa após a confirmação do pagamento e não renova automaticamente. Para trabalhar outro dia, faça uma nova compra.'
+          : 'A cobrança recorrente e a confirmação são processadas pelo Mercado Pago. Não digite os dados do cartão no app.'}
       </Text>
     </View>
 
@@ -248,7 +286,8 @@ const PixPanel: React.FC<PixPanelProps> = ({ code, amount, onDone }) => (
       <Text style={px.doneBtnTxt}>Voltar ao app</Text>
     </TouchableOpacity>
   </View>
-);
+  );
+};
 
 const px = StyleSheet.create({
   panel: {
@@ -311,6 +350,8 @@ const PlanSelectionScreen: React.FC<PlanSelectionScreenProps> = ({ onDone }) => 
   const [submitting, setSubmitting] = useState(false);
   const [pixCode, setPixCode] = useState<string | null>(null);
   const [pixAmount, setPixAmount] = useState(0);
+  const [paymentConfirmed, setPaymentConfirmed] = useState(false);
+  const checkoutBaselinePaidAt = useRef<string | null>(null);
 
   useEffect(() => {
     Promise.all([getAppSettings(), getMyPrimaryVehicleSegment()])
@@ -319,14 +360,40 @@ const PlanSelectionScreen: React.FC<PlanSelectionScreenProps> = ({ onDone }) => 
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    if (!pixCode || !selected || paymentConfirmed) return;
+    let alive = true;
+    const stopWatching = watchDriverSubscription((subscription) => {
+      if (subscription?.status === 'active' && subscription.plan === selected.id
+          && subscription.paid_at && subscription.paid_at !== checkoutBaselinePaidAt.current) {
+        setPaymentConfirmed(true);
+      }
+    });
+    const appStateListener = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void getSubscription().then((subscription) => {
+          if (alive && subscription?.status === 'active' && subscription.plan === selected.id
+              && subscription.paid_at && subscription.paid_at !== checkoutBaselinePaidAt.current) setPaymentConfirmed(true);
+        }).catch(() => {});
+      }
+    });
+    return () => { alive = false; stopWatching(); appStateListener.remove(); };
+  }, [pixCode, selected, paymentConfirmed]);
+
   const plans = buildPlans(settings, segment === 'moto' ? 'moto' : 'economy');
 
   const handleConfirm = async () => {
     if (!selected) { Alert.alert('Escolha um plano', 'Selecione uma opção antes de continuar.'); return; }
     setSubmitting(true);
     try {
-      await selectPlan(selected.id, selected.segment);
-      if (selected.id === 'commission') { onDone(); return; }
+      if (selected.id === 'commission') {
+        await selectPlan(selected.id, selected.segment);
+        onDone();
+        return;
+      }
+      setPaymentConfirmed(false);
+      const beforeCheckout = await getSubscription();
+      checkoutBaselinePaidAt.current = beforeCheckout?.paid_at ?? null;
       const result = await createSubscriptionCheckout(selected.id, selected.segment);
       setPixCode(result.init_point);
       setPixAmount(result.amount);
@@ -372,14 +439,14 @@ const PlanSelectionScreen: React.FC<PlanSelectionScreenProps> = ({ onDone }) => 
             key={`${plan.id}-${plan.segment}`}
             plan={plan}
             selected={selected?.id === plan.id && selected.segment === plan.segment}
-            onPress={() => { setSelected({ id: plan.id, segment: plan.segment }); setPixCode(null); }}
+            onPress={() => { setSelected({ id: plan.id, segment: plan.segment }); setPixCode(null); setPaymentConfirmed(false); checkoutBaselinePaidAt.current = null; }}
             disabled={submitting}
           />
         ))}
 
         {/* PIX panel (only shown after confirming a fixed plan) */}
         {pixCode !== null && (
-          <PixPanel code={pixCode} amount={pixAmount} onDone={onDone} />
+          <PixPanel code={pixCode} amount={pixAmount} plan={selected?.id ?? 'daily'} confirmed={paymentConfirmed} onDone={onDone} />
         )}
 
         {/* CTA button */}

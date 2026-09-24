@@ -160,6 +160,38 @@ export function createSplitPreference({ sellerAccessToken, rideId, amount, marke
   });
 }
 
+// A daily pass is a one-time charge. Unlike /preapproval it does not create a
+// recurring authorization or require the driver to link a Mercado Pago account.
+export function createDailyPlanPreference({ driverId, amount, externalReference, notificationUrl, backUrls, idempotencyKey }) {
+  const safeAmount = Number(Number(amount).toFixed(2));
+  return mercadopagoRequest('/checkout/preferences', {
+    method: 'POST',
+    idempotencyKey,
+    body: {
+      items: [{
+        id: `daily-pass-${driverId}`,
+        title: 'Plano Diário Rotta Urbana',
+        description: 'Acesso ao app por um dia; renovação manual.',
+        currency_id: 'BRL',
+        quantity: 1,
+        unit_price: safeAmount,
+      }],
+      external_reference: String(externalReference),
+      notification_url: notificationUrl,
+      back_urls: backUrls,
+      auto_return: 'approved',
+      statement_descriptor: 'ROTTA URBANA',
+      // Remove boleto/offline payments; Pix, card and the provider's wallet
+      // remain available where Mercado Pago supports them.
+      payment_methods: {
+        installments: 1,
+        excluded_payment_types: [{ id: 'ticket' }],
+      },
+      // No payer is pre-filled so Checkout Pro can offer its guest flow.
+    },
+  });
+}
+
 export function refundPaymentWithToken(sellerAccessToken, paymentId, amount, idempotencyKey) {
   const body = amount == null ? {} : { amount: Number(Number(amount).toFixed(2)) };
   return mercadopagoRequestWithToken(sellerAccessToken, `/v1/payments/${encodeURIComponent(paymentId)}/refunds`, {
@@ -169,7 +201,6 @@ export function refundPaymentWithToken(sellerAccessToken, paymentId, amount, ide
 
 export function buildRecurringSchedule(plan, amount) {
   const schedules = {
-    daily: { frequency: 1, frequency_type: 'days', days: 1 },
     weekly: { frequency: 7, frequency_type: 'days', days: 7 },
     monthly: { frequency: 1, frequency_type: 'months', days: 30 },
   };

@@ -12,13 +12,22 @@ import { Colors, Radius, Typography } from '../../constants';
 import {
   getAdminDrivers, verifyDriver, getAppSettings, setApprovalMode,
   setMinVehicleYear, approveAllPending, setCommissionPct, setPlanWeeklyPrice,
-  type AdminDriver, type AppSettings,
+  setAdminDriverPlan, type AdminDriver, type AppSettings,
 } from '../../services/admin';
+import type { PlanType } from '../../services/payments';
+import type { PlanSegment, SubscriptionStatus } from '../../types/db';
 
 const STATUS_FILTERS = ['Todos', 'Verificados', 'Pendentes', 'Inadimplentes', 'Online'] as const;
+const PLAN_OPTIONS: PlanType[] = ['commission', 'daily', 'weekly', 'monthly'];
+const PLAN_STATUS_OPTIONS: SubscriptionStatus[] = ['active', 'pending', 'expired', 'suspended'];
+const PLAN_SEGMENT_OPTIONS: PlanSegment[] = ['moto', 'economy', 'comfort', 'premium'];
+const planLabels: Record<PlanType, string> = { commission: 'Por corrida', daily: 'Diário', weekly: 'Semanal', monthly: 'Mensal' };
+const planStatusLabels: Record<SubscriptionStatus, string> = { active: 'Ativo', pending: 'Pendente', expired: 'Vencido (baixa)', suspended: 'Suspenso' };
+const planSegmentLabels: Record<PlanSegment, string> = { moto: 'Moto', economy: 'Econômico', comfort: 'Conforto', premium: 'Prêmio' };
 
 const subBadge = (s: AdminDriver['subscription_status']) =>
   s === 'active' ? { label: 'Em dia', variant: 'success' as const }
+  : s === 'pending' ? { label: 'Pendente', variant: 'warning' as const }
   : s === 'expired' ? { label: 'Vencida', variant: 'danger' as const }
   : s === 'suspended' ? { label: 'Suspensa', variant: 'warning' as const }
   : { label: 'Sem plano', variant: 'muted' as const };
@@ -44,6 +53,11 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
   const [activeFilter, setActiveFilter] = useState<typeof STATUS_FILTERS[number]>('Todos');
   const [selected, setSelected] = useState<AdminDriver | null>(null);
   const [acting, setActing] = useState(false);
+  const [planEditorOpen, setPlanEditorOpen] = useState(false);
+  const [planDraft, setPlanDraft] = useState<PlanType>('monthly');
+  const [planSegmentDraft, setPlanSegmentDraft] = useState<PlanSegment>('economy');
+  const [planStatusDraft, setPlanStatusDraft] = useState<SubscriptionStatus>('expired');
+  const [savingPlan, setSavingPlan] = useState(false);
 
   // Settings modal
   const [showSettings, setShowSettings] = useState(false);
@@ -55,9 +69,6 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
   const [weeklyInput, setWeeklyInput] = useState('');
   const [savingCommission, setSavingCommission] = useState(false);
   const [savingWeekly, setSavingWeekly] = useState(false);
-
-  const commissionPreviewPct = Math.min(100, Math.max(0, parseFloat(commissionInput.replace(',', '.')) || 0));
-  const commissionPreviewAmount = (200 * commissionPreviewPct) / 100;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -204,6 +215,40 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
       Alert.alert('Erro', e?.message ?? 'Não foi possível atualizar o motorista.');
     } finally {
       setActing(false);
+    }
+  };
+
+  const openPlanEditor = () => {
+    if (!selected) return;
+    setPlanDraft(selected.subscription_plan ?? 'monthly');
+    setPlanSegmentDraft(selected.plan_segment ?? 'economy');
+    setPlanStatusDraft(selected.subscription_status ?? 'expired');
+    setPlanEditorOpen((open) => !open);
+  };
+
+  const saveDriverPlan = async () => {
+    if (!selected || savingPlan) return;
+    setSavingPlan(true);
+    try {
+      await setAdminDriverPlan(selected.driver_id, planDraft, planSegmentDraft, planStatusDraft);
+      const due = new Date();
+      due.setDate(due.getDate() + (planDraft === 'daily' ? 1 : planDraft === 'weekly' ? 7 : 30));
+      const dueDate = [due.getFullYear(), String(due.getMonth() + 1).padStart(2, '0'), String(due.getDate()).padStart(2, '0')].join('-');
+      const updated = {
+        ...selected,
+        subscription_plan: planDraft,
+        plan_segment: planSegmentDraft,
+        subscription_status: planStatusDraft,
+        subscription_due: dueDate,
+      };
+      setSelected(updated);
+      setDrivers((previous) => previous.map((driver) => driver.driver_id === selected.driver_id ? updated : driver));
+      setPlanEditorOpen(false);
+      Alert.alert('Plano atualizado', `${planLabels[planDraft]} · ${planStatusLabels[planStatusDraft]}.`);
+    } catch (e: any) {
+      Alert.alert('Erro', e?.message ?? 'Não foi possível atualizar o plano.');
+    } finally {
+      setSavingPlan(false);
     }
   };
 
@@ -370,6 +415,7 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
                   { lbl: 'Documentos', val: selected.documents_status === 'approved' ? 'Aprovados' : selected.documents_status === 'pending' ? 'Em análise' : 'Rejeitados' },
                   { lbl: 'Veículo', val: [selected.vehicle_model, selected.vehicle_color, selected.vehicle_year].filter(Boolean).join(' ') || '—' },
                   { lbl: 'Placa', val: selected.vehicle_plate ?? '—' },
+                  { lbl: 'Plano atual', val: selected.subscription_plan ? `${planLabels[selected.subscription_plan]} · ${planSegmentLabels[selected.plan_segment ?? 'economy']}` : 'Não selecionado' },
                   { lbl: 'Assinatura', val: subBadge(selected.subscription_status).label },
                   { lbl: 'Vencimento', val: fmtDate(selected.subscription_due) },
                 ].map((row) => (
@@ -378,6 +424,52 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
                     <Text style={styles.detailVal} numberOfLines={1}>{row.val}</Text>
                   </View>
                 ))}
+
+                <View style={styles.planEditor}>
+                  <Text style={styles.planEditorTitle}>Gerenciar plano do motorista</Text>
+                  <Text style={styles.settingDesc}>Troque o plano, libere o acesso manualmente ou dê baixa no plano atual.</Text>
+                  {!planEditorOpen ? (
+                    <TouchableOpacity style={styles.planEditButton} onPress={openPlanEditor} activeOpacity={0.85}>
+                      <Zap size={16} color="#fff" />
+                      <Text style={styles.planEditButtonText}>Trocar plano / atualizar acesso</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <>
+                      <Text style={styles.planGroupLabel}>Plano</Text>
+                      <View style={styles.planChoiceRow}>
+                        {PLAN_OPTIONS.map((plan) => (
+                          <TouchableOpacity key={plan} style={[styles.planChoice, planDraft === plan && styles.planChoiceActive]} onPress={() => setPlanDraft(plan)}>
+                            <Text style={[styles.planChoiceText, planDraft === plan && styles.planChoiceTextActive]}>{planLabels[plan]}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                      <Text style={styles.planGroupLabel}>Categoria</Text>
+                      <View style={styles.planChoiceRow}>
+                        {PLAN_SEGMENT_OPTIONS.map((segment) => (
+                          <TouchableOpacity key={segment} style={[styles.planChoice, planSegmentDraft === segment && styles.planChoiceActive]} onPress={() => setPlanSegmentDraft(segment)}>
+                            <Text style={[styles.planChoiceText, planSegmentDraft === segment && styles.planChoiceTextActive]}>{planSegmentLabels[segment]}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                      <Text style={styles.planGroupLabel}>Acesso / assinatura</Text>
+                      <View style={styles.planChoiceRow}>
+                        {PLAN_STATUS_OPTIONS.map((status) => (
+                          <TouchableOpacity key={status} style={[styles.planChoice, planStatusDraft === status && styles.planChoiceActive]} onPress={() => setPlanStatusDraft(status)}>
+                            <Text style={[styles.planChoiceText, planStatusDraft === status && styles.planChoiceTextActive]}>{planStatusLabels[status]}</Text>
+                          </TouchableOpacity>
+                        ))}
+                      </View>
+                      <View style={styles.planEditorActions}>
+                        <TouchableOpacity style={styles.planCancelButton} onPress={() => setPlanEditorOpen(false)}>
+                          <Text style={styles.planCancelText}>Cancelar</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={[styles.planSaveButton, savingPlan && { opacity: 0.6 }]} onPress={saveDriverPlan} disabled={savingPlan}>
+                          {savingPlan ? <ActivityIndicator size="small" color="#fff" /> : <Text style={styles.planSaveText}>Salvar plano</Text>}
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  )}
+                </View>
 
                 <View style={styles.actionRow}>
                   {!selected.is_verified ? (
@@ -525,32 +617,6 @@ const AdminDriversScreen: React.FC<AdminDriversScreenProps> = ({ onBack }) => {
                         : <Text style={styles.saveBtnTxt}>Salvar</Text>}
                     </TouchableOpacity>
                   </View>
-                  <View style={styles.commissionExample}>
-                    <Text style={styles.commissionExampleTitle}>Exemplo de fechamento</Text>
-                    <View style={styles.commissionExampleRow}>
-                      <View style={styles.commissionExampleCell}>
-                        <Text style={styles.commissionExampleLabel}>Total</Text>
-                        <Text style={styles.commissionExampleValue}>R$ 200,00</Text>
-                      </View>
-                      <Text style={styles.commissionExampleOperator}>−</Text>
-                      <View style={styles.commissionExampleCell}>
-                        <Text style={styles.commissionExampleLabel}>Comissão</Text>
-                        <Text style={[styles.commissionExampleValue, { color: Colors.warning }]}>
-                          R$ {commissionPreviewAmount.toFixed(2).replace('.', ',')}
-                        </Text>
-                      </View>
-                      <Text style={styles.commissionExampleOperator}>=</Text>
-                      <View style={styles.commissionExampleCell}>
-                        <Text style={styles.commissionExampleLabel}>Líquido</Text>
-                        <Text style={[styles.commissionExampleValue, { color: Colors.success }]}>
-                          R$ {(200 - commissionPreviewAmount).toFixed(2).replace('.', ',')}
-                        </Text>
-                      </View>
-                    </View>
-                    <Text style={styles.commissionExampleHint}>
-                      O motorista faz um único PIX do valor da comissão no fim do dia.
-                    </Text>
-                  </View>
                 </View>
 
                 {/* Weekly plan price */}
@@ -667,6 +733,21 @@ const styles = StyleSheet.create({
   actionRow: { marginTop: 18 },
   actionBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: Radius.md, paddingVertical: 15 },
   actionTxt: { fontSize: 15, fontFamily: 'Poppins_700Bold', color: '#fff' },
+  planEditor: { marginTop: 18, padding: 14, borderRadius: Radius.md, backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border },
+  planEditorTitle: { ...Typography.bodyMedium, color: Colors.textPrimary, marginBottom: 4 },
+  planEditButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, marginTop: 12, paddingVertical: 12, borderRadius: Radius.md, backgroundColor: Colors.primary },
+  planEditButtonText: { ...Typography.smallMedium, color: '#fff' },
+  planGroupLabel: { ...Typography.caption, color: Colors.textMuted, marginTop: 14, marginBottom: 7 },
+  planChoiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
+  planChoice: { paddingHorizontal: 11, paddingVertical: 8, borderRadius: Radius.full, borderWidth: 1, borderColor: Colors.border, backgroundColor: Colors.card },
+  planChoiceActive: { backgroundColor: Colors.dark, borderColor: Colors.dark },
+  planChoiceText: { ...Typography.caption, color: Colors.textSecondary },
+  planChoiceTextActive: { color: '#fff' },
+  planEditorActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 18 },
+  planCancelButton: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: Radius.md, backgroundColor: Colors.card, borderWidth: 1, borderColor: Colors.border },
+  planCancelText: { ...Typography.smallMedium, color: Colors.textSecondary },
+  planSaveButton: { minWidth: 120, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 14, paddingVertical: 10, borderRadius: Radius.md, backgroundColor: Colors.primary },
+  planSaveText: { ...Typography.smallMedium, color: '#fff' },
 
   // Settings modal
   settingSection: { paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: Colors.borderLight },
@@ -696,17 +777,6 @@ const styles = StyleSheet.create({
   numericUnit: { fontSize: 14, fontFamily: 'Poppins_600SemiBold', color: Colors.textMuted },
   saveBtn: { paddingHorizontal: 18, paddingVertical: 11, borderRadius: Radius.md, backgroundColor: Colors.primary },
   saveBtnTxt: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: '#fff' },
-  commissionExample: {
-    marginTop: 14, padding: 12, borderRadius: Radius.md,
-    backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border,
-  },
-  commissionExampleTitle: { fontSize: 12, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary, marginBottom: 10 },
-  commissionExampleRow: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  commissionExampleCell: { flex: 1, minWidth: 0 },
-  commissionExampleLabel: { fontSize: 10, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginBottom: 3 },
-  commissionExampleValue: { fontSize: 12, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
-  commissionExampleOperator: { fontSize: 16, fontFamily: 'Poppins_500Medium', color: Colors.textMuted },
-  commissionExampleHint: { fontSize: 10, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, lineHeight: 15, marginTop: 10 },
 });
 
 export default AdminDriversScreen;

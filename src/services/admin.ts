@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabase';
 import type { RideStatusDb, RideTypeDb, DriverStatus, SubscriptionStatus } from '../types/db';
+import type { PlanType } from './payments';
 
 // ── KPIs ──────────────────────────────────────────────────────────────────────
 export interface AdminKpis {
@@ -69,6 +70,8 @@ export interface AdminDriver {
   operating_state?: string | null;
   subscription_status: SubscriptionStatus | null;
   subscription_due: string | null;
+  subscription_plan: PlanType | null;
+  plan_segment: 'moto' | 'economy' | 'comfort' | 'premium' | null;
 }
 
 export async function getAdminDrivers(limit = 200): Promise<AdminDriver[]> {
@@ -79,6 +82,21 @@ export async function getAdminDrivers(limit = 200): Promise<AdminDriver[]> {
 
 export async function verifyDriver(driverId: string, approve: boolean): Promise<void> {
   const { error } = await supabase.rpc('admin_verify_driver', { p_driver_id: driverId, p_approve: approve });
+  if (error) throw error;
+}
+
+export async function setAdminDriverPlan(
+  driverId: string,
+  plan: PlanType,
+  segment: 'moto' | 'economy' | 'comfort' | 'premium',
+  status: SubscriptionStatus,
+): Promise<void> {
+  const { error } = await supabase.rpc('admin_set_driver_plan', {
+    p_driver_id: driverId,
+    p_plan: plan,
+    p_segment: segment,
+    p_status: status,
+  });
   if (error) throw error;
 }
 
@@ -100,6 +118,11 @@ export async function getAdminPayments(limit = 100): Promise<AdminPayment[]> {
   const { data, error } = await supabase.rpc('admin_list_payments', { p_limit: limit });
   if (error) throw error;
   return (data as AdminPayment[]) ?? [];
+}
+
+export async function confirmAdminSubscriptionPayment(paymentId: string): Promise<void> {
+  const { error } = await supabase.rpc('admin_confirm_subscription_payment', { p_payment_id: paymentId });
+  if (error) throw error;
 }
 
 // ── Support tickets ───────────────────────────────────────────────────────────

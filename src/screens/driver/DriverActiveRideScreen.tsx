@@ -227,9 +227,11 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     setCurrentDestinationAddress(destinationAddress);
   }, [destination?.[0], destination?.[1], destinationAddress]);
 
-  // ── Fetch trip route (pickup → destination), retrying while it fails ────────
+  // ── Fetch trip route (pickup → destination) only after pickup ────────────────
   useEffect(() => {
-    if (!origin || !currentDestination) return;
+    // Don't show or request the passenger's trip route until they are aboard.
+    // Before pickup the driver's only route is their live position → pickup.
+    if (status !== 'in_ride' || !origin || !currentDestination) return;
     let active = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
     // A route to the previous destination would contradict the moved flag.
@@ -249,7 +251,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     };
     load(0);
     return () => { active = false; clearTimeout(retry); };
-  }, [origin?.[0], origin?.[1], currentDestination?.[0], currentDestination?.[1]]);
+  }, [status, origin?.[0], origin?.[1], currentDestination?.[0], currentDestination?.[1]]);
 
   // ── Fetch approach route (driver → pickup) when heading to passenger ─────────
   // Re-fetch only when driver moves > 80m to avoid hammering the API. A newer
@@ -345,17 +347,17 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 
   // ── Computed: trimmed route + progress + ETA ─────────────────────────────────
   const { activeRoute, approachLine, progress, etaText } = useMemo(() => {
-    // --- approaching passenger: street route to the pickup over the whole trip ---
+    // --- approaching passenger: only the street route to the pickup ---
     if (status === 'to_passenger') {
       const base = approachRoute;
-      if (!base || !driverPos) return { activeRoute: tripRoute, approachLine: base, progress: 0, etaText: null };
+      if (!base || !driverPos) return { activeRoute: null, approachLine: base, progress: 0, etaText: null };
       const trimmed: RouteGeometry = { ...base, coordinates: trimPolyline(base.coordinates, driverPos) };
       const remaining = polyLen(trimmed.coordinates);
       const total = polyLen(base.coordinates) || 1;
       const spd = driverSpeedMs > 0.5 ? driverSpeedMs : 8.33; // fallback 30 km/h
       const eta = Math.max(1, Math.ceil(remaining / spd / 60));
       return {
-        activeRoute: tripRoute,
+        activeRoute: null,
         approachLine: trimmed,
         progress: Math.min(1, (total - remaining) / total),
         etaText: `~${eta} min para o passageiro`,
@@ -379,7 +381,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       };
     }
 
-    return { activeRoute: tripRoute, approachLine: null, progress: 0, etaText: null };
+    return { activeRoute: status === 'in_ride' ? tripRoute : null, approachLine: null, progress: 0, etaText: null };
   }, [status, tripRoute, approachRoute, driverPos, driverSpeedMs]);
 
   // Until the street route arrives, a dashed straight line links the car to the pickup.
@@ -531,7 +533,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 
       <RouteMap
         origin={origin}
-        destination={currentDestination}
+        destination={status === 'in_ride' ? currentDestination : undefined}
         route={activeRoute}
         approachRoute={approachLine}
         secondaryRoute={pickupLine}

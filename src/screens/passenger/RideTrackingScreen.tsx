@@ -198,13 +198,13 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     setRideStatus(status === 'driver_arrived' ? 'arrived' : status === 'in_progress' ? 'in_ride' : 'on_way');
   }, [status]);
 
-  // Traça a rota (Mapbox Directions) origem -> destino.
+  // Só mostra/calcula a rota da viagem depois que o passageiro embarca.
   useEffect(() => {
-    if (!origin || !destination) return;
+    if (rideStatus !== 'in_ride' || !origin || !destination) return;
     let active = true;
     getRoute(origin, destination).then((r) => { if (active && r) setRoute(r.geometry); }).catch(() => {});
     return () => { active = false; };
-  }, [origin?.[0], origin?.[1], destination?.[0], destination?.[1]]);
+  }, [rideStatus, origin?.[0], origin?.[1], destination?.[0], destination?.[1]]);
 
   // Localização do motorista ao vivo (poll a cada 4s) + linha até o embarque.
   useEffect(() => {
@@ -218,11 +218,6 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     const iv = setInterval(tick, 4000);
     return () => { active = false; clearInterval(iv); };
   }, [rideId]);
-
-  // Only while the driver is coming: after pickup the line would point back.
-  const driverLine = rideStatus === 'on_way' && driverLoc && origin
-    ? { type: 'LineString' as const, coordinates: [driverLoc, origin] as [number, number][] }
-    : null;
 
   // Real driver contact (name / phone / vehicle).
   const [counterpart, setCounterpart] = useState<RideCounterpart | null>(null);
@@ -351,7 +346,15 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
       <StatusBar barStyle="light-content" translucent backgroundColor="transparent" />
 
       {/* Mapa (Mapbox no dev build; placeholder no Expo Go) com a rota traçada */}
-      <RouteMap origin={origin} destination={destination} route={route} restrictToSinop driverLocation={driverLoc ?? undefined} secondaryRoute={driverLine} {...mapPadding} style={styles.map} />
+      <RouteMap
+        origin={origin}
+        destination={rideStatus === 'in_ride' ? destination : undefined}
+        route={rideStatus === 'in_ride' ? route : null}
+        restrictToSinop
+        driverLocation={driverLoc ?? undefined}
+        {...mapPadding}
+        style={styles.map}
+      />
 
       {/* Panic button */}
       <TouchableOpacity style={[styles.panicBtn, { top: insets.top + 8 }]} onPress={onPanic}>

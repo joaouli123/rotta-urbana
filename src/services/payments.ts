@@ -90,6 +90,30 @@ export async function getSubscription(): Promise<SubscriptionRow | null> {
   return (data as SubscriptionRow) ?? null;
 }
 
+/** Poll the driver's subscription while a checkout is open; the webhook is authoritative. */
+export function watchDriverSubscription(
+  onUpdate: (subscription: SubscriptionRow | null) => void,
+  intervalMs = 3000,
+): () => void {
+  let stopped = false;
+  let inFlight = false;
+  const poll = async () => {
+    if (stopped || inFlight) return;
+    inFlight = true;
+    try {
+      const subscription = await getSubscription();
+      if (!stopped) onUpdate(subscription);
+    } catch {
+      // A transient network failure is retried on the next interval.
+    } finally {
+      inFlight = false;
+    }
+  };
+  const timer = setInterval(() => { void poll(); }, intervalMs);
+  void poll();
+  return () => { stopped = true; clearInterval(timer); };
+}
+
 export async function getPayments(limit = 20): Promise<PaymentRow[]> {
   const { data, error } = await supabase
     .from('payments').select('*').order('created_at', { ascending: false }).limit(limit);

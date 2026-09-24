@@ -9,7 +9,7 @@ import {
 } from 'lucide-react-native';
 import { Card, Badge, Avatar } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
-import { getAdminPayments, type AdminPayment } from '../../services/admin';
+import { confirmAdminSubscriptionPayment, getAdminPayments, type AdminPayment } from '../../services/admin';
 import { getAppSettings } from '../../services/payments';
 import type { AppSettings } from '../../types/db';
 
@@ -36,6 +36,7 @@ const AdminPaymentsScreen: React.FC<AdminPaymentsScreenProps> = ({ onBack }) => 
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<'all' | 'approved' | 'pending'>('all');
+  const [confirmingPaymentId, setConfirmingPaymentId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -80,6 +81,28 @@ const AdminPaymentsScreen: React.FC<AdminPaymentsScreenProps> = ({ onBack }) => 
     );
     Linking.openURL(`https://wa.me/${full}?text=${msg}`).catch(() =>
       Alert.alert('Erro', 'Não foi possível abrir o WhatsApp.'));
+  };
+
+  const confirmPaymentManually = (payment: AdminPayment) => {
+    Alert.alert(
+      'Confirmar pagamento manualmente?',
+      `Isso marcará ${fmtMoney(Number(payment.amount))} como pago e poderá liberar o plano do motorista. Use depois de confirmar o recebimento.`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        { text: 'Confirmar pagamento', onPress: async () => {
+          setConfirmingPaymentId(payment.payment_id);
+          try {
+            await confirmAdminSubscriptionPayment(payment.payment_id);
+            await load();
+            Alert.alert('Pagamento confirmado', 'A assinatura foi atualizada no app.');
+          } catch (error) {
+            Alert.alert('Erro', error instanceof Error ? error.message : 'Não foi possível confirmar o pagamento.');
+          } finally {
+            setConfirmingPaymentId(null);
+          }
+        } },
+      ],
+    );
   };
 
   return (
@@ -184,10 +207,24 @@ const AdminPaymentsScreen: React.FC<AdminPaymentsScreenProps> = ({ onBack }) => 
               </View>
 
               {payment.status !== 'approved' && (
-                <TouchableOpacity style={styles.sendReminderBtn} onPress={() => sendReminder(payment)}>
-                  <Send size={14} color={Colors.primary} />
-                  <Text style={styles.sendReminderText}>Enviar cobrança via WhatsApp</Text>
-                </TouchableOpacity>
+                <View style={styles.paymentActions}>
+                  <TouchableOpacity style={styles.sendReminderBtn} onPress={() => sendReminder(payment)}>
+                    <Send size={14} color={Colors.primary} />
+                    <Text style={styles.sendReminderText}>Cobrar via WhatsApp</Text>
+                  </TouchableOpacity>
+                  {payment.status === 'pending' && (
+                    <TouchableOpacity
+                      style={[styles.manualConfirmBtn, confirmingPaymentId === payment.payment_id && { opacity: 0.6 }]}
+                      onPress={() => confirmPaymentManually(payment)}
+                      disabled={confirmingPaymentId !== null}
+                    >
+                      {confirmingPaymentId === payment.payment_id
+                        ? <ActivityIndicator size="small" color="#fff" />
+                        : <CheckCircle size={14} color="#fff" />}
+                      <Text style={styles.manualConfirmText}>Confirmar pagamento</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
               )}
             </Card>
           );
@@ -244,6 +281,9 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary + '11', borderWidth: 1, borderColor: Colors.primary + '33',
   },
   sendReminderText: { ...Typography.smallMedium, color: Colors.primary },
+  paymentActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+  manualConfirmBtn: { flexDirection: 'row', flex: 1, minWidth: 170, alignItems: 'center', justifyContent: 'center', gap: 7, paddingVertical: 10, borderRadius: Radius.md, backgroundColor: Colors.success },
+  manualConfirmText: { ...Typography.smallMedium, color: '#fff' },
 });
 
 export default AdminPaymentsScreen;

@@ -2,6 +2,7 @@ import {
   MercadoPagoError,
   cancelPreapproval,
   createSplitPreference,
+  createDailyPlanPreference,
   createRecurringSubscription,
   exchangeMercadoPagoCode,
   getAuthorizedPayment,
@@ -285,7 +286,78 @@ async function applyAuthorizedPaymentWebhook(admin, provider) {
   return { driverId, paymentStatus: status };
 }
 
+export async function applyDailyPlanPaymentWebhook(admin, provider) {
+  const externalReference = String(provider?.external_reference || '');
+  if (!externalReference.startsWith('ru_daily:')) return null;
+
+  const { data: intent, error: intentError } = await admin.from('payments').select('*')
+    .eq('provider', 'mercadopago').eq('external_reference', externalReference).maybeSingle();
+  if (intentError) throw intentError;
+  if (!intent) {
+    console.warn('[MercadoPago] cobrança do plano diário sem intenção local:', externalReference);
+    return null;
+  }
+
+  const amount = Number(provider?.transaction_amount || 0);
+  if (!Number.isFinite(amount) || Math.abs(amount - Number(intent.amount)) > 0.01) {
+    throw new MercadoPagoError('O valor pago não confere com o plano diário selecionado.', 409);
+  }
+  const status = providerPaymentStatus(provider?.status);
+  const method = providerPaymentMethod(provider);
+  const providerType = String(provider?.payment_type_id || provider?.payment_method?.type || '').toLowerCase();
+  const isMercadoPagoWallet = providerType === 'account_money' || String(provider?.payment_method_id || '').toLowerCase() === 'account_money';
+  if (!isAllowedPaymentMethod(method) && !isMercadoPagoWallet) {
+    console.warn('[MercadoPago] pagamento do plano diário ignorado: método não permitido', { method, paymentId: provider?.id });
+    return { driverId: intent.driver_id, paymentStatus: 'ignored', reason: 'payment_method_not_allowed' };
+  }
+  const ledgerMethod = isMercadoPagoWallet ? 'mercadopago' : method;
+
+  const wasApproved = intent.status === 'approved';
+  const { error: updateError } = await admin.from('payments').update({
+    // Keep the intent pending until confirm_payment atomically grants the
+    // one-day entitlement. If the RPC fails, the webhook retry can safely try again.
+    status: status === 'approved' && !wasApproved ? 'pending' : status,
+    method: ledgerMethod,
+    provider_payment_id: provider?.id ? String(provider.id) : null,
+    provider_status: String(provider?.status || 'pending'),
+    provider_metadata: {
+      ...(intent.provider_metadata || {}),
+      ...safeProviderMetadata(provider),
+      billing_model: 'one_time_daily',
+    },
+  }).eq('id', intent.id);
+  if (updateError) throw updateError;
+
+  if (status === 'approved' && !wasApproved) {
+    const subscription = await getSubscription(admin, intent.driver_id);
+    if (!subscription?.id || subscription.id !== intent.subscription_id) {
+      throw new MercadoPagoError('Não foi possível localizar a assinatura associada ao pagamento diário.', 409);
+    }
+    if (subscription.provider_subscription_id) {
+      let previous = null;
+      try {
+        previous = await getPreapproval(subscription.provider_subscription_id);
+      } catch (error) {
+        if (!(error instanceof MercadoPagoError) || error.status !== 404) throw error;
+      }
+      const previousStatus = String(previous?.status || '').toLowerCase();
+      if (previous && !['cancelled', 'canceled'].includes(previousStatus)) {
+        await cancelPreapproval(subscription.provider_subscription_id);
+      }
+    }
+    const { error } = await admin.rpc('confirm_daily_plan_payment', {
+      p_payment_id: intent.id,
+      p_provider_payment_id: provider?.id ? String(provider.id) : null,
+    });
+    if (error) throw error;
+  }
+  return { driverId: intent.driver_id, paymentStatus: status };
+}
+
 async function applyPaymentWebhook(admin, provider) {
+  if (String(provider?.external_reference || '').startsWith('ru_daily:')) {
+    return applyDailyPlanPaymentWebhook(admin, provider);
+  }
   const driverId = provider?.external_reference;
   if (!driverId) return null;
   const local = await getSubscription(admin, driverId);
@@ -738,7 +810,7 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
     const plan = String(req.body?.plan || '').toLowerCase();
     const segment = String(req.body?.segment || req.driverAuth.driver.plan_segment || 'economy').toLowerCase();
     const validSegments = new Set(['moto', 'economy', 'comfort', 'premium']);
-    if (!FIXED_PLANS.has(plan)) return res.status(400).json({ error: 'Plano recorrente inválido.' });
+    if (!FIXED_PLANS.has(plan)) return res.status(400).json({ error: 'Plano pago inválido.' });
     if (!validSegments.has(segment)) return res.status(400).json({ error: 'Categoria de plano inválida.' });
     if (!mercadopagoConfigured()) return res.status(503).json({ error: 'Mercado Pago ainda não está configurado no servidor.' });
 
@@ -749,6 +821,71 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
       if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'O valor do plano não está configurado no painel.' });
 
       let local = await getSubscription(admin, driver.id);
+      const host = String(process.env.PUBLIC_APP_URL || `https://${req.get('host')}`).replace(/\/$/, '');
+
+      if (plan === 'daily') {
+        if (!local?.id) {
+          const { data: created, error: createError } = await admin.from('subscriptions').upsert({
+            driver_id: driver.id,
+            plan: 'daily',
+            plan_segment: segment,
+            status: 'expired',
+            amount: Number(amount.toFixed(2)),
+            due_date: new Date().toISOString().slice(0, 10),
+            provider: 'mercadopago',
+            provider_status: 'checkout_pending',
+            provider_metadata: { billing_model: 'one_time_daily' },
+          }, { onConflict: 'driver_id' }).select('*').single();
+          if (createError) throw createError;
+          local = created;
+        }
+        // Do not change or cancel the current entitlement until payment is
+        // confirmed. The successful webhook will switch the plan atomically.
+        const externalReference = `ru_daily:${driver.id}:${local.id}:${crypto.randomUUID()}`;
+        const returnUrl = `${host}/pagamento/retorno`;
+        const preference = await createDailyPlanPreference({
+          driverId: driver.id,
+          amount,
+          externalReference,
+          notificationUrl: `${host}/api/mercadopago/webhook`,
+          backUrls: { success: returnUrl, pending: returnUrl, failure: returnUrl },
+          idempotencyKey: `daily-plan:${driver.id}:${crypto.randomUUID()}`,
+        });
+        const initPoint = preference?.init_point || preference?.sandbox_init_point;
+        if (!preference?.id || !initPoint) throw new MercadoPagoError('O Mercado Pago não retornou o link de pagamento diário.', 502, preference);
+
+        const { error: intentError } = await admin.from('payments').insert({
+          driver_id: driver.id,
+          subscription_id: local.id,
+          amount: Number(amount.toFixed(2)),
+          method: 'mercadopago',
+          status: 'pending',
+          provider: 'mercadopago',
+          provider_status: 'checkout_pending',
+          external_reference: externalReference,
+          provider_metadata: {
+            billing_model: 'one_time_daily',
+            checkout_preference_id: String(preference.id),
+            plan: 'daily',
+            plan_segment: segment,
+          },
+        });
+        if (intentError) throw intentError;
+
+        return res.json({
+          provider: 'mercadopago',
+          subscription_id: String(preference.id),
+          status: 'pending',
+          plan,
+          plan_segment: segment,
+          billing_type: 'one_time',
+          amount,
+          init_point: initPoint,
+          sandbox_init_point: preference.sandbox_init_point || null,
+          local_subscription_id: local.id,
+        });
+      }
+
       if (local?.provider_subscription_id) {
         let current = null;
         try { current = await getPreapproval(local.provider_subscription_id); }
@@ -759,7 +896,7 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
         if (current && currentPlan === plan && currentSegment === segment && ['pending', 'authorized', 'active'].includes(currentStatus)) {
           const checkoutUrl = current.init_point || current.sandbox_init_point || local.provider_metadata?.init_point || null;
           local = await syncSubscription(admin, current, local, driver.id, segment);
-          return res.json({ provider: 'mercadopago', subscription_id: String(current.id), status: current.status, plan, plan_segment: segment, amount, init_point: checkoutUrl, local_subscription_id: local.id });
+          return res.json({ provider: 'mercadopago', subscription_id: String(current.id), status: current.status, plan, plan_segment: segment, billing_type: 'recurring', amount, init_point: checkoutUrl, local_subscription_id: local.id });
         }
         if (current && !['cancelled', 'canceled'].includes(currentStatus)) {
           await cancelPreapproval(local.provider_subscription_id);
@@ -767,7 +904,6 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
         }
       }
 
-      const host = String(process.env.PUBLIC_APP_URL || `https://${req.get('host')}`).replace(/\/$/, '');
       const checkout = await createRecurringSubscription({
         driverId: driver.id,
         email: String(profile?.email || user.email || '').trim().toLowerCase(),
@@ -783,7 +919,7 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
       local = await syncSubscription(admin, checkout, local, driver.id, segment);
       return res.json({
         provider: 'mercadopago', subscription_id: String(checkout.id), status: checkout.status || 'pending',
-        plan, plan_segment: segment, amount, init_point: initPoint, sandbox_init_point: checkout.sandbox_init_point || null,
+        plan, plan_segment: segment, billing_type: 'recurring', amount, init_point: initPoint, sandbox_init_point: checkout.sandbox_init_point || null,
         local_subscription_id: local.id,
       });
     } catch (error) {

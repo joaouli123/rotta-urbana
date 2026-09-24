@@ -728,9 +728,11 @@ const DriverFlow: React.FC = () => {
   };
 
   const openMenu = () => setScreen('driver_profile');
-  const closeSubscription = async () => {
-    const current = await refreshSubscriptionAccess().catch(() => false);
-    setScreen(current ? 'driver_profile' : 'driver_subscription');
+  const closeSubscription = () => {
+    // Navigation must not wait for Supabase/Mercado Pago: on a slow or offline
+    // connection the old handler left the driver trapped on this screen.
+    setScreen('driver_profile');
+    void refreshSubscriptionAccess().catch(() => setSubscriptionAccess('blocked'));
   };
 
   if (planType === 'loading') return <Loading message="Carregando sua conta de motorista..." />;
