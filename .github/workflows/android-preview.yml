@@ -1,12 +1,15 @@
-name: Android Preview APK
+name: Android Preview APK (Gradle)
 
 on:
   workflow_dispatch:
 
 jobs:
   build-android-preview:
-    name: Build Android preview with EAS
+    name: Build Android preview without EAS Build
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -17,14 +20,49 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Set up Expo and EAS CLI
-        uses: expo/expo-github-action@v8
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
-          eas-version: latest
-          token: ${{ secrets.EXPO_TOKEN }}
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0 ndk;27.1.12297006'
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
-      - name: Build Android preview APK
-        run: eas build --platform android --profile preview --non-interactive
+      - name: Load public app configuration
+        run: |
+          node <<'NODE' >> "$GITHUB_ENV"
+          const profile = require('./eas.json').build.preview.env;
+          const keys = [
+            'EXPO_PUBLIC_SUPABASE_URL',
+            'EXPO_PUBLIC_SUPABASE_ANON_KEY',
+            'EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN',
+          ];
+          for (const key of keys) {
+            const value = profile[key];
+            if (typeof value !== 'string' || value.length === 0) {
+              throw new Error(`Missing ${key} in eas.json preview environment`);
+            }
+            process.stdout.write(`${key}=${value}\n`);
+          }
+          NODE
+
+      - name: Generate Android project from Expo config
+        run: npx expo prebuild --clean --platform android --no-install --skip-dependency-update react-native,react
+
+      - name: Assemble preview APK with Gradle
+        run: cd android && ./gradlew --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Upload preview APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: rotta-urbana-android-preview-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+          retention-days: 7
