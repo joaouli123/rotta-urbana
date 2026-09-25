@@ -38,6 +38,7 @@ import {
   Navigation2,
   Volume2,
   VolumeX,
+  Repeat,
 } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { Avatar, Button, Card } from '../../components/ui';
@@ -175,6 +176,8 @@ interface DriverActiveRideProps {
   price?: number | null;
   /** Ride status in the database, kept fresh by the navigator. */
   rideStatus?: RideStatusDb;
+  /** Pickup of the next ride, accepted while finishing this one. */
+  nextPickupAddress?: string | null;
   onDestinationChanged?: (
     destination: LngLat,
     address: string,
@@ -213,6 +216,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   paymentMethod,
   price,
   rideStatus,
+  nextPickupAddress,
   onDestinationChanged,
 }) => {
   const insets = useSafeAreaInsets();
@@ -900,6 +904,17 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
               <Text style={styles.fareValue}>{fmtMoney(fare)}</Text>
             </View>
           )}
+          {/* Next ride, taken while finishing this one */}
+          {nextPickupAddress && status !== 'completed' && (
+            <View style={styles.nextRow}>
+              <Repeat size={14} color={Colors.info} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.nextLabel}>Próxima corrida</Text>
+                <Text style={styles.nextAddr} numberOfLines={1}>Embarque: {nextPickupAddress}</Text>
+                <Text style={styles.fareSub}>Começa assim que você finalizar esta.</Text>
+              </View>
+            </View>
+          )}
           {/* ETA row (the status pill already shows it on short phones) */}
           {!compact && etaText && status !== 'passenger_pickup' && status !== 'completed' && (
             <View style={styles.etaRow}>
@@ -1192,6 +1207,9 @@ const styles = StyleSheet.create({
   fareLabel: { ...Typography.caption, color: Colors.textSecondary },
   fareSub: { ...Typography.caption, color: Colors.textMuted },
   fareValue: { fontSize: 18, fontFamily: 'Poppins_700Bold', color: Colors.textPrimary },
+  nextRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, padding: 10, borderRadius: Radius.md, backgroundColor: Colors.info + '12', borderWidth: 1, borderColor: Colors.info + '40' },
+  nextLabel: { ...Typography.caption, color: Colors.info, fontWeight: '700' },
+  nextAddr: { ...Typography.smallMedium, color: Colors.textPrimary },
   etaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.borderLight },
   etaTxt: { ...Typography.caption, color: Colors.primary, flex: 1 },
   progressTxt: { ...Typography.caption, color: Colors.textMuted },

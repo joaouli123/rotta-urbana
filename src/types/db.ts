@@ -65,6 +65,8 @@ export interface RideRow {
   cancelled_by: Role | null;
   requested_at: string;
   accepted_at: string | null;
+  /** Ride the driver was finishing when this one was accepted (queued trip). */
+  queued_after?: string | null;
   arrived_at: string | null;
   started_at: string | null;
   completed_at: string | null;

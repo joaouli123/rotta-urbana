@@ -41,7 +41,7 @@ import { Colors, Radius } from '../../constants';
 import RouteMap, { useRideMapPadding } from '../../components/RouteMap';
 import { getRoute, isCoordinateWithinServiceArea, placeLabel, resolvePlace, searchPlaces, type LngLat, type PlaceSuggestion } from '../../services/geo';
 import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
-import { getRideDriverLocation, getRideCounterpart, updateRideDestination, type RideCounterpart } from '../../services/rides';
+import { getRideDriverLocation, getRideCounterpart, updateRideDestination, getRideQueueVia, type RideCounterpart } from '../../services/rides';
 import { openSupportTicket } from '../../services/profile';
 import { friendlyError } from '../../lib/errors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -220,11 +220,28 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     return () => { active = false; clearInterval(iv); };
   }, [rideId]);
 
+  // Driver finishing another ride first (queued trip): where that ride ends.
+  // The car goes there, then comes to the pickup.
+  const [queueVia, setQueueVia] = useState<[number, number] | null>(null);
+  useEffect(() => {
+    if (!rideId || rideStatus !== 'on_way') { setQueueVia(null); return; }
+    let active = true;
+    const load = () => getRideQueueVia(rideId).then((v) => {
+      if (!active) return;
+      setQueueVia((cur) => (cur?.[0] === v?.[0] && cur?.[1] === v?.[1] ? cur : v));
+    }).catch(() => {});
+    load();
+    const iv = setInterval(load, 8000);
+    return () => { active = false; clearInterval(iv); };
+  }, [rideId, rideStatus]);
+
   // Street route from the car to the pickup while the driver is coming, asked
-  // again only after the car moved ~150 m.
+  // again only after the car moved ~150 m. With a queued trip it passes
+  // through the other ride's drop-off.
   const [approach, setApproach] = useState<{ type: 'LineString'; coordinates: [number, number][] } | null>(null);
   const [approachMin, setApproachMin] = useState<number | null>(null);
   const approachFromRef = useRef<[number, number] | null>(null);
+  useEffect(() => { approachFromRef.current = null; }, [queueVia?.[0], queueVia?.[1]]);
   useEffect(() => {
     if (rideStatus !== 'on_way' || !driverLoc || !origin) {
       if (rideStatus !== 'on_way') setApproach(null);
@@ -234,9 +251,17 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     if (last && Math.abs(last[0] - driverLoc[0]) + Math.abs(last[1] - driverLoc[1]) < 0.0015) return;
     approachFromRef.current = driverLoc;
     let active = true;
-    getRoute(driverLoc, origin).then((r) => { if (active && r) { setApproach(r.geometry); setApproachMin(r.durationMin); } }).catch(() => {});
+    if (queueVia) {
+      Promise.all([getRoute(driverLoc, queueVia), getRoute(queueVia, origin)]).then(([a, b]) => {
+        if (!active || !a || !b) return;
+        setApproach({ type: 'LineString', coordinates: [...a.geometry.coordinates, ...b.geometry.coordinates] });
+        setApproachMin(a.durationMin + b.durationMin);
+      }).catch(() => {});
+    } else {
+      getRoute(driverLoc, origin).then((r) => { if (active && r) { setApproach(r.geometry); setApproachMin(r.durationMin); } }).catch(() => {});
+    }
     return () => { active = false; };
-  }, [rideStatus, driverLoc?.[0], driverLoc?.[1], origin?.[0], origin?.[1]]);
+  }, [rideStatus, driverLoc?.[0], driverLoc?.[1], origin?.[0], origin?.[1], queueVia?.[0], queueVia?.[1]]);
 
   // Real driver contact (name / phone / vehicle).
   const [counterpart, setCounterpart] = useState<RideCounterpart | null>(null);
@@ -397,9 +422,16 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
             <View style={styles.etaBanner}>
               <Clock size={15} color={Colors.info} />
               <Text style={styles.etaBannerTxt}>
-                {pickupEtaMin ? <>Chegando em <Text style={{ fontFamily: 'Poppins_700Bold', color: Colors.info }}>~{pickupEtaMin} min</Text></> : 'Motorista a caminho'}
+                {queueVia
+                  ? 'Motorista finalizando outra corrida'
+                  : pickupEtaMin ? <>Chegando em <Text style={{ fontFamily: 'Poppins_700Bold', color: Colors.info }}>~{pickupEtaMin} min</Text></> : 'Motorista a caminho'}
               </Text>
             </View>
+            {queueVia && (
+              <Text style={styles.queueSub}>
+                Ele vem até você em seguida{pickupEtaMin ? <> · chega em <Text style={{ fontFamily: 'Poppins_700Bold', color: Colors.info }}>~{pickupEtaMin} min</Text></> : ''}
+              </Text>
+            )}
             {/* Driver card */}
             <DriverCard
               driverName={driverName}
@@ -805,6 +837,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 10, marginBottom: 12,
     borderWidth: 1, borderColor: Colors.info + '25',
   },
+  queueSub: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: -6, marginBottom: 8, paddingHorizontal: 4 },
   etaBannerTxt: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary, flex: 1 },
   etaProgressBg: { width: 60, height: 4, backgroundColor: Colors.info + '25', borderRadius: 2, overflow: 'hidden' },
   etaProgressFill: { height: '100%', borderRadius: 2 },

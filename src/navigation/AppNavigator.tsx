@@ -7,7 +7,7 @@ import { supabase } from '../lib/supabase';
 import { parsePasswordRecoveryUrl } from '../services/authRecovery';
 import { usePasswordRecoveryLink } from '../hooks/usePasswordRecoveryLink';
 import type { RideRow, RideTypeDb, SubscriptionRow } from '../types/db';
-import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide, relaxFemalePreference, getRideCounterpart } from '../services/rides';
+import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide, getDriverActiveRides, relaxFemalePreference, getRideCounterpart } from '../services/rides';
 import { getSearchingRides, subscribeSearchingRides, declineRide, hasDeclinedRide, setStatus, updateLocation, getMyDriver } from '../services/drivers';
 import { playSound, stopSound } from '../lib/sounds';
 import { registerForPushNotifications, clearPushToken, onPlanRenewalTap } from '../services/push';
@@ -501,6 +501,12 @@ const DriverFlow: React.FC = () => {
   const [driverCoords, setDriverCoords] = useState<[number, number] | null>(null);
   const [pendingRequest, setPendingRequest] = useState<RideRow | null>(null);
   const [activeRide, setActiveRide] = useState<RideRow | null>(null);
+  // Next ride, accepted while finishing activeRide (queued trip).
+  const [queuedRide, setQueuedRide] = useState<RideRow | null>(null);
+  const queuedRef = useRef(queuedRide);
+  queuedRef.current = queuedRide;
+  // A ride in progress with no next ride yet can take one near its drop-off.
+  const canQueue = activeRide?.status === 'in_progress' && !queuedRide;
   const [ratingRide, setRatingRide] = useState<RideRow | null>(null);
   const [subscriptionAccess, setSubscriptionAccess] = useState<'loading' | 'active' | 'blocked'>('loading');
   const [activePoints, setActivePoints] = useState<{ origin: [number, number]; dest: [number, number] } | null>(null);
@@ -656,7 +662,9 @@ const DriverFlow: React.FC = () => {
   // an UPDATE the INSERT-subscription ignores). Polling guarantees an online
   // driver still picks up any waiting request within a few seconds.
   useEffect(() => {
-    if (!online || activeRide || pendingRequest) return;
+    // Queued offers come only from here: the server filters them by distance
+    // to the current drop-off, which the realtime feed cannot.
+    if (!online || pendingRequest || (activeRide && !canQueue)) return;
     let cancelled = false;
     const pull = async () => {
       try {
@@ -669,7 +677,7 @@ const DriverFlow: React.FC = () => {
     pull(); // immediate check (covers rides created while backgrounded)
     const iv = setInterval(pull, 7000);
     return () => { cancelled = true; clearInterval(iv); };
-  }, [online, activeRide?.id, pendingRequest?.id]);
+  }, [online, activeRide?.id, canQueue, pendingRequest?.id]);
 
   // If the pending ride is accepted by another driver or cancelled, dismiss it.
   useEffect(() => {
@@ -699,8 +707,11 @@ const DriverFlow: React.FC = () => {
       currentUpdatedAt = r.updated_at;
       if (r.status === 'cancelled') {
         stopSound('request');
-        setActiveRide(null);
-        setScreen('driver_home');
+        // The next ride, if any, becomes the current one.
+        const next = queuedRef.current;
+        setActiveRide(next);
+        setQueuedRide(null);
+        if (screenRef.current !== 'driver_rate') setScreen(next ? 'driver_active_ride' : 'driver_home');
         Alert.alert('Corrida cancelada', r.cancel_reason || 'O passageiro cancelou a corrida.');
         return;
       }
@@ -723,16 +734,43 @@ const DriverFlow: React.FC = () => {
     return () => { unsub(); clearInterval(iv); };
   }, [activeRide?.id]);
 
+  // Follow the queued ride: the passenger may cancel it before it starts.
+  useEffect(() => {
+    if (!queuedRide) return;
+    const id = queuedRide.id;
+    let done = false;
+    const apply = (r: RideRow) => {
+      if (done) return;
+      if (r.status === 'cancelled') {
+        done = true;
+        setQueuedRide((cur) => (cur?.id === id ? null : cur));
+        Alert.alert('Próxima corrida cancelada', r.cancel_reason || 'O passageiro cancelou a próxima corrida.');
+        return;
+      }
+      setQueuedRide((cur) => (cur?.id === id ? r : cur));
+    };
+    const unsub = subscribeToRide(id, apply);
+    const iv = setInterval(async () => {
+      const r = await getRide(id);
+      if (r) apply(r);
+    }, 8000);
+    return () => { done = true; unsub(); clearInterval(iv); };
+  }, [queuedRide?.id]);
+
   // Register for push (ride alerts even with the app closed) and restore the
   // online state if the server still has us online — e.g. reopened from a push.
   useEffect(() => {
     registerForPushNotifications();
-    Promise.all([getMyDriver(), getActiveRide()]).then(([d, current]) => {
-      if (current?.driver_id && current.driver_id === d?.id) {
+    Promise.all([getMyDriver(), getDriverActiveRides()]).then(([d, rides]) => {
+      const mine = rides.filter((r) => r.driver_id && r.driver_id === d?.id);
+      if (mine.length > 0) {
+        // The ride under way first; a second one is the queued next ride.
+        const current = mine.find((r) => r.status === 'in_progress' || r.status === 'driver_arrived') ?? mine[0];
         // The driver was online to accept it, and finishing it puts them
         // back online on the server.
         setOnline(true);
         setActiveRide(current);
+        setQueuedRide(mine.find((r) => r.id !== current.id) ?? null);
         setScreen('driver_active_ride');
       } else if (d?.status === 'online') {
         setOnline(true);
@@ -816,13 +854,15 @@ const DriverFlow: React.FC = () => {
       const accepted = await acceptRide(pendingRequest.id);
       stopSound('request');
       playSound('accept');
-      setActiveRide(accepted);
+      // Taken while finishing a ride: it waits as the next one.
+      if (activeRide && accepted.queued_after) setQueuedRide(accepted);
+      else setActiveRide(accepted);
       setPendingRequest(null);
       setScreen('driver_active_ride');
     } catch (e: any) {
       Alert.alert('Corrida indisponível', friendlyError(e?.message));
       setPendingRequest(null);
-      setScreen('driver_home');
+      setScreen(activeRide ? 'driver_active_ride' : 'driver_home');
     } finally {
       acceptingRef.current = false;
       setAccepting(false);
@@ -833,11 +873,13 @@ const DriverFlow: React.FC = () => {
     playSound('complete');
     // Finishing a ride puts the driver back online on the server only while the
     // subscription is current. Follow what the server decided.
-    getMyDriver().then((d) => setOnline(d?.status === 'online')).catch(() => {});
+    // With a queued ride the server keeps the driver 'on_ride'.
+    getMyDriver().then((d) => setOnline(d?.status === 'online' || d?.status === 'on_ride')).catch(() => {});
     // The ride was already marked 'completed' inside DriverActiveRideScreen (goNext).
     // Re-calling updateRideStatus here would fail and show a false error — instead,
     // move to the passenger-rating step.
-    if (activeRide) { setRatingRide(activeRide); setActiveRide(null); setScreen('driver_rate'); }
+    // The queued ride, if any, is next after the rating.
+    if (activeRide) { setRatingRide(activeRide); setActiveRide(queuedRide); setQueuedRide(null); setScreen('driver_rate'); }
     else setScreen('driver_home');
   };
 
@@ -966,8 +1008,11 @@ const DriverFlow: React.FC = () => {
       );
     case 'driver_active_ride':
       return (
+        <View style={{ flex: 1 }}>
         <DriverActiveRideScreen
+          key={activeRide?.id}
           rideId={activeRide?.id}
+          nextPickupAddress={queuedRide?.origin_address ?? null}
           origin={activePoints?.origin}
           destination={activePoints?.dest}
           originAddress={activeRide?.origin_address}
@@ -988,9 +1033,32 @@ const DriverFlow: React.FC = () => {
             } : current);
           }}
           onCompleted={completeRide}
-          onCancel={() => { setActiveRide(null); setScreen('driver_home'); }}
+          onCancel={() => {
+            // The next ride, if any, becomes the current one.
+            const next = queuedRef.current;
+            setActiveRide(next);
+            setQueuedRide(null);
+            setScreen(next ? 'driver_active_ride' : 'driver_home');
+          }}
           onPanic={() => Alert.alert('Emergência', 'Deseja ligar para a emergência (190)?', [{ text: 'Cancelar', style: 'cancel' }, { text: 'Ligar 190', style: 'destructive', onPress: () => Linking.openURL('tel:190') }])}
         />
+          {/* Next-ride offer while finishing this one */}
+          {pendingRequest && activeRide && (
+            <RideRequestNotification
+              ride={pendingRequest}
+              driverCoords={driverCoords ?? undefined}
+              onAccept={handleAccept}
+              accepting={accepting}
+              queued
+              onReject={() => {
+                if (acceptingRef.current) return;
+                rejectedIdsRef.current.add(pendingRequest.id);
+                declineRide(pendingRequest.id).catch(() => {});
+                setPendingRequest(null);
+              }}
+            />
+          )}
+        </View>
       );
     case 'driver_rate':
       return (
@@ -998,7 +1066,7 @@ const DriverFlow: React.FC = () => {
           rideId={ratingRide?.id}
           price={ratingRide?.price}
           paymentMethod={ratingRide?.payment_method}
-          onDone={() => { setRatingRide(null); setScreen('driver_home'); }}
+          onDone={() => { setRatingRide(null); setScreen(activeRide ? 'driver_active_ride' : 'driver_home'); }}
         />
       );
     case 'driver_earnings':

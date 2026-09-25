@@ -167,6 +167,32 @@ export async function getActiveRide(): Promise<RideRow | null> {
   return first<RideRow>(data);
 }
 
+/**
+ * The driver's active rides, oldest accept first: the ride under way and, when
+ * one was taken while finishing it, the queued next ride.
+ */
+export async function getDriverActiveRides(): Promise<RideRow[]> {
+  const { data: userData } = await supabase.auth.getUser();
+  const userId = userData.user?.id;
+  if (!userId) return [];
+  const { data, error } = await supabase
+    .from('rides').select('*').in('status', ACTIVE).eq('driver_id', userId)
+    .order('accepted_at', { ascending: true, nullsFirst: false }).limit(2);
+  if (error) throw error;
+  return (data as RideRow[]) ?? [];
+}
+
+/**
+ * For a queued ride whose driver is still finishing the ride before: where
+ * that ride ends, as [lng, lat]. Null once the driver is free.
+ */
+export async function getRideQueueVia(rideId: string): Promise<[number, number] | null> {
+  const { data, error } = await supabase.rpc('ride_queue_info', { p_ride_id: rideId });
+  if (error) return null;
+  const r = first<any>(data);
+  return r ? [r.via_lng, r.via_lat] : null;
+}
+
 export async function getRideHistory(limit = 50): Promise<RideRow[]> {
   const { data, error } = await supabase
     .from('rides').select('*')

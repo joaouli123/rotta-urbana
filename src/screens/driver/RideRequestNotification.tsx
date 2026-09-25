@@ -9,7 +9,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { MapPin, Navigation, Clock, DollarSign, X, Check, ShieldCheck } from 'lucide-react-native';
+import { MapPin, Navigation, Clock, DollarSign, X, Check, ShieldCheck, Repeat } from 'lucide-react-native';
 import { Colors, Radius, Typography } from '../../constants';
 import { Avatar } from '../../components/ui';
 import { getRideCounterpart, getRidePoints, type RideCounterpart } from '../../services/rides';
@@ -23,6 +23,8 @@ interface RideRequestNotificationProps {
   onReject: () => void;
   /** The accept request is on its way: both buttons wait for its answer. */
   accepting?: boolean;
+  /** Offered while the driver finishes a ride: it starts after that one. */
+  queued?: boolean;
 }
 
 const fmtMoney = (v?: number | null) =>
@@ -43,6 +45,7 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
   onAccept,
   onReject,
   accepting = false,
+  queued = false,
 }) => {
   const slideAnim = useRef(new Animated.Value(300)).current;
   const progressAnim = useRef(new Animated.Value(1)).current;
@@ -119,7 +122,7 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
 
         {/* Timer */}
         <View style={styles.timerRow}>
-          <Text style={styles.timerLabel}>Nova corrida!</Text>
+          <Text style={styles.timerLabel}>{queued ? 'Próxima corrida' : 'Nova corrida!'}</Text>
           <View style={styles.timerBadge}>
             <Clock size={12} color={Colors.warning} />
             <Text style={styles.timerText}>{secondsLeft}s</Text>
@@ -130,6 +133,13 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
         <View style={styles.progressTrack}>
           <Animated.View style={[styles.progressFill, { width: progressWidth }]} />
         </View>
+
+        {queued && (
+          <View style={styles.queuedBadge}>
+            <Repeat size={13} color={Colors.info} />
+            <Text style={styles.queuedTxt}>Embarque perto do destino atual. Começa assim que você finalizar a corrida em andamento.</Text>
+          </View>
+        )}
 
         {/* Female-only badge (only female drivers ever see these requests) */}
         {ride.requires_female_driver && (
@@ -256,6 +266,12 @@ const styles = StyleSheet.create({
   timerText: { ...Typography.smallMedium, color: Colors.warning, fontWeight: '700' },
   progressTrack: { height: 3, backgroundColor: Colors.border, borderRadius: 2, marginBottom: 20, overflow: 'hidden' },
   progressFill: { height: '100%', backgroundColor: Colors.warning, borderRadius: 2 },
+  queuedBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12,
+    paddingHorizontal: 12, paddingVertical: 9, borderRadius: 10,
+    backgroundColor: Colors.info + '22', borderWidth: 1, borderColor: Colors.info + '55',
+  },
+  queuedTxt: { ...Typography.caption, color: '#FFFFFF', flex: 1, fontFamily: 'Poppins_500Medium' },
   femaleOnlyBadge: {
     flexDirection: 'row', alignItems: 'center', gap: 7,
     backgroundColor: Colors.success + '14', borderRadius: Radius.sm,
