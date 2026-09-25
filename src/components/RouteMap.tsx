@@ -173,7 +173,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
   // Also extend bounds to include the live driver position so the pin stays on screen.
   const basePts: LngLat[] =
     route && route.coordinates.length > 1 ? [...route.coordinates]
-      : (origin && destination ? [origin, destination] : []);
+      : (origin && destination ? [origin, destination] : origin && driverLocation ? [origin] : []);
   if (approachRoute && approachRoute.coordinates.length > 1) basePts.push(...approachRoute.coordinates);
   if (driverLocation && basePts.length > 0) basePts.push(driverLocation);
   const framePts: LngLat[] | null = basePts.length > 1 ? basePts : null;

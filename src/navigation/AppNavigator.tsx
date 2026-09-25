@@ -11,7 +11,7 @@ import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide,
 import { getSearchingRides, subscribeSearchingRides, declineRide, hasDeclinedRide, setStatus, updateLocation, getMyDriver } from '../services/drivers';
 import { playSound, stopSound } from '../lib/sounds';
 import { registerForPushNotifications, clearPushToken, onPlanRenewalTap } from '../services/push';
-import { showSearchingNotification, showDriverFoundNotification, clearRideNotification, ensureNotificationPermission } from '../services/localNotifications';
+import { showSearchingNotification, showDriverFoundNotification, showRideStatusNotification, clearRideNotification, ensureNotificationPermission } from '../services/localNotifications';
 import { buildRideFarePix, getSubscription, loadSubscriptionSnapshot, isSubscriptionCurrent, isPaymentReturnUrl } from '../services/payments';
 import { friendlyError } from '../lib/errors';
 import { DEFAULT_SERVICE_AREA, getServiceArea } from '../services/serviceArea';
@@ -204,6 +204,12 @@ const PassengerFlow: React.FC = () => {
           getRideCounterpart(r.id)
             .then((c) => showDriverFoundNotification(c ? { name: c.name, vehicle: c.vehicleModel, plate: c.vehiclePlate } : undefined))
             .catch(() => showDriverFoundNotification());
+        }
+        // Driver at the pickup: ring and post a tray alert, so the passenger
+        // notices even with the phone in the pocket or the app backgrounded.
+        if (r.status === 'driver_arrived') {
+          playSound('found');
+          showRideStatusNotification('📍 Seu motorista chegou!', 'Ele está no local de embarque. Entre no veículo.');
         }
         setScreen((s) => (s === 'ride_matching' ? 'ride_tracking' : s));
       } else if (r.status === 'completed') {
