@@ -225,7 +225,7 @@ export class PaymentsApiError extends Error {
   }
 }
 
-async function paymentsApi<T>(path: string, init: RequestInit = {}): Promise<T> {
+export async function paymentsApi<T>(path: string, init: RequestInit = {}): Promise<T> {
   const { data: sessionData } = await supabase.auth.getSession();
   const token = sessionData.session?.access_token;
   if (!token) throw new Error('Sessão expirada. Entre novamente para continuar.');

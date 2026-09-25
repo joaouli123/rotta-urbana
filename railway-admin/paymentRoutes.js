@@ -31,6 +31,7 @@ import {
   webhookTopic,
 } from './mercadoPago.js';
 import { decryptSecret, encryptSecret, secretBoxConfigured } from './secretBox.js';
+import { applyCommissionPaymentWebhook, registerCommissionRoutes, runCommissionMaintenance } from './commissionRoutes.js';
 import crypto from 'node:crypto';
 
 const PLAN_DAYS = { daily: 1, weekly: 7, monthly: 30 };
@@ -957,6 +958,9 @@ export async function applyOneTimePlanPaymentWebhook(admin, provider) {
 export const applyDailyPlanPaymentWebhook = applyOneTimePlanPaymentWebhook;
 
 async function applyPaymentWebhook(admin, provider) {
+  if (String(provider?.external_reference || '').startsWith('ru_comm:')) {
+    return applyCommissionPaymentWebhook(admin, provider);
+  }
   if (parseOneTimeReference(provider?.external_reference)) {
     return applyOneTimePlanPaymentWebhook(admin, provider);
   }
@@ -2372,6 +2376,7 @@ async function runPlanMaintenance(admin) {
     }
     await maintenanceStep('passes abandonados', () => closeAbandonedPasses(admin));
     await maintenanceStep('lembretes', () => sendRenewalReminders(admin));
+    await maintenanceStep('comissões diárias', () => runCommissionMaintenance(admin, { sendPush: sendExpoPush }));
   } finally {
     planMaintenanceRunning = false;
   }
@@ -2384,6 +2389,8 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
 
   // At boot for rows left overdue while the service was down, then every 10
   // minutes (there is no database scheduler). Every step is idempotent.
+  registerCommissionRoutes({ app, admin, requireDriver, publicHost });
+
   void runPlanMaintenance(admin);
   setInterval(() => { void runPlanMaintenance(admin); }, PLAN_JOB_INTERVAL_MS).unref?.();
 

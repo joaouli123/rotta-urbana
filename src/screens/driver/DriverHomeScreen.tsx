@@ -40,6 +40,9 @@ interface DriverHomeScreenProps {
   onRides?: () => void;
   onRatings?: () => void;
   onSubscription?: () => void;
+  /** Open daily commission: amount and due time, shown above the plan card. */
+  commission?: { amount: number; dueAt: string | null } | null;
+  onCommission?: () => void;
 }
 
 const fmtMoney = (v: number, decimals = 0) =>
@@ -55,6 +58,8 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
   onRides,
   onRatings,
   onSubscription,
+  commission,
+  onCommission,
 }) => {
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
@@ -216,6 +221,29 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
               <Text style={styles.quickActionText}>Avaliações</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Daily commission to pay by 10:00 */}
+          {commission && commission.amount > 0 && (
+            <TouchableOpacity onPress={onCommission} activeOpacity={0.8}>
+              <Card style={{ ...styles.subCard, borderWidth: 1, borderColor: Colors.warning }}>
+                <View style={styles.subCardContent}>
+                  <View style={styles.subCopy}>
+                    <Text style={styles.subEyebrow}>COMISSÃO DIÁRIA</Text>
+                    <Text style={styles.subTitle}>{fmtMoney(commission.amount, 2)} a pagar</Text>
+                    <Text style={[styles.subDate, { color: Colors.warning, fontWeight: '600' }]}>
+                      {commission.dueAt
+                        ? `Pague com Pix até ${new Date(commission.dueAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} de ${new Date(commission.dueAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`
+                        : 'Pague com Pix'}
+                    </Text>
+                  </View>
+                  <View style={styles.subAction}>
+                    <Badge label="Pagar" variant="warning" />
+                    <ChevronRight size={18} color={Colors.textMuted} />
+                  </View>
+                </View>
+              </Card>
+            </TouchableOpacity>
+          )}
 
           {/* Subscription Status */}
           <TouchableOpacity onPress={onSubscription} activeOpacity={0.8}>

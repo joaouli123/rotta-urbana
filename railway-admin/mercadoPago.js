@@ -228,7 +228,7 @@ export function createPlanPassPreference({ plan = 'daily', driverId, amount, ext
 
 // Pix paid inside the app: Mercado Pago returns the copy-and-paste code and
 // the QR image. Needs a Pix key registered on the platform's account.
-export function createPlanPixPayment({ plan = 'daily', amount, externalReference, notificationUrl, payer = {}, expiresAt, idempotencyKey }) {
+export function createPlanPixPayment({ plan = 'daily', amount, description, externalReference, notificationUrl, payer = {}, expiresAt, idempotencyKey }) {
   const copy = PASS_COPY[plan] || PASS_COPY.daily;
   const cpf = String(payer.cpf || '').replace(/\D/g, '');
   const names = String(payer.name || '').trim().split(/\s+/).filter(Boolean);
@@ -237,7 +237,7 @@ export function createPlanPixPayment({ plan = 'daily', amount, externalReference
     idempotencyKey,
     body: {
       transaction_amount: Number(Number(amount).toFixed(2)),
-      description: copy.title,
+      description: description || copy.title,
       payment_method_id: 'pix',
       payer: {
         email: String(payer.email || '').trim().toLowerCase(),

@@ -1473,6 +1473,11 @@ adminRouter.get('/payments', requireAuth, async (req, res) => {
     .order('created_at', { ascending: false }).limit(1000);
   const commissionSource = commissionData ?? [];
   const commissionNames = await profileNames(commissionSource.map((row) => row.driver_id));
+  const { data: invoiceData } = await admin.from('commission_invoices')
+    .select('id,driver_id,ref_date,amount,rides_count,status,due_at,paid_at')
+    .order('ref_date', { ascending: false }).limit(300);
+  const invoiceSource = invoiceData ?? [];
+  const invoiceNames = await profileNames(invoiceSource.map((row) => row.driver_id));
   const count = (status) => source.filter((p) => p.status === status).length;
   const notice = req.query.error ? `<div class="err">${esc(String(req.query.error))}</div>` : req.query.ok ? '<div class="ok">Operação concluída.</div>' : '';
   // A pass (daily or weekly) is credited only by a Mercado Pago payment, so it
@@ -1512,8 +1517,32 @@ adminRouter.get('/payments', requireAuth, async (req, res) => {
     fmtDate(row.last),
   ]);
   const commissionSection = `<div class="card"><h2>Fechamento dos motoristas por comissão (${commissionSource.length} corridas)</h2><p class="muted">Total das corridas − comissão da plataforma = líquido do motorista. O PIX pendente é o valor que deve ser repassado ao sistema no fechamento do dia.</p>${table(['Motorista', 'Corridas', 'Total das corridas', 'Comissão / repasse', 'Líquido motorista', 'PIX pendente', 'Última corrida'], commissionReportRows)}${commissionReportRows.length === 0 ? '<p class="muted">Nenhum registro de comissão encontrado.</p>' : ''}</div>`;
-  const body = `${notice}${kpis}${filters}<div class="card"><h2>Pagamentos de assinatura (${allPayments.length})</h2><p class="muted">Sincronizar consulta o status diretamente no Mercado Pago. Confirmar manualmente é uma exceção administrativa e também libera o período conforme o plano.</p>${table(['Motorista', 'Valor', 'Método', 'Provedor', 'Status local', 'Status Mercado Pago', 'Pago em', 'Criado', 'Ações'], rows)}${pagination(allPayments.length, page, pageSize, req.originalUrl)}</div>${commissionSection}${rideSection}`;
+  const invoiceStatus = (row) => (row.status === 'open' && new Date(row.due_at) < new Date() ? badge('atrasada') : badge(row.status === 'open' ? 'pendente' : row.status));
+  const invoiceRows = invoiceSource.map((row) => [
+    esc(invoiceNames[row.driver_id] ?? 'Motorista'),
+    esc(String(row.ref_date).split('-').reverse().join('/')),
+    String(row.rides_count),
+    brl(row.amount),
+    invoiceStatus(row),
+    fmtDate(row.due_at),
+    row.paid_at ? fmtDate(row.paid_at) : '—',
+    row.status === 'open'
+      ? `<div class="filters"><form class="inline" method="post" action="/commission-invoices/${row.id}/paid" onsubmit="return confirm('Marcar esta comissão como paga?')">${iconBtnDollar('Marcar paga')}</form><form class="inline" method="post" action="/commission-invoices/${row.id}/waived" onsubmit="return confirm('Isentar esta comissão?')">${iconBtnClose('Isentar')}</form></div>`
+      : '',
+  ]);
+  const invoiceSection = `<div class="card"><h2>Comissões diárias (${invoiceSource.length})</h2><p class="muted">As comissões de cada dia viram uma cobrança que vence às 10h do dia seguinte. O motorista paga por Pix no app; em atraso, fica bloqueado até pagar.</p>${table(['Motorista', 'Dia', 'Corridas', 'Valor', 'Status', 'Vence', 'Pago em', 'Ações'], invoiceRows)}${invoiceRows.length === 0 ? '<p class="muted">Nenhuma cobrança diária ainda.</p>' : ''}</div>`;
+  const body = `${notice}${kpis}${filters}<div class="card"><h2>Pagamentos de assinatura (${allPayments.length})</h2><p class="muted">Sincronizar consulta o status diretamente no Mercado Pago. Confirmar manualmente é uma exceção administrativa e também libera o período conforme o plano.</p>${table(['Motorista', 'Valor', 'Método', 'Provedor', 'Status local', 'Status Mercado Pago', 'Pago em', 'Criado', 'Ações'], rows)}${pagination(allPayments.length, page, pageSize, req.originalUrl)}</div>${invoiceSection}${commissionSection}${rideSection}`;
   return render(res, layout({ title: 'Pagamentos', active: '/payments', email: req.session.email, body }));
+});
+
+adminRouter.post('/commission-invoices/:id/:status', requireAuth, async (req, res) => {
+  try {
+    const status = String(req.params.status);
+    if (!['paid', 'waived'].includes(status)) throw new Error('Ação inválida.');
+    const { error } = await admin.rpc('admin_set_commission_invoice', { p_invoice_id: req.params.id, p_status: status });
+    if (error) throw error;
+    res.redirect('/payments?ok=1');
+  } catch (error) { res.redirect(`/payments?error=${safeActionError(error)}`); }
 });
 
 adminRouter.get('/payments-legacy', requireAuth, async (req, res) => {

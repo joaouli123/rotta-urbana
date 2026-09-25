@@ -50,7 +50,6 @@ import type { LngLat } from '../../components/RouteMap';
 import type { RideStatusDb } from '../../types/db';
 import {
   getNavigationRoute,
-  getRoute,
   isCoordinateWithinServiceArea,
   locateOnRoute,
   nextManeuver,
@@ -369,18 +368,6 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     load(0);
     return () => { active = false; clearTimeout(retry); };
   }, [status, origin?.[0], origin?.[1], currentDestination?.[0], currentDestination?.[1], tripReroute]);
-
-  // ── Trip preview (pickup → destination) before the passenger is aboard ──────
-  // Drawn under the blue route to the pickup, so the driver sees the whole job.
-  const [tripPreview, setTripPreview] = useState<RouteGeometry | null>(null);
-  useEffect(() => {
-    if (status === 'in_ride' || status === 'completed' || !origin || !currentDestination) return;
-    let active = true;
-    getRoute(origin, currentDestination)
-      .then((r) => { if (active && r) setTripPreview(r.geometry as RouteGeometry); })
-      .catch(() => {});
-    return () => { active = false; };
-  }, [status === 'in_ride' || status === 'completed', origin?.[0], origin?.[1], currentDestination?.[0], currentDestination?.[1]]);
 
   // ── Off the trip route: new route from where the car is ─────────────────────
   // The route to the pickup already follows the car (a new one every 80 m).
@@ -782,8 +769,10 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 
       <RouteMap
         origin={origin}
-        destination={currentDestination}
-        route={status === 'in_ride' ? activeRoute : tripPreview}
+        // One leg at a time: the car to the pickup, then the pickup to the
+        // destination once the ride starts.
+        destination={status === 'in_ride' || status === 'completed' ? currentDestination : undefined}
+        route={status === 'in_ride' ? activeRoute : null}
         approachRoute={approachLine}
         restrictToSinop
         driverLocation={driverPos ?? undefined}

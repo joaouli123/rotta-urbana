@@ -8,7 +8,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ChevronLeft, Star, Navigation, DollarSign, Clock, Shield,
   FileText, CreditCard, HelpCircle, LogOut, ChevronRight,
-  CheckCircle, AlertCircle, User, Trash2, Camera,
+  CheckCircle, AlertCircle, User, Trash2, Camera, Receipt,
 } from 'lucide-react-native';
 import { pickProfilePhoto } from '../../lib/filePick';
 import { uploadMyAvatar } from '../../services/profile';
@@ -29,6 +29,7 @@ interface DriverProfileScreenProps {
   onDocuments: () => void;
   onSubscription: () => void;
   onSupport: () => void;
+  onCommission?: () => void;
   onLogout: () => void;
 }
 
@@ -38,7 +39,7 @@ function fmtDate(iso?: string | null): string {
 }
 
 const DriverProfileScreen: React.FC<DriverProfileScreenProps> = ({
-  onBack, onEarnings, onRides, onRatings, onDocuments, onSubscription, onSupport, onLogout,
+  onBack, onEarnings, onRides, onRatings, onDocuments, onSubscription, onSupport, onCommission, onLogout,
 }) => {
   const insets = useSafeAreaInsets();
   const [profile, setProfile] = useState<ProfileRow | null>(null);
@@ -128,6 +129,7 @@ const DriverProfileScreen: React.FC<DriverProfileScreenProps> = ({
     { icon: <Navigation size={18} color={Colors.textPrimary} />, label: 'Minhas corridas', sub: 'Histórico de viagens', onPress: onRides },
     { icon: <Star size={18} color={Colors.textPrimary} />, label: 'Avaliações', sub: `Nota atual: ${profile?.rating?.toFixed(1) ?? '—'}`, onPress: onRatings },
     { icon: <CreditCard size={18} color={Colors.textPrimary} />, label: 'Plano e mensalidade', sub: subLine, onPress: onSubscription, alert: subOverdue },
+    ...(onCommission ? [{ icon: <Receipt size={18} color={Colors.textPrimary} />, label: 'Comissão diária', sub: 'Pagar com Pix e histórico', onPress: onCommission }] : []),
     { icon: <FileText size={18} color={Colors.textPrimary} />, label: 'Documentos', sub: driver?.documents_status === 'approved' ? 'Aprovado' : driver?.documents_status === 'pending' ? 'Em análise' : 'Ver situação', onPress: onDocuments },
     { icon: <HelpCircle size={18} color={Colors.textPrimary} />, label: 'Suporte', sub: 'Fale conosco', onPress: onSupport },
     { icon: <FileText size={18} color={Colors.textPrimary} />, label: 'Termos de uso', sub: 'Contrato e regras', onPress: () => Linking.openURL(Legal.termsUrl) },

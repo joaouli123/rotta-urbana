@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -84,6 +84,18 @@ function haversineKm(a: [number, number], b: [number, number]): number {
   const lat1 = (a[1] * Math.PI) / 180, lat2 = (b[1] * Math.PI) / 180;
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+}
+
+/** The route from the route point closest to `pos` on: the part behind the car is gone. */
+function trimRoute(coords: [number, number][], pos: [number, number]): [number, number][] {
+  if (coords.length < 2) return coords;
+  let closest = 0, closestKm = Infinity;
+  coords.forEach((c, i) => {
+    const km = haversineKm(c, pos);
+    if (km < closestKm) { closestKm = km; closest = i; }
+  });
+  const rest = coords.slice(closest);
+  return rest.length > 1 ? [pos, ...rest.slice(1)] : [pos, coords[coords.length - 1]];
 }
 
 /** Share of the route already covered, up to the route point closest to `pos`. */
@@ -204,8 +216,8 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     setRideStatus(status === 'driver_arrived' ? 'arrived' : status === 'in_progress' ? 'in_ride' : 'on_way');
   }, [status]);
 
-  // The trip route (pickup → destination) is on the map from the start, so the
-  // passenger sees the whole ride and not only a lone pin.
+  // The trip route (pickup → destination), shown once the ride starts. Before
+  // that the map shows only the car coming to the pickup.
   useEffect(() => {
     if (!origin || !destination) return;
     let active = true;
@@ -230,7 +242,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
       setDriverLoc(o && haversineKm(at, o) > MAX_DRIVER_KM ? null : at);
     };
     tick();
-    const iv = setInterval(tick, 4000);
+    const iv = setInterval(tick, 3000);
     return () => { active = false; clearInterval(iv); };
   }, [rideId]);
 
@@ -397,6 +409,18 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     ? Math.max(1, Math.ceil(durationMin * (1 - rideProgress)))
     : durationMin;
 
+  // The line starts where the car is; the part already driven is gone.
+  const shownApproach = useMemo(() => (
+    rideStatus === 'on_way' && approach
+      ? { type: 'LineString' as const, coordinates: driverLoc ? trimRoute(approach.coordinates, driverLoc) : approach.coordinates }
+      : null
+  ), [rideStatus, approach, driverLoc?.[0], driverLoc?.[1]]);
+  const shownRoute = useMemo(() => (
+    rideStatus === 'in_ride' && route
+      ? { type: 'LineString' as const, coordinates: driverLoc ? trimRoute(route.coordinates, driverLoc) : route.coordinates }
+      : null
+  ), [rideStatus, route, driverLoc?.[0], driverLoc?.[1]]);
+
   // ── Status config ─────────────────────────────────────────
   const statusConfig = {
     on_way: { label: 'Motorista a caminho', color: Colors.info, eta: '3 min' },
@@ -411,9 +435,11 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
       {/* Mapa (Mapbox no dev build; placeholder no Expo Go) com a rota traçada */}
       <RouteMap
         origin={origin}
-        destination={destination}
-        route={route}
-        approachRoute={approach}
+        // One leg at a time: the car coming to the pickup, then, once the ride
+        // starts, the pickup to the destination. Both follow the car live.
+        destination={rideStatus === 'in_ride' ? destination : undefined}
+        route={shownRoute}
+        approachRoute={shownApproach}
         restrictToSinop
         driverLocation={driverLoc ?? undefined}
         recenterKey={recenterKey}

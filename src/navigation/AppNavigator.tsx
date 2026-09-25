@@ -10,7 +10,7 @@ import type { RideRow, RideTypeDb, SubscriptionRow } from '../types/db';
 import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide, getDriverActiveRides, relaxFemalePreference, getRideCounterpart } from '../services/rides';
 import { getSearchingRides, subscribeSearchingRides, declineRide, hasDeclinedRide, setStatus, updateLocation, getMyDriver } from '../services/drivers';
 import { playSound, stopSound } from '../lib/sounds';
-import { registerForPushNotifications, clearPushToken, onPlanRenewalTap } from '../services/push';
+import { registerForPushNotifications, clearPushToken, onPlanRenewalTap, onCommissionTap } from '../services/push';
 import { showSearchingNotification, showDriverFoundNotification, showRideStatusNotification, clearRideNotification, ensureNotificationPermission } from '../services/localNotifications';
 import { buildRideFarePix, getSubscription, loadSubscriptionSnapshot, isSubscriptionCurrent, isPaymentReturnUrl } from '../services/payments';
 import { friendlyError } from '../lib/errors';
@@ -45,6 +45,8 @@ import DriverEarningsScreen from '../screens/driver/DriverEarningsScreen';
 import DriverDocumentsScreen from '../screens/driver/DriverDocumentsScreen';
 import DriverProfileScreen from '../screens/driver/DriverProfileScreen';
 import DriverRidesScreen from '../screens/driver/DriverRidesScreen';
+import DriverCommissionScreen from '../screens/driver/DriverCommissionScreen';
+import { getCommissionStatus, type CommissionStatus } from '../services/commissions';
 import DriverSubscriptionScreen from '../screens/driver/DriverSubscriptionScreen';
 import DriverRatingsScreen from '../screens/driver/DriverRatingsScreen';
 import DriverRatePassengerScreen from '../screens/driver/DriverRatePassengerScreen';
@@ -458,15 +460,16 @@ const PassengerFlow: React.FC = () => {
 };
 
 // ─── Driver flow ─────────────────────────────────────────────────────────────
-type DScreen = 'driver_home' | 'ride_notification' | 'driver_active_ride' | 'driver_rate' | 'driver_earnings' | 'driver_documents' | 'driver_profile' | 'driver_rides' | 'driver_subscription' | 'driver_ratings' | 'driver_support';
+type DScreen = 'driver_home' | 'ride_notification' | 'driver_active_ride' | 'driver_rate' | 'driver_earnings' | 'driver_documents' | 'driver_profile' | 'driver_rides' | 'driver_subscription' | 'driver_ratings' | 'driver_support' | 'driver_commission';
 
 // The link that opened the app is read again on every sign-in; a payment
 // return in it is handled once.
 let initialPaymentUrlHandled = false;
 
 // Without a plan in date the driver sees the plan screen, and from it only
-// Financeiro and Suporte.
-const BLOCKED_SCREENS: ReadonlySet<DScreen> = new Set<DScreen>(['driver_subscription', 'driver_earnings', 'driver_support']);
+// Financeiro and Suporte. A daily commission past 10:00 shows its Pix screen
+// the same way.
+const BLOCKED_SCREENS: ReadonlySet<DScreen> = new Set<DScreen>(['driver_subscription', 'driver_earnings', 'driver_support', 'driver_commission']);
 
 const DriverFlow: React.FC = () => {
   const { signOut } = useAuth();
@@ -588,16 +591,42 @@ const DriverFlow: React.FC = () => {
     return () => linkSub.remove();
   }, [refreshSubscriptionAccess]);
 
+  // Daily commission: open days, due at 10:00 the next morning. Past that
+  // the driver goes offline and only sees the Pix screen until it is paid.
+  const [commission, setCommission] = useState<CommissionStatus | null>(null);
+  const refreshCommission = useCallback(async () => {
+    const s = await getCommissionStatus();
+    setCommission(s);
+    if (s.overdue) {
+      setOnline(false);
+      setPendingRequest(null);
+      await setStatus('offline').catch(() => {});
+    }
+  }, []);
+  useEffect(() => {
+    refreshCommission().catch(() => {});
+    const iv = setInterval(() => { refreshCommission().catch(() => {}); }, 60_000);
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') void refreshCommission().catch(() => {});
+    });
+    return () => { clearInterval(iv); appStateSub.remove(); };
+  }, [refreshCommission]);
+
   // A ride under way (or its rating) is finished even if the plan runs out.
-  const blocked = subscriptionAccess === 'blocked' && !activeRide && !ratingRide;
+  const commissionBlocked = !!commission?.overdue && !activeRide && !ratingRide;
+  const blocked = (subscriptionAccess === 'blocked' || commissionBlocked) && !activeRide && !ratingRide;
   const blockedRef = useRef(blocked);
   blockedRef.current = blocked;
+  const commissionBlockedRef = useRef(commissionBlocked);
+  commissionBlockedRef.current = commissionBlocked;
+  // Where a blocked driver lands and goes back to.
+  const blockedHome: DScreen = commissionBlocked ? 'driver_commission' : 'driver_subscription';
 
   // Blocked: the plan screen becomes the current one, so paying there shows
   // the confirmation instead of jumping back to where the driver was.
   useEffect(() => {
-    if (blocked && !BLOCKED_SCREENS.has(screen)) setScreen('driver_subscription');
-  }, [blocked, screen]);
+    if (blocked && !BLOCKED_SCREENS.has(screen)) setScreen(blockedHome);
+  }, [blocked, screen, blockedHome]);
 
   // Android's back button goes where each screen's back arrow goes. The plan
   // screen registers its own handler (it closes an open checkout first).
@@ -609,13 +638,14 @@ const DriverFlow: React.FC = () => {
       driver_rides: 'driver_profile',
       driver_ratings: 'driver_profile',
       driver_support: 'driver_profile',
+      driver_commission: 'driver_home',
     };
     const backSub = BackHandler.addEventListener('hardwareBackPress', () => {
       const current = screenRef.current;
       if (blockedRef.current) {
         // Back to the plan screen; from there, Android leaves the app.
         if (current === 'driver_earnings' || current === 'driver_support') {
-          setScreen('driver_subscription');
+          setScreen(commissionBlockedRef.current ? 'driver_commission' : 'driver_subscription');
           return true;
         }
         return false;
@@ -634,6 +664,13 @@ const DriverFlow: React.FC = () => {
     setScreen('driver_subscription');
     void refreshSubscriptionAccess().catch(() => {});
   }), [refreshSubscriptionAccess]);
+
+  // A commission notice opens the Pix screen, also when it opened the app.
+  useEffect(() => onCommissionTap(() => {
+    if (screenRef.current === 'driver_active_ride' || screenRef.current === 'driver_rate') return;
+    setScreen('driver_commission');
+    void refreshCommission().catch(() => {});
+  }), [refreshCommission]);
 
   // Back in the app: a plan that ran out while it was in the background
   // shows the plan screen right away, not a minute later.
@@ -967,7 +1004,7 @@ const DriverFlow: React.FC = () => {
   if (subscriptionAccess === 'loading') return <Loading message="Verificando a assinatura..." />;
   // Without a plan in date every other screen shows the plan screen. The
   // screen itself is kept, so once the plan is paid the driver is back there.
-  const shown: DScreen = blocked && !BLOCKED_SCREENS.has(screen) ? 'driver_subscription' : screen;
+  const shown: DScreen = blocked && !BLOCKED_SCREENS.has(screen) ? blockedHome : screen;
 
   switch (shown) {
     case 'driver_home':
@@ -984,6 +1021,8 @@ const DriverFlow: React.FC = () => {
             onRides={() => setScreen('driver_rides')}
             onRatings={() => setScreen('driver_ratings')}
             onSubscription={() => setScreen('driver_subscription')}
+            commission={commission && commission.open_total > 0 ? { amount: commission.open_total, dueAt: commission.next_due_at } : null}
+            onCommission={() => setScreen('driver_commission')}
           />
           {screen === 'ride_notification' && pendingRequest && (
             <RideRequestNotification
@@ -1070,14 +1109,14 @@ const DriverFlow: React.FC = () => {
         />
       );
     case 'driver_earnings':
-      return <DriverEarningsScreen onBack={() => setScreen(blocked ? 'driver_subscription' : 'driver_home')} />;
+      return <DriverEarningsScreen onBack={() => setScreen(blocked ? blockedHome : 'driver_home')} />;
     case 'driver_documents':
       return <DriverDocumentsScreen onBack={() => setScreen('driver_home')} />;
     case 'driver_support':
       return (
         <SupportScreen
-          onBack={() => setScreen(blocked ? 'driver_subscription' : 'driver_profile')}
-          onSubmit={() => setScreen(blocked ? 'driver_subscription' : 'driver_home')}
+          onBack={() => setScreen(blocked ? blockedHome : 'driver_profile')}
+          onSubmit={() => setScreen(blocked ? blockedHome : 'driver_home')}
         />
       );
     case 'driver_profile':
@@ -1090,6 +1129,7 @@ const DriverFlow: React.FC = () => {
           onDocuments={() => setScreen('driver_documents')}
           onSubscription={() => setScreen('driver_subscription')}
           onSupport={() => setScreen('driver_support')}
+          onCommission={() => setScreen('driver_commission')}
           onLogout={handleLogout}
         />
       );
@@ -1101,11 +1141,21 @@ const DriverFlow: React.FC = () => {
           onBack={closeSubscription}
           onSubscriptionChanged={onSubscriptionChanged}
           returnSignal={paymentReturnSignal}
-          blocked={blocked}
+          blocked={subscriptionAccess === 'blocked' && !activeRide && !ratingRide}
           onHome={goHomeAfterPayment}
           onEarnings={() => setScreen('driver_earnings')}
           onSupport={() => setScreen('driver_support')}
           onLogout={() => { void handleLogout(); }}
+        />
+      );
+    case 'driver_commission':
+      return (
+        <DriverCommissionScreen
+          blocked={commissionBlocked}
+          onBack={() => setScreen('driver_home')}
+          onEarnings={() => setScreen('driver_earnings')}
+          onSupport={() => setScreen('driver_support')}
+          onPaid={() => { void refreshCommission().catch(() => {}); void refreshSubscriptionAccess().catch(() => {}); }}
         />
       );
     case 'driver_ratings':
