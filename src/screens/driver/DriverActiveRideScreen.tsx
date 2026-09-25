@@ -35,6 +35,8 @@ import {
   RotateCcw,
   Flag,
   Navigation2,
+  Volume2,
+  VolumeX,
 } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { Avatar, Button, Card } from '../../components/ui';
@@ -58,6 +60,7 @@ import {
 import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ChatModal from '../../components/ChatModal';
+import { useVoiceGuidance } from '../../services/voiceGuidance';
 import {
   getRide,
   getRideCounterpart,
@@ -228,6 +231,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   // Driver live position
   const [driverPos, setDriverPos] = useState<LngLat | null>(null);
   const [driverSpeedMs, setDriverSpeedMs] = useState(0);
+  const [voiceOn, setVoiceOn] = useState(true);
 
   // Cancel modal
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -405,7 +409,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       const { status: perm } = await Location.getForegroundPermissionsAsync();
       if (cancelled || perm !== 'granted') return;
       const next = await Location.watchPositionAsync(
-        { accuracy: Location.Accuracy.High, distanceInterval: 0, timeInterval: 3000 },
+        // Every second, so the turn banner and the voice keep up with the car.
+        { accuracy: Location.Accuracy.BestForNavigation, distanceInterval: 0, timeInterval: 1000 },
         (pos) => {
           const here: LngLat = [pos.coords.longitude, pos.coords.latitude];
           driverPosRef.current = here;
@@ -491,6 +496,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 
   // The banner needs a route with maneuvers and the car's place on it.
   const showNav = !!maneuver && (status === 'to_passenger' || status === 'in_ride');
+  useVoiceGuidance(showNav ? maneuver : null, driverSpeedMs, voiceOn);
   // The status pill ends 66 px below the status bar, the turn banner under it
   // at NAV_BANNER_TOP + NAV_BANNER_HEIGHT.
   const { mapPadding, onSheetLayout } = useRideMapPadding(showNav ? NAV_BANNER_TOP + NAV_BANNER_HEIGHT : 66);
@@ -831,6 +837,18 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
                   <Text style={styles.navigateTxt}>Navegar</Text>
                 </TouchableOpacity>
               )}
+              {canNavigate && (
+                <TouchableOpacity
+                  style={[styles.voiceBtn, !voiceOn && styles.voiceBtnOff]}
+                  onPress={() => setVoiceOn((v) => !v)}
+                  activeOpacity={0.8}
+                  accessibilityLabel={voiceOn ? 'Silenciar voz do GPS' : 'Ativar voz do GPS'}
+                >
+                  {voiceOn
+                    ? <Volume2 size={17} color={Colors.info} />
+                    : <VolumeX size={17} color={Colors.textMuted} />}
+                </TouchableOpacity>
+              )}
               {canChangeRoute && (
                 <TouchableOpacity style={styles.changeRouteBtn} onPress={openRouteEditor} activeOpacity={0.8}>
                   <Navigation size={15} color={Colors.primary} />
@@ -1125,6 +1143,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10, borderRadius: Radius.md,
     borderWidth: 1, borderColor: Colors.info + '55', backgroundColor: Colors.info + '0D',
   },
+  voiceBtn: {
+    width: 44, alignItems: 'center', justifyContent: 'center', borderRadius: Radius.md,
+    borderWidth: 1, borderColor: Colors.info + '55', backgroundColor: Colors.info + '0D',
+  },
+  voiceBtnOff: { borderColor: Colors.borderLight, backgroundColor: 'transparent' },
   navigateTxt: { ...Typography.smallMedium, color: Colors.info, fontWeight: '700' },
   fareRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.borderLight },
   fareLabel: { ...Typography.caption, color: Colors.textSecondary },
