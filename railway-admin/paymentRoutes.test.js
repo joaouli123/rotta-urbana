@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { test } from 'node:test';
-import { createPlanCardPayment, createPlanPassPreference, createPlanPixPayment, mercadopagoDateTime } from './mercadoPago.js';
+import vm from 'node:vm';
+import { createCardSubscription, createPlanCardPayment, createPlanPassPreference, createPlanPixPayment, mercadopagoDateTime } from './mercadoPago.js';
 import {
   amountFromSettings,
   applyAuthorizedPaymentWebhook,
   applyOneTimePlanPaymentWebhook,
   cardFormPage,
+  cardSubscriptionInput,
   closeAbandonedPasses,
   createPassCheckout,
   keptPreapprovalRenews,
@@ -24,6 +26,7 @@ import {
   reminderMessage,
   reviewPassIntents,
   reviewPendingCheckouts,
+  subscribeMonthlyWithCard,
   syncPaymentForAdmin,
   syncSubscriptionForDriver,
 } from './paymentRoutes.js';
@@ -1281,4 +1284,271 @@ test('the daily cleanup leaves a payment under review open and closes the rest',
   }, () => reviewPassIntents(fixture.admin));
   assert.ok(searched.includes(fixture.rows[0].external_reference));
   assert.equal(fixture.rows[0].status, 'approved');
+});
+
+
+// ─── Monthly plan with the card typed in the app ───────────────────────────
+
+test('the monthly card subscription is authorized with the card token, the device and an idempotency key', async () => {
+  const request = await captureMercadoPagoRequest(() => createCardSubscription({
+    driverId: DRIVER,
+    email: 'brick@example.com',
+    plan: 'monthly',
+    amount: 349.899,
+    cardTokenId: 'card-token-123',
+    backUrl: 'https://rotta.test/pagamento/retorno',
+    notificationUrl: 'https://rotta.test/api/mercadopago/webhook',
+    deviceId: 'armor.1234',
+    idempotencyKey: `subscription-card:${DRIVER}:abc`,
+  }));
+  assert.equal(request.url, 'https://api.mercadopago.com/preapproval');
+  assert.equal(request.init.method, 'POST');
+  assert.equal(request.init.headers['X-Idempotency-Key'], `subscription-card:${DRIVER}:abc`);
+  assert.equal(request.init.headers['X-meli-session-id'], 'armor.1234');
+  assert.equal(request.body.status, 'authorized');
+  assert.equal(request.body.card_token_id, 'card-token-123');
+  assert.equal(request.body.external_reference, DRIVER);
+  assert.equal(request.body.payer_email, 'brick@example.com');
+  assert.match(request.body.reason, /Mensal/);
+  assert.deepEqual(request.body.auto_recurring, { frequency: 1, frequency_type: 'months', transaction_amount: 349.9, currency_id: 'BRL' });
+  assert.equal(request.body.notification_url, 'https://rotta.test/api/mercadopago/webhook');
+  assert.equal(request.body.back_url, 'https://rotta.test/pagamento/retorno');
+});
+
+test('the monthly card subscription leaves out a device id it cannot trust and is never a pass', async () => {
+  const request = await captureMercadoPagoRequest(() => createCardSubscription({
+    driverId: DRIVER, email: 'a@b.co', plan: 'monthly', amount: 300, cardTokenId: 't', backUrl: 'https://x', notificationUrl: 'https://x',
+    deviceId: 'bad id\nX-Other: 1',
+  }));
+  assert.equal('X-meli-session-id' in request.init.headers, false);
+  await assert.rejects(createCardSubscription({ plan: 'daily', amount: 25, cardTokenId: 't' }), /Plano não recorrente/);
+});
+
+// Runs the card form page's script with a fake Mercado Pago SDK and returns
+// the settings the Brick was created with.
+async function brickSettings(initValue) {
+  const page = cardFormPage({ publicKey: PUBLIC_KEY });
+  const script = page.match(/<script>\n([\s\S]*?)<\/script>/)[1];
+  const created = [];
+  const box = () => ({ style: {}, textContent: '' });
+  const window = {
+    ReactNativeWebView: { postMessage() {} },
+    MercadoPago: function FakeMercadoPago() {
+      return { bricks: () => ({ create: (_name, _container, settings) => { created.push(settings); return Promise.resolve({ unmount() {} }); } }) };
+    },
+  };
+  const context = vm.createContext({ window, document: { getElementById: box, documentElement: { scrollHeight: 100 }, body: {} }, setInterval: () => 0 });
+  vm.runInContext(script, context);
+  window.__ruInit(initValue);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(created.length, 1);
+  // Built in the page's own realm: plain data compares across realms.
+  return JSON.parse(JSON.stringify({ initialization: created[0].initialization, customization: created[0].customization }));
+}
+
+test('the card form takes only credit cards when the app asks for it, still in one installment', async () => {
+  const credit = await brickSettings({ amount: 349.9, email: 'a@b.co', credit_only: true });
+  assert.deepEqual(credit.customization.paymentMethods, { minInstallments: 1, maxInstallments: 1, types: { excluded: ['debit_card'] } });
+  assert.equal(credit.initialization.amount, 349.9);
+
+  const pass = await brickSettings({ amount: 25, email: 'a@b.co' });
+  assert.deepEqual(pass.customization.paymentMethods, { minInstallments: 1, maxInstallments: 1 });
+  const loose = await brickSettings({ amount: 25, credit_only: 'true' });
+  assert.equal(loose.customization.paymentMethods.types, undefined, 'only a real true turns debit off');
+});
+
+test('the card subscription request is checked before anything reaches Mercado Pago', () => {
+  const body = { plan: 'monthly', token: 'tok0123456789abcdef0123456789ab', payment_method_id: 'Master', payer: { email: 'a@b.co' }, device_id: 'armor.1' };
+  const coded = (code) => (error) => error.status === 400 && error.code === code;
+  assert.deepEqual(cardSubscriptionInput(body, 'moto'), {
+    segment: 'moto', token: body.token, paymentMethodId: 'master', payerEmail: 'a@b.co', deviceId: 'armor.1',
+  });
+  assert.equal(cardSubscriptionInput({ ...body, segment: 'Comfort' }).segment, 'comfort');
+  assert.throws(() => cardSubscriptionInput({ ...body, plan: 'weekly' }), coded('invalid_plan'));
+  assert.throws(() => cardSubscriptionInput({ ...body, segment: 'luxo' }), coded('invalid_plan'));
+  assert.throws(() => cardSubscriptionInput({ ...body, token: 'short' }), coded('invalid_card_form'));
+  assert.throws(() => cardSubscriptionInput({ ...body, payment_method_id: '' }), coded('invalid_card_form'));
+  assert.throws(() => cardSubscriptionInput({ ...body, payment_method_id: 'debvisa' }), (error) => {
+    assert.equal(error.code, 'debit_not_allowed');
+    assert.equal(error.message, 'A assinatura mensal precisa de cartão de crédito.');
+    return true;
+  });
+  const bare = cardSubscriptionInput({ plan: 'monthly', token: body.token, payment_method_id: 'visa', payer: 'x', device_id: 42 });
+  assert.equal(bare.payerEmail, '');
+  assert.equal(bare.deviceId, null);
+  assert.equal(bare.segment, 'economy');
+});
+
+const DAY_MS = 24 * 3600e3;
+const futureDate = () => new Date(Date.now() + 30 * DAY_MS).toISOString().slice(0, 10);
+
+// A driver with a subscription row, the monthly price in the settings and a
+// vehicle that fits any category.
+function monthlyFixture(row = {}) {
+  driverSeq += 1;
+  const driverId = `00000000-0000-4000-8000-${String(driverSeq).padStart(12, '0')}`;
+  const local = {
+    id: crypto.randomUUID(), driver_id: driverId, plan: 'commission', plan_segment: 'economy', status: 'expired',
+    due_date: '2026-01-01', provider: 'mercadopago', provider_status: null, provider_subscription_id: null, provider_metadata: {}, ...row,
+  };
+  const admin = fakeAdmin({ subscriptions: [local], rpc: { driver_plan_segment_for: ({ p_segment: segment }) => segment } });
+  admin.tables.app_settings = [{ id: 1, subscription_monthly_amount: 300, car_economy_monthly_price: 349.9 }];
+  const subscribe = (options = {}) => subscribeMonthlyWithCard(admin, {
+    driver: { id: driverId },
+    profile: { email: 'perfil@example.com', full_name: 'Ana Souza' },
+    user: { email: 'login@example.com' },
+    segment: 'economy',
+    token: 'tok0123456789abcdef0123456789ab',
+    paymentMethodId: 'master',
+    payerEmail: 'Brick@Example.com',
+    deviceId: 'armor.abc123',
+    host: 'https://rotta.test',
+    ...options,
+  });
+  return { admin, driverId, row: () => admin.tables.subscriptions[0], subscribe };
+}
+
+const monthlyPreapproval = (id, driverId, status = 'authorized') => ({
+  id, status, external_reference: driverId, payment_method_id: 'master',
+  auto_recurring: { frequency: 1, frequency_type: 'months', transaction_amount: 349.9, currency_id: 'BRL' },
+  next_payment_date: new Date(Date.now() + 30 * DAY_MS).toISOString(),
+});
+
+test('an authorized card makes the monthly plan current and stops the plan and checkout it replaces', async () => {
+  const fixture = monthlyFixture({
+    plan: 'monthly', plan_segment: 'comfort', status: 'active', due_date: futureDate(), provider_status: 'authorized',
+    provider_subscription_id: 'pre-old',
+    provider_metadata: { pending_checkout: { preapproval_id: 'pre-link', plan: 'monthly', plan_segment: 'comfort', amount: 400, provider_status: 'pending' } },
+  });
+  const { driverId } = fixture;
+  const status = { 'pre-old': 'authorized', 'pre-link': 'pending' };
+  const [result, calls] = await withMercadoPago({
+    'GET /preapproval/pre-old': () => [200, { id: 'pre-old', status: status['pre-old'] }],
+    'GET /preapproval/pre-link': () => [200, { id: 'pre-link', status: status['pre-link'] }],
+    'PUT /preapproval/pre-old': () => { status['pre-old'] = 'cancelled'; return [200, { id: 'pre-old', status: 'cancelled' }]; },
+    'PUT /preapproval/pre-link': () => { status['pre-link'] = 'cancelled'; return [200, { id: 'pre-link', status: 'cancelled' }]; },
+    'POST /preapproval': () => [201, monthlyPreapproval('pre-card', driverId)],
+  }, async (log) => [await fixture.subscribe(), log]);
+
+  assert.equal(result.provider, 'mercadopago');
+  assert.equal(result.status, 'authorized');
+  assert.equal(result.already_active, undefined);
+  assert.equal(result.subscription_id, 'pre-card');
+  assert.equal(result.plan, 'monthly');
+  assert.equal(result.plan_segment, 'economy');
+  assert.equal(result.billing_type, 'recurring');
+  assert.equal(result.amount, 349.9);
+  assert.equal(result.subscription.provider_subscription_id, 'pre-card');
+
+  const create = calls.find((call) => call.method === 'POST');
+  assert.equal(create.body.status, 'authorized');
+  assert.equal(create.body.card_token_id, 'tok0123456789abcdef0123456789ab');
+  assert.equal(create.body.payer_email, 'brick@example.com', 'the e-mail typed in the form');
+  assert.equal(create.body.external_reference, driverId);
+  assert.equal(create.body.auto_recurring.transaction_amount, 349.9, 'the price comes from the settings');
+  assert.match(create.headers['X-Idempotency-Key'], new RegExp(`^subscription-card:${driverId}:[0-9a-f]{16}$`));
+  assert.equal(create.headers['X-meli-session-id'], 'armor.abc123');
+
+  const cancels = calls.filter((call) => call.method === 'PUT');
+  assert.deepEqual(cancels.map((call) => call.path).sort(), ['/preapproval/pre-link', '/preapproval/pre-old']);
+  assert.ok(cancels.every((call) => call.body.status === 'cancelled'));
+
+  const row = fixture.row();
+  assert.equal(row.plan, 'monthly');
+  assert.equal(row.plan_segment, 'economy');
+  assert.equal(row.status, 'active');
+  assert.equal(row.provider_status, 'authorized');
+  assert.ok(row.due_date >= new Date().toISOString().slice(0, 10));
+  assert.equal(row.provider_metadata.pending_checkout, undefined);
+  assert.deepEqual([...row.provider_metadata.replaced_preapproval_ids].sort(), ['pre-link', 'pre-old']);
+});
+
+test('a card Mercado Pago refuses charges nothing and keeps the plan the driver has', async () => {
+  const fixture = monthlyFixture();
+  await withMercadoPago({
+    'POST /preapproval': () => [400, { message: 'CC_VAL_433 Credit card validation has failed', status: 400 }],
+  }, () => assert.rejects(fixture.subscribe(), (error) => {
+    assert.equal(error.status, 402);
+    assert.equal(error.code, 'card_declined');
+    assert.match(error.message, /nada foi cobrado/);
+    assert.equal(/CC_VAL|Credit card/.test(error.message), false, 'the provider message stays in the log');
+    return true;
+  }));
+  const row = fixture.row();
+  assert.equal(row.plan, 'commission');
+  assert.equal(row.status, 'expired');
+  assert.equal(row.provider_metadata.card_subscription_unknown, undefined);
+});
+
+test('a subscription created without the card authorized is cancelled and never becomes the plan', async () => {
+  const fixture = monthlyFixture();
+  let status = 'pending';
+  const cancels = [];
+  await withMercadoPago({
+    'POST /preapproval': () => [201, monthlyPreapproval('pre-held', fixture.driverId, 'pending')],
+    'GET /preapproval/pre-held': () => [200, { id: 'pre-held', status }],
+    'PUT /preapproval/pre-held': ({ body }) => { cancels.push(body.status); status = 'cancelled'; return [200, { id: 'pre-held', status }]; },
+  }, () => assert.rejects(fixture.subscribe(), (error) => error.status === 402 && error.code === 'card_declined' && error.detail === 'not_authorized'));
+  assert.deepEqual(cancels, ['cancelled']);
+  const row = fixture.row();
+  assert.equal(row.status, 'expired');
+  assert.equal(row.provider_subscription_id, null);
+  assert.deepEqual(row.provider_metadata.replaced_preapproval_ids, ['pre-held'], 'a late authorization is cancelled, not promoted');
+});
+
+test('the monthly plan already renewing on a card is answered without charging again', async () => {
+  const fixture = monthlyFixture({
+    plan: 'monthly', status: 'active', due_date: futureDate(), provider_status: 'authorized', provider_subscription_id: 'pre-live', amount: 349.9,
+  });
+  const [result, calls] = await withMercadoPago({}, async (log) => [await fixture.subscribe(), log]);
+  assert.equal(result.already_active, true);
+  assert.equal(result.status, 'authorized');
+  assert.equal(result.subscription_id, 'pre-live');
+  assert.equal(result.amount, 349.9);
+  assert.equal(calls.length, 0);
+});
+
+test('a monthly checkout link paid before the card is sent becomes the plan, and the card is not charged', async () => {
+  const fixture = monthlyFixture({
+    provider_metadata: { pending_checkout: { preapproval_id: 'pre-paid', plan: 'monthly', plan_segment: 'economy', amount: 349.9, provider_status: 'pending' } },
+  });
+  const [result, calls] = await withMercadoPago({
+    'GET /preapproval/pre-paid': () => [200, monthlyPreapproval('pre-paid', fixture.driverId)],
+  }, async (log) => [await fixture.subscribe(), log]);
+  assert.equal(result.already_active, true);
+  assert.equal(result.subscription_id, 'pre-paid');
+  assert.equal(calls.some((call) => call.method === 'POST'), false);
+  assert.equal(fixture.row().status, 'active');
+  assert.equal(fixture.row().provider_metadata.pending_checkout, undefined);
+});
+
+test('no answer to a card subscription blocks another card for a while; the same card can be sent again', async () => {
+  const fixture = monthlyFixture();
+  let answer = [500, { message: 'internal_error' }];
+  const creates = [];
+  await withMercadoPago({
+    'POST /preapproval': (request) => { creates.push(request.headers['X-Idempotency-Key']); return answer; },
+  }, async () => {
+    await assert.rejects(fixture.subscribe(), (error) => error.status === 502 && error.code === 'payment_unknown');
+    assert.ok(fixture.row().provider_metadata.card_subscription_unknown);
+    await assert.rejects(fixture.subscribe({ token: 'tokOTHER0123456789abcdef0123' }), (error) => error.status === 409 && error.code === 'subscription_in_progress');
+    answer = [201, monthlyPreapproval('pre-card', fixture.driverId)];
+    const result = await fixture.subscribe();
+    assert.equal(result.subscription_id, 'pre-card');
+  });
+  assert.equal(creates.length, 2, 'the other card was never sent');
+  assert.equal(creates[0], creates[1], 'the same card repeats the idempotency key');
+  assert.equal(fixture.row().provider_metadata.card_subscription_unknown, undefined);
+  assert.equal(fixture.row().status, 'active');
+});
+
+test('a debit card or a missing price never reaches Mercado Pago', async () => {
+  const fixture = monthlyFixture();
+  const calls = await withMercadoPago({}, async (log) => {
+    await assert.rejects(fixture.subscribe({ paymentMethodId: 'debmaster' }), (error) => error.status === 400 && error.code === 'debit_not_allowed');
+    fixture.admin.tables.app_settings[0] = { id: 1 };
+    await assert.rejects(fixture.subscribe(), (error) => error.status === 400 && error.code === 'invalid_plan');
+    return log;
+  });
+  assert.equal(calls.length, 0);
 });

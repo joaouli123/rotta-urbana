@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   StatusBar,
   Animated,
+  ActivityIndicator,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { MapPin, Navigation, Clock, DollarSign, X, Check, ShieldCheck } from 'lucide-react-native';
@@ -20,6 +21,8 @@ interface RideRequestNotificationProps {
   driverCoords?: [number, number]; // [lng, lat]
   onAccept: () => void;
   onReject: () => void;
+  /** The accept request is on its way: both buttons wait for its answer. */
+  accepting?: boolean;
 }
 
 const fmtMoney = (v?: number | null) =>
@@ -39,6 +42,7 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
   driverCoords,
   onAccept,
   onReject,
+  accepting = false,
 }) => {
   const slideAnim = useRef(new Animated.Value(300)).current;
   const progressAnim = useRef(new Animated.Value(1)).current;
@@ -190,17 +194,30 @@ const RideRequestNotification: React.FC<RideRequestNotificationProps> = ({
 
         {/* Actions */}
         <View style={styles.actions}>
-          <TouchableOpacity style={styles.rejectBtn} onPress={onReject}>
+          <TouchableOpacity
+            style={[styles.rejectBtn, accepting && styles.btnWaiting]}
+            onPress={onReject}
+            disabled={accepting}
+          >
             <X size={22} color={Colors.danger} />
             <Text style={styles.rejectText}>Recusar</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.acceptBtn} onPress={onAccept} activeOpacity={0.85}>
+          <TouchableOpacity style={styles.acceptBtn} onPress={onAccept} disabled={accepting} activeOpacity={0.85}>
             <LinearGradient
               colors={[Colors.success, Colors.successLight]}
               style={styles.acceptGradient}
             >
-              <Check size={22} color="#fff" />
-              <Text style={styles.acceptText}>Aceitar</Text>
+              {accepting ? (
+                <>
+                  <ActivityIndicator size="small" color="#fff" />
+                  <Text style={styles.acceptText}>Aceitando...</Text>
+                </>
+              ) : (
+                <>
+                  <Check size={22} color="#fff" />
+                  <Text style={styles.acceptText}>Aceitar</Text>
+                </>
+              )}
             </LinearGradient>
           </TouchableOpacity>
         </View>
@@ -273,6 +290,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5, borderColor: Colors.danger + '44', backgroundColor: Colors.danger + '11',
   },
   rejectText: { ...Typography.bodyMedium, color: Colors.danger, fontWeight: '600' },
+  btnWaiting: { opacity: 0.45 },
   acceptBtn: { flex: 2, borderRadius: Radius.lg, overflow: 'hidden' },
   acceptGradient: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,

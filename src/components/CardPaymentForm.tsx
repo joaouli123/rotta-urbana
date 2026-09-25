@@ -19,12 +19,29 @@ export interface CardPaymentFormProps {
   onSubmit: (form: CardFormData, deviceId: string | null) => Promise<CardFormReply>;
   /** Other ways to pay, shown when the form cannot load. */
   fallback?: React.ReactNode;
+  /** Credit cards only (the monthly subscription): the form refuses debit. */
+  creditOnly?: boolean;
 }
 
 // Mercado Pago's form loads in a few seconds; past this it is not coming.
 const READY_TIMEOUT_MS = 25_000;
 
 const isFormPage = (url: string | undefined) => String(url || '').split(/[?#]/)[0] === CARD_FORM_URL;
+
+const originOf = (url: string | undefined) => (/^https?:\/\/[^/?#]+/i.exec(String(url || ''))?.[0] || '').toLowerCase();
+const FORM_ORIGIN = originOf(CARD_FORM_URL);
+
+// A message's url is the page's full address on iOS, but on Android (message
+// listener) only the origin of the frame that sent it. Either way it must be
+// our server, never one of Mercado Pago's frames.
+const fromFormPage = (url: string | undefined) => !!FORM_ORIGIN && originOf(url) === FORM_ORIGIN;
+
+// Mercado Pago's own hosts the form's fields and checks load from.
+const MP_FRAME_HOST = /(^|\.)(mercadopago\.com(\.br)?|mercadolibre\.com|mercadolivre\.com(\.br)?|mlstatic\.com)$/i;
+const isMpFrame = (url: string) => {
+  const host = /^https:\/\/([^/?#:]+)/i.exec(url)?.[1] || '';
+  return MP_FRAME_HOST.test(host) && !/^www\./i.test(host);
+};
 
 function readForm(data: unknown): CardFormData | null {
   const form = data as Partial<CardFormData> | null;
@@ -48,7 +65,7 @@ function readForm(data: unknown): CardFormData | null {
  * WebView. The card numbers go from the form straight to Mercado Pago; the app
  * only gets the one-use token that pays the plan.
  */
-export const CardPaymentForm: React.FC<CardPaymentFormProps> = ({ amount, email, onSubmit, fallback }) => {
+export const CardPaymentForm: React.FC<CardPaymentFormProps> = ({ amount, email, onSubmit, fallback, creditOnly = false }) => {
   const web = useRef<WebView>(null);
   // Bumped to load the page again from scratch.
   const [load, setLoad] = useState(0);
@@ -58,7 +75,8 @@ export const CardPaymentForm: React.FC<CardPaymentFormProps> = ({ amount, email,
   // Bumped when the page clears the form for another card.
   const [rebuildTick, setRebuildTick] = useState(0);
   const submitting = useRef(false);
-  const init = JSON.stringify({ amount, email: email || '' });
+  // Handed to the page before it loads, and again when it asks.
+  const init = JSON.stringify({ amount, email: email || '', credit_only: creditOnly });
 
   useEffect(() => {
     readyRef.current = false;
@@ -81,7 +99,7 @@ export const CardPaymentForm: React.FC<CardPaymentFormProps> = ({ amount, email,
   }, []);
 
   const onMessage = useCallback((event: WebViewMessageEvent) => {
-    if (!isFormPage(event.nativeEvent.url)) return;
+    if (!fromFormPage(event.nativeEvent.url)) return;
     let message: { type?: string; data?: unknown; deviceId?: unknown; reason?: unknown };
     try {
       message = JSON.parse(event.nativeEvent.data);
@@ -129,9 +147,11 @@ export const CardPaymentForm: React.FC<CardPaymentFormProps> = ({ amount, email,
   }, [fail, init, onSubmit, reply]);
 
   // Only the form page opens in the view; Mercado Pago's own frames load
-  // inside it, and any other link opens in the browser.
+  // inside it, and any other link opens in the browser. Android reports every
+  // load as the top frame, so Mercado Pago's frame hosts pass by name.
   const onShouldStart = useCallback((request: ShouldStartLoadRequest) => {
     if (request.isTopFrame === false || isFormPage(request.url)) return true;
+    if (/^(about|data|blob):/i.test(request.url) || isMpFrame(request.url)) return true;
     if (/^https:\/\//i.test(request.url)) void Linking.openURL(request.url).catch(() => {});
     return false;
   }, []);
@@ -157,7 +177,10 @@ export const CardPaymentForm: React.FC<CardPaymentFormProps> = ({ amount, email,
         key={load}
         ref={web}
         source={{ uri: CARD_FORM_URL }}
-        originWhitelist={['https://*', 'about:*']}
+        originWhitelist={['https://*', 'about:*', 'data:*', 'blob:*']}
+        javaScriptEnabled
+        domStorageEnabled
+        thirdPartyCookiesEnabled
         injectedJavaScriptBeforeContentLoaded={`window.__RU_INIT=${init};true;`}
         onMessage={onMessage}
         onShouldStartLoadWithRequest={onShouldStart}

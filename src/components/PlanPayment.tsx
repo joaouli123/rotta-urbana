@@ -14,8 +14,9 @@ import { supabase } from '../lib/supabase';
 import {
   createSubscriptionCheckout, getSubscription, loadSubscriptionSnapshot, openMercadoPagoCheckout,
   isCheckoutConfirmed, isPassPlan, planCutoff, subscriptionFingerprint, PaymentsApiError, payPlanWithCard,
+  subscribeMonthlyWithCard,
   type PlanType, type PlanPix, type PendingPass, type PendingCheckout, type PassPaymentMethod,
-  type SubscriptionCheckout, type CardFormData, type CardPaymentResult,
+  type SubscriptionCheckout, type CardFormData, type CardPaymentResult, type CardSubscriptionResult,
 } from '../services/payments';
 import type { PlanSegment, SubscriptionRow } from '../types/db';
 
@@ -74,7 +75,10 @@ export interface PlanPaymentSession {
   plan: PaidPlan;
   segment: PlanSegment;
   amount: number;
-  /** Pix or card in the app, Checkout Pro, or the monthly subscription checkout. */
+  /**
+   * Pix or card in the app, Checkout Pro, or the monthly subscription (card in
+   * the app, with Mercado Pago's page at `url` as the fallback).
+   */
   method: PaymentKind;
   url: string | null;
   pix: PlanPix | null;
@@ -203,6 +207,8 @@ export interface PlanPayment {
   closeCardForm: () => void;
   /** Charges the card the form handed over; the reply says how the form goes on. */
   payCard: (form: CardFormData, deviceId: string | null) => Promise<CardFormReply>;
+  /** Subscribes the monthly plan on the card the form handed over. */
+  subscribeCard: (form: CardFormData, deviceId: string | null) => Promise<CardFormReply>;
   checkNow: () => Promise<void>;
   markReturned: () => void;
   close: () => void;
@@ -232,8 +238,9 @@ function confirmPayAgain(): Promise<boolean> {
 
 /**
  * Runs a plan payment: daily and weekly by Pix or card in the app (or
- * Checkout Pro), monthly by Mercado Pago's subscription checkout. It watches the ledger
- * row and the plan until the payment shows up, and calls `onConfirmed` once.
+ * Checkout Pro), monthly by a card subscription in the app (or Mercado Pago's
+ * subscription checkout). It watches the ledger row and the plan until the
+ * payment shows up, and calls `onConfirmed` once.
  */
 export function usePlanPayment({ onConfirmed }: { onConfirmed?: (row: SubscriptionRow | null) => void } = {}): PlanPayment {
   const [session, setSessionState] = useState<PlanPaymentSession | null>(restoreSession);
@@ -558,7 +565,14 @@ export function usePlanPayment({ onConfirmed }: { onConfirmed?: (row: Subscripti
 
   const openCardForm = useCallback((options?: PayAgainOptions) => {
     const current = sessionRef.current;
-    if (!current || current.method !== 'card' || confirmedRef.current || busyRef.current) return;
+    if (!current || confirmedRef.current || busyRef.current) return;
+    // The monthly subscription takes the card in the same form.
+    if (current.method === 'recurring') {
+      setCardNotice(null);
+      setCardFormOpen(true);
+      return;
+    }
+    if (current.method !== 'card') return;
     const allowed = cardAllowProcessing.current || !!options?.allowProcessing;
     // A card with no answer yet may have been charged: another card is asked
     // about first.
@@ -687,6 +701,76 @@ export function usePlanPayment({ onConfirmed }: { onConfirmed?: (row: Subscripti
     return { rebuild: true };
   }, [check, markConfirmed, switchMethod]);
 
+  // The monthly plan on the card typed in the app. Mercado Pago authorizes
+  // the subscription right away, so the answer says whether the plan is on.
+  // The card's token is not sent twice: an answer that does not come is
+  // looked for on the plan instead.
+  const subscribeCard = useCallback(async (form: CardFormData, deviceId: string | null): Promise<CardFormReply> => {
+    const target = sessionRef.current;
+    if (!target || target.method !== 'recurring' || confirmedRef.current) return { rebuild: true };
+    if (busyRef.current) {
+      setCardNotice('Aguarde um instante e toque em pagar de novo.');
+      return { rebuild: false };
+    }
+    busyRef.current = true;
+    chargingRef.current = true;
+    setBusy('charge');
+    setCardNotice(null);
+    const attempt = attemptRef.current;
+    const stale = () => attemptRef.current !== attempt || !mounted.current || sessionRef.current !== target;
+    try {
+      let result: CardSubscriptionResult | null = null;
+      let api: PaymentsApiError | null = null;
+      try {
+        result = await subscribeMonthlyWithCard(form, deviceId, target.segment);
+      } catch (error) {
+        api = error instanceof PaymentsApiError ? error : null;
+      }
+      if (stale()) return { rebuild: !result };
+
+      if (result && (result.status === 'authorized' || result.already_active)) {
+        const row = result.subscription ?? await getSubscription().catch(() => null);
+        if (sessionRef.current === target) markConfirmed(row);
+        return { rebuild: false };
+      }
+      const code = api?.code ?? null;
+      if (api?.status === 409 && code === 'subscription_in_progress') {
+        // A first try whose answer was lost, or another phone: its answer
+        // shows up on the plan. The card stays in the form meanwhile.
+        setCardNotice('Sua assinatura já está sendo processada. Aguarde um instante.');
+        void check(true);
+        return { rebuild: false };
+      }
+      if (api?.status === 404 && !code) {
+        // A server without this route yet: Mercado Pago's page still works.
+        setCardFormOpen(false);
+        setCardNotice('A assinatura com cartão no app ainda não está disponível. Toque em "Pagar na página do Mercado Pago" para assinar.');
+        return { rebuild: true };
+      }
+      if (api && api.status < 500) {
+        // Refused before any charge: card declined, debit card, incomplete form, …
+        setCardNotice(api.message);
+        return { rebuild: true };
+      }
+
+      // No answer: the subscription may exist. The plan says whether it does.
+      for (let tries = 0; tries < 2; tries += 1) {
+        if (tries) await wait(3000);
+        if (stale()) return { rebuild: true };
+        if (await check(true)) return { rebuild: false };
+      }
+      if (stale()) return { rebuild: true };
+      setCardNotice(api?.status === 503 && !code
+        ? api.message
+        : 'Não conseguimos confirmar a sua assinatura com o Mercado Pago. Confira em instantes: se ela foi aprovada, o plano é liberado sozinho.');
+      return { rebuild: true };
+    } finally {
+      busyRef.current = false;
+      chargingRef.current = false;
+      if (mounted.current) setBusy(null);
+    }
+  }, [check, markConfirmed]);
+
   const resumePass = useCallback(async (
     pending: PendingPass,
     fallbackSegment: PlanSegment,
@@ -781,7 +865,7 @@ export function usePlanPayment({ onConfirmed }: { onConfirmed?: (row: Subscripti
     session, confirmed, confirmedRow, returned, busy, checking, notYet, intentClosed, declined, processing, intentStatus,
     cardFormOpen, cardNotice,
     start, resumePass, resumeCheckout, payWithCard, payWithPix, payWithCheckout, openCheckout,
-    openCardForm, closeCardForm, payCard, checkNow, markReturned, close,
+    openCardForm, closeCardForm, payCard, subscribeCard, checkNow, markReturned, close,
   };
 }
 
@@ -902,6 +986,81 @@ const Or: React.FC = () => (
   </View>
 );
 
+interface CardSheetProps {
+  visible: boolean;
+  onClose: () => void;
+  /** A card is being sent: the sheet stays until its answer is on screen. */
+  charging: boolean;
+  chargingText: string;
+  title: string;
+  subtitle: string;
+  amount: number;
+  notice: string | null;
+  /** A new key loads the form again from scratch. */
+  formKey: string;
+  email: string | null;
+  creditOnly?: boolean;
+  onSubmit: (form: CardFormData, deviceId: string | null) => Promise<CardFormReply>;
+  /** Other ways to pay, shown when the form cannot load. */
+  fallback?: React.ReactNode;
+}
+
+/** Mercado Pago's card form over the panel, for a pass or the monthly subscription. */
+const CardSheet: React.FC<CardSheetProps> = ({
+  visible, onClose, charging, chargingText, title, subtitle, amount, notice, formKey, email, creditOnly, onSubmit, fallback,
+}) => {
+  const insets = useSafeAreaInsets();
+  return (
+    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
+      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={p.sheet}>
+        <View style={[p.sheetHead, { paddingTop: insets.top + 10 }]}>
+          <TouchableOpacity
+            style={[p.sheetClose, charging && p.dim]}
+            onPress={onClose}
+            disabled={charging}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel="Fechar"
+          >
+            <X size={22} color="#1A1A1A" />
+          </TouchableOpacity>
+          <View style={{ flex: 1 }}>
+            <Text style={p.sheetTitle}>{title}</Text>
+            <Text style={p.sub} numberOfLines={1}>{subtitle}</Text>
+          </View>
+          <Text style={p.amount}>{fmtBRL(amount)}</Text>
+        </View>
+        {!!notice && (
+          <View style={[p.expiredBox, p.sheetNotice]}>
+            <AlertCircle size={16} color="#92400E" />
+            <Text style={p.expiredTxt}>{notice}</Text>
+          </View>
+        )}
+        <View style={p.sheetBody}>
+          <CardPaymentForm
+            key={formKey}
+            amount={amount}
+            email={email}
+            creditOnly={creditOnly}
+            onSubmit={onSubmit}
+            fallback={fallback}
+          />
+          {charging && (
+            <View style={p.sheetBusy}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+              <Text style={p.sheetBusyTxt}>{chargingText}</Text>
+            </View>
+          )}
+        </View>
+        <View style={[p.sheetFoot, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <Lock size={13} color="#6B7280" />
+          <Text style={p.sheetFootTxt}>Os dados do cartão ficam só com o Mercado Pago.</Text>
+        </View>
+      </KeyboardAvoidingView>
+    </Modal>
+  );
+};
+
 interface PlanPaymentPanelProps {
   payment: PlanPayment;
   /** Leaves the panel without paying ("Voltar aos planos"). */
@@ -925,7 +1084,6 @@ export const PlanPaymentPanel: React.FC<PlanPaymentPanelProps> = ({
     session, confirmed, confirmedRow, returned, busy, checking, notYet, intentClosed, declined, processing, intentStatus,
     cardFormOpen, cardNotice,
   } = payment;
-  const insets = useSafeAreaInsets();
   const [copied, setCopied] = useState<'copied' | 'shared' | null>(null);
   const expiredByTime = useExpired(session?.expiresAt, !!session && !confirmed);
   // A subscription Mercado Pago has not confirmed after a while: the card was
@@ -1207,69 +1365,111 @@ export const PlanPaymentPanel: React.FC<PlanPaymentPanelProps> = ({
         {passNote}
         {closeLink}
 
-        <Modal visible={cardFormOpen} animationType="slide" onRequestClose={payment.closeCardForm}>
-          <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : 'height'} style={p.sheet}>
-            <View style={[p.sheetHead, { paddingTop: insets.top + 10 }]}>
-              <TouchableOpacity
-                style={[p.sheetClose, charging && p.dim]}
-                onPress={payment.closeCardForm}
-                disabled={charging}
-                hitSlop={10}
-                accessibilityRole="button"
-                accessibilityLabel="Fechar"
-              >
-                <X size={22} color="#1A1A1A" />
-              </TouchableOpacity>
-              <View style={{ flex: 1 }}>
-                <Text style={p.sheetTitle}>Cartão de crédito ou débito</Text>
-                <Text style={p.sub} numberOfLines={1}>{planLine}</Text>
-              </View>
-              <Text style={p.amount}>{fmtBRL(session.amount)}</Text>
-            </View>
-            {!!cardNotice && (
-              <View style={[p.expiredBox, p.sheetNotice]}>
-                <AlertCircle size={16} color="#92400E" />
-                <Text style={p.expiredTxt}>{cardNotice}</Text>
-              </View>
-            )}
-            <View style={p.sheetBody}>
-              <CardPaymentForm
-                key={session.paymentId ?? 'card'}
-                amount={session.amount}
-                email={session.payerEmail}
-                onSubmit={payment.payCard}
-                fallback={otherWays}
-              />
-              {charging && (
-                <View style={p.sheetBusy}>
-                  <ActivityIndicator size="large" color={Colors.primary} />
-                  <Text style={p.sheetBusyTxt}>Processando o pagamento… não feche o app.</Text>
-                </View>
-              )}
-            </View>
-            <View style={[p.sheetFoot, { paddingBottom: Math.max(insets.bottom, 12) }]}>
-              <Lock size={13} color="#6B7280" />
-              <Text style={p.sheetFootTxt}>Os dados do cartão ficam só com o Mercado Pago.</Text>
-            </View>
-          </KeyboardAvoidingView>
-        </Modal>
+        <CardSheet
+          visible={cardFormOpen}
+          onClose={payment.closeCardForm}
+          charging={charging}
+          chargingText="Processando o pagamento… não feche o app."
+          title="Cartão de crédito ou débito"
+          subtitle={planLine}
+          amount={session.amount}
+          notice={cardNotice}
+          formKey={session.paymentId ?? 'card'}
+          email={session.payerEmail}
+          onSubmit={payment.payCard}
+          fallback={otherWays}
+        />
       </View>
     );
   }
 
-  // ── Card on Mercado Pago's page (Checkout Pro) or the monthly subscription ──
-  const recurring = session.method === 'recurring';
+  // ── Monthly subscription: the card in the app, Mercado Pago's page as the fallback ──
+  if (session.method === 'recurring') {
+    const charging = busy === 'charge';
+    const opening = busy === 'open';
+    // From the form that did not load: Mercado Pago's page, once the form is gone.
+    const leaveForm = () => {
+      payment.closeCardForm();
+      setTimeout(() => { void payment.openCheckout(); }, 400);
+    };
+    return (
+      <View style={p.panel}>
+        {header(`Assinatura ${label}`, 'Cartão de crédito, cobrado todo mês. Assine aqui mesmo no app e cancele quando quiser.')}
+
+        {!!cardNotice && (
+          <View style={p.expiredBox}>
+            <AlertCircle size={16} color="#92400E" />
+            <Text style={p.expiredTxt}>{cardNotice}</Text>
+          </View>
+        )}
+        <TouchableOpacity
+          style={[p.primaryBtn, busyAny && p.dim]}
+          onPress={() => payment.openCardForm()}
+          disabled={busyAny}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+        >
+          <CreditCard size={18} color="#fff" />
+          <Text style={p.primaryTxt}>Assinar com cartão</Text>
+        </TouchableOpacity>
+        {returned && <Waiting text="Conferindo o pagamento com o Mercado Pago…" />}
+        {(returned || !!cardNotice) && verify}
+        {recurringStalled && (
+          <View style={p.expiredBox}>
+            <AlertCircle size={16} color="#92400E" />
+            <Text style={p.expiredTxt}>
+              O Mercado Pago ainda não confirmou a assinatura. Se o cartão foi recusado, toque em "Assinar com cartão" e use outro cartão, ou volte aos planos e escolha outra forma de pagamento.
+            </Text>
+          </View>
+        )}
+        <TouchableOpacity
+          style={p.linkBtn}
+          onPress={() => { void payment.openCheckout(); }}
+          disabled={busyAny}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+        >
+          <Text style={p.linkTxt}>{opening ? 'Abrindo o Mercado Pago…' : 'Pagar na página do Mercado Pago'}</Text>
+        </TouchableOpacity>
+        <View style={p.note}>
+          <Text style={p.noteTxt}>
+            Os dados do cartão ficam só com o Mercado Pago. O plano é liberado assim que a assinatura for aprovada.
+          </Text>
+        </View>
+        {closeLink}
+
+        <CardSheet
+          visible={cardFormOpen}
+          onClose={payment.closeCardForm}
+          charging={charging}
+          chargingText="Processando a assinatura… não feche o app."
+          title="Cartão de crédito"
+          subtitle={`Plano ${label} · cobrado todo mês`}
+          amount={session.amount}
+          notice={cardNotice}
+          formKey={`recurring:${session.startedAt}`}
+          email={session.payerEmail}
+          creditOnly
+          onSubmit={payment.subscribeCard}
+          fallback={(
+            <View style={p.sheetOther}>
+              <TouchableOpacity style={p.linkBtn} onPress={leaveForm} disabled={busyAny} activeOpacity={0.7} accessibilityRole="button">
+                <Text style={p.linkTxt}>Pagar na página do Mercado Pago</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        />
+      </View>
+    );
+  }
+
+  // ── Card on Mercado Pago's page (Checkout Pro) ──
   // A payment still settling can be approved after the link's hour is up.
-  const linkExpired = !recurring && (intentClosed || (expiredByTime && !processing));
+  const linkExpired = intentClosed || (expiredByTime && !processing);
   const opening = busy === 'open';
   return (
     <View style={p.panel}>
-      {header(
-        recurring ? `Assinatura ${label}` : 'Pagar com cartão',
-        recurring
-          ? 'Cartão de crédito, cobrado todo mês pelo Mercado Pago. Cancele quando quiser.'
-          : `${planLine}. Cartão ou saldo do Mercado Pago, numa página segura.`,
-      )}
+      {header('Pagar com cartão', `${planLine}. Cartão ou saldo do Mercado Pago, numa página segura.`)}
 
       {session.pixUnavailable && (
         <View style={p.expiredBox}>
@@ -1278,7 +1478,7 @@ export const PlanPaymentPanel: React.FC<PlanPaymentPanelProps> = ({
         </View>
       )}
 
-      {!recurring && processing && !intentClosed ? (
+      {processing && !intentClosed ? (
         <>
           <View style={p.expiredBox}>
             <Clock size={16} color="#92400E" />
@@ -1289,7 +1489,7 @@ export const PlanPaymentPanel: React.FC<PlanPaymentPanelProps> = ({
           <Waiting text="Aguardando a aprovação do Mercado Pago…" />
           {verify}
         </>
-      ) : !recurring && declined && !linkExpired ? (
+      ) : declined && !linkExpired ? (
         <>
           <View style={p.expiredBox}>
             <AlertCircle size={16} color="#92400E" />
@@ -1336,25 +1536,15 @@ export const PlanPaymentPanel: React.FC<PlanPaymentPanelProps> = ({
             <Text style={p.primaryTxt}>
               {opening
                 ? 'Pagamento aberto no Mercado Pago…'
-                : returned
-                  ? 'Abrir o pagamento de novo'
-                  : recurring ? 'Assinar com cartão' : 'Pagar com cartão'}
+                : returned ? 'Abrir o pagamento de novo' : 'Pagar com cartão'}
             </Text>
           </TouchableOpacity>
           {returned && <Waiting text="Conferindo o pagamento com o Mercado Pago…" />}
           {returned && verify}
-          {recurringStalled && (
-            <View style={p.expiredBox}>
-              <AlertCircle size={16} color="#92400E" />
-              <Text style={p.expiredTxt}>
-                O Mercado Pago ainda não confirmou a assinatura. Se o cartão foi recusado, toque em "Abrir o pagamento de novo" e use outro cartão, ou volte aos planos e escolha outra forma de pagamento.
-              </Text>
-            </View>
-          )}
         </>
       )}
 
-      {pass && !session.pixUnavailable && (
+      {!session.pixUnavailable && (
         <>
           <Or />
           <TouchableOpacity
@@ -1369,13 +1559,7 @@ export const PlanPaymentPanel: React.FC<PlanPaymentPanelProps> = ({
         </>
       )}
 
-      {pass ? passNote : (
-        <View style={p.note}>
-          <Text style={p.noteTxt}>
-            Os dados do cartão ficam só com o Mercado Pago. O plano é liberado assim que a assinatura for aprovada.
-          </Text>
-        </View>
-      )}
+      {passNote}
       {closeLink}
     </View>
   );

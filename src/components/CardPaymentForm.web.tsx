@@ -10,7 +10,7 @@ export type { CardFormReply, CardPaymentFormProps } from './CardPaymentForm';
 // other web build offers the other ways to pay.
 const simulated = () => typeof window !== 'undefined' && !!(window as unknown as { __demo?: unknown }).__demo;
 
-export const CardPaymentForm: React.FC<CardPaymentFormProps> = ({ amount, email, onSubmit, fallback }) => {
+export const CardPaymentForm: React.FC<CardPaymentFormProps> = ({ amount, email, onSubmit, fallback, creditOnly = false }) => {
   const [number, setNumber] = useState('5031 4332 1540 6351');
   const [mail, setMail] = useState(email || '');
   const [sending, setSending] = useState(false);
@@ -67,7 +67,11 @@ export const CardPaymentForm: React.FC<CardPaymentFormProps> = ({ amount, email,
       <TouchableOpacity style={w.pay} onPress={() => { void submit(); }} disabled={sending} accessibilityRole="button">
         {sending ? <ActivityIndicator color="#fff" /> : <Text style={w.payTxt}>Pagar R$ {amount.toFixed(2).replace('.', ',')}</Text>}
       </TouchableOpacity>
-      <Text style={w.hint}>Final 0002 recusa, final 0003 fica em análise (só na simulação).</Text>
+      <Text style={w.hint}>
+        {creditOnly
+          ? 'Só cartão de crédito: a assinatura mensal não aceita débito.'
+          : 'Final 0002 recusa, final 0003 fica em análise (só na simulação).'}
+      </Text>
     </View>
   );
 };

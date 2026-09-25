@@ -80,6 +80,12 @@ interface PlanDef {
   accentColor: string;
 }
 
+// One tab per plan on offer, as on PlanSelectionScreen.
+const TAB_ORDER: PlanType[] = ['commission', 'daily', 'weekly', 'monthly'];
+const TAB_LABELS: Record<PlanType, string> = {
+  commission: 'Por corrida', daily: 'Diário', weekly: 'Semanal', monthly: 'Mensal',
+};
+
 function buildPlans(settings: AppSettings | null, segment: PlanSegment, sub: SubscriptionRow | null): PlanDef[] {
   const pct = segment === 'moto'
     ? (settings?.moto_commission_pct ?? settings?.commission_pct ?? 15)
@@ -173,6 +179,8 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({
   const connectingRef = useRef(false);
   // A plan being started here, or the switch to Por Corrida.
   const [startingPlan, setStartingPlan] = useState<PlanType | null>(null);
+  // The plan tab the driver picked; until then it follows the plan state.
+  const [tab, setTab] = useState<PlanType | null>(null);
   const busyRef = useRef(false);
   const scrollRef = useRef<ScrollView>(null);
   // A plan chosen without a payment on screen (Por Corrida, or one already paid).
@@ -369,6 +377,11 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({
   useEffect(() => {
     if (sessionKey) scrollRef.current?.scrollTo({ y: 0, animated: true });
   }, [sessionKey]);
+  // Back on the plans, the tab is the plan of the last payment opened.
+  const sessionPlan = session?.plan ?? null;
+  useEffect(() => {
+    if (sessionPlan) setTab(sessionPlan);
+  }, [sessionPlan]);
 
   const closePanel = useCallback(() => {
     paymentRef.current.close();
@@ -468,6 +481,19 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({
   if (sub?.status === 'pending' && sub.plan && sub.plan !== 'commission') awaitingPlans.add(sub.plan);
   // A card payment under review: the plan is freed when it clears.
   const reviewPlan = resumablePass?.processing ? resumablePass.plan : null;
+
+  const cardStatus = (id: PlanType): 'awaiting' | 'current' | 'expired' | null => {
+    const isCurrentCard = id === currentPlan;
+    return awaitingPlans.has(id) && !(isCurrentCard && planIsCurrent) ? 'awaiting'
+      : isCurrentCard ? (planIsCurrent ? 'current' : 'expired')
+        : null;
+  };
+  // An unpaid payment's tab opens first, then the driver's own plan.
+  const tabs = TAB_ORDER.filter((id) => plans.some((plan) => plan.id === id));
+  const defaultTab = tabs.find((id) => cardStatus(id) === 'awaiting')
+    ?? (currentPlan && tabs.includes(currentPlan) ? currentPlan : tabs[0] ?? null);
+  const activeTab = tab && tabs.includes(tab) ? tab : defaultTab;
+  const tabPlans = plans.filter((plan) => plan.id === activeTab);
 
   // ── Plan change ──────────────────────────────────────────────────────────────
   const startPlan = async (plan: PaidPlan, extend = false) => {
@@ -852,12 +878,38 @@ const DriverSubscriptionScreen: React.FC<DriverSubscriptionScreenProps> = ({
               {lapsedPlan ? 'Ou escolha outro plano' : currentPlan ? 'Trocar plano' : 'Escolher plano'}
             </Text>
 
-            {plans.map((plan) => {
-              const isCurrentCard = plan.id === currentPlan;
-              const status: 'awaiting' | 'current' | 'expired' | null =
-                awaitingPlans.has(plan.id) && !(isCurrentCard && planIsCurrent) ? 'awaiting'
-                  : isCurrentCard ? (planIsCurrent ? 'current' : 'expired')
-                    : null;
+            {/* Plan tabs: picking one only shows its card */}
+            {tabs.length > 1 && (
+              <View style={s.tabs} accessibilityRole="tablist">
+                {tabs.map((id) => {
+                  const active = id === activeTab;
+                  return (
+                    <TouchableOpacity
+                      key={id}
+                      style={[s.tab, active && s.tabActive]}
+                      onPress={() => setTab(id)}
+                      disabled={busyAny}
+                      activeOpacity={0.8}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected: active, disabled: busyAny }}
+                    >
+                      <Text
+                        style={[s.tabTxt, active && s.tabTxtActive]}
+                        numberOfLines={1}
+                        adjustsFontSizeToFit
+                        minimumFontScale={0.8}
+                      >
+                        {TAB_LABELS[id]}
+                      </Text>
+                      {cardStatus(id) === 'awaiting' && <View style={s.tabDot} />}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+
+            {tabPlans.map((plan) => {
+              const status = cardStatus(plan.id);
               const isHighlighted = status === 'current' || status === 'awaiting';
               const pass = isPassPlan(plan.id) ? plan.id : null;
               let meta: string | null = null;
@@ -1068,6 +1120,24 @@ const s = StyleSheet.create({
   priceUnit: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: '#999' },
   priceStrike: { fontSize: 11, fontFamily: 'Poppins_400Regular', color: '#BFBFBF', textDecorationLine: 'line-through', marginTop: 2 },
   planMeta: { fontSize: 11, fontFamily: 'Poppins_600SemiBold', color: '#6B7280', marginTop: 6 },
+
+  // Plan tabs (same style as PlanSelectionScreen)
+  tabs: {
+    flexDirection: 'row', backgroundColor: '#EEF0F3', borderRadius: 12,
+    padding: 4, marginBottom: 16, gap: 2,
+  },
+  tab: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    borderRadius: 9, paddingVertical: 9, paddingHorizontal: 2, gap: 3,
+  },
+  tabActive: {
+    backgroundColor: '#ffffff',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.08, shadowRadius: 3,
+    elevation: 2,
+  },
+  tabTxt: { fontSize: 12, fontFamily: 'Poppins_600SemiBold', color: '#6B7280' },
+  tabTxtActive: { color: '#1A1A1A' },
+  tabDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#F59E0B' },
 
   // Without a plan
   blockedBox: { marginTop: 4, marginBottom: 8 },

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import {
   View,
   Text,
@@ -26,6 +26,15 @@ import {
   X,
   DollarSign,
   Search,
+  ArrowUp,
+  ArrowUpLeft,
+  ArrowUpRight,
+  CornerUpLeft,
+  CornerUpRight,
+  Undo2,
+  RotateCcw,
+  Flag,
+  Navigation2,
 } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { Avatar, Button, Card } from '../../components/ui';
@@ -33,7 +42,19 @@ import { Colors, Radius, Typography } from '../../constants';
 import RouteMap, { useRideMapPadding } from '../../components/RouteMap';
 import type { LngLat } from '../../components/RouteMap';
 import type { RideStatusDb } from '../../types/db';
-import { getRoute, isCoordinateWithinServiceArea, placeLabel, resolvePlace, searchPlaces, type PlaceSuggestion } from '../../services/geo';
+import {
+  getNavigationRoute,
+  isCoordinateWithinServiceArea,
+  locateOnRoute,
+  nextManeuver,
+  placeLabel,
+  prepareNavigation,
+  resolvePlace,
+  searchPlaces,
+  type NavigationLine,
+  type PlaceSuggestion,
+  type RouteStep,
+} from '../../services/geo';
 import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import ChatModal from '../../components/ChatModal';
@@ -60,22 +81,23 @@ function haversineM([lng1, lat1]: LngLat, [lng2, lat2]: LngLat): number {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function polyLen(coords: LngLat[]): number {
-  let d = 0;
-  for (let i = 1; i < coords.length; i++) d += haversineM(coords[i - 1], coords[i]);
-  return d;
+/** "80 m", "1,2 km" */
+function fmtDistance(m: number): string {
+  if (m < 1000) return `${Math.max(10, Math.round(m / 10) * 10)} m`;
+  return `${(m / 1000).toFixed(1).replace('.', ',')} km`;
 }
 
-/** Slice route from the point closest to `pos` forward */
-function trimPolyline(coords: LngLat[], pos: LngLat): LngLat[] {
-  if (coords.length < 2) return coords;
-  let minD = Infinity, best = 0;
-  for (let i = 0; i < coords.length; i++) {
-    const d = haversineM(coords[i], pos);
-    if (d < minD) { minD = d; best = i; }
-  }
-  // keep one point behind so the line doesn't visually jump forward
-  return coords.slice(Math.max(0, best - 1));
+/** Arrow drawn in the turn-by-turn banner for a Mapbox maneuver. */
+function maneuverIcon(step: RouteStep) {
+  const m = step.modifier ?? '';
+  if (step.type === 'arrive') return Flag;
+  if (step.type.includes('roundabout') || step.type.includes('rotary')) return RotateCcw;
+  if (m === 'uturn') return Undo2;
+  if (m === 'slight left') return ArrowUpLeft;
+  if (m === 'slight right') return ArrowUpRight;
+  if (m.includes('left')) return CornerUpLeft;
+  if (m.includes('right')) return CornerUpRight;
+  return ArrowUp;
 }
 
 const fmtMoney = (v?: number | null) =>
@@ -86,6 +108,21 @@ const fmtMoney = (v?: number | null) =>
 type RouteGeometry = { type: 'LineString'; coordinates: LngLat[] };
 type DriverRideStatus = 'to_passenger' | 'passenger_pickup' | 'in_ride' | 'completed';
 
+/** Street route being followed, with its maneuvers. */
+type NavRoute = {
+  nav: NavigationLine;
+  /** Metres of this leg already driven when the route was fetched. */
+  baseM: number;
+};
+
+// A newer route replaces the current one mid-leg (every 80 m to the pickup, a
+// reroute, a new destination). Carry what was already driven so the progress
+// bar keeps going instead of starting over.
+function followOn(prev: NavRoute | null, nav: NavigationLine, from: LngLat): NavRoute {
+  const driven = prev ? prev.baseM + (locateOnRoute(prev.nav, from)?.alongM ?? 0) : 0;
+  return { nav, baseM: driven };
+}
+
 // A ride reopened after an app restart resumes at the step saved in the database.
 const STEP_BY_RIDE_STATUS: Partial<Record<RideStatusDb, DriverRideStatus>> = {
   driver_arrived: 'passenger_pickup',
@@ -94,6 +131,25 @@ const STEP_BY_RIDE_STATUS: Partial<Record<RideStatusDb, DriverRideStatus>> = {
 const STEP_ORDER: DriverRideStatus[] = ['to_passenger', 'passenger_pickup', 'in_ride', 'completed'];
 
 const APPROACH_RETRY_MS = 8_000;
+
+// A tap meant for Aceitar, or for this button before its label changed, must
+// not count for the next step: the button ignores presses for a moment after
+// it appears and after every step.
+const ARM_DELAY_MS = 1_500;
+// Past these distances the step is probably a mistake: ask before saving it.
+const ARRIVE_CONFIRM_M = 250;
+const FINISH_CONFIRM_M = 500;
+
+// Off the route by more than this on 2 fixes in a row asks for a new one, at
+// most every 15 s. Fixes less precise than 50 m don't count either way.
+const OFF_ROUTE_M = 60;
+const OFF_ROUTE_FIXES = 2;
+const REROUTE_MIN_MS = 15_000;
+const OFF_ROUTE_MAX_ACCURACY_M = 50;
+
+// Turn-by-turn banner, under the status pill and left of the SOS button.
+const NAV_BANNER_TOP = 72;
+const NAV_BANNER_HEIGHT = 68;
 
 interface DriverActiveRideProps {
   onCompleted: () => void;
@@ -150,14 +206,15 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   onDestinationChanged,
 }) => {
   const insets = useSafeAreaInsets();
-  // The status pill ends 66 px below the status bar; the SOS button under it
-  // takes 64 px of the right edge (16 px margin + 48 px button).
-  const { mapPadding, onSheetLayout } = useRideMapPadding(66, 64);
   const [status, setStatus] = useState<DriverRideStatus>(
     () => (rideStatus && STEP_BY_RIDE_STATUS[rideStatus]) || 'to_passenger',
   );
-  const [tripRoute, setTripRoute] = useState<RouteGeometry | null>(null);
-  const [approachRoute, setApproachRoute] = useState<RouteGeometry | null>(null);
+  const [tripRoute, setTripRoute] = useState<NavRoute | null>(null);
+  const [approachRoute, setApproachRoute] = useState<NavRoute | null>(null);
+  // Bumped when the driver leaves the trip route, to fetch a new one.
+  const [tripReroute, setTripReroute] = useState(0);
+  // False while the main button ignores presses (ARM_DELAY_MS).
+  const [armed, setArmed] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [counterpart, setCounterpart] = useState<RideCounterpart | null>(null);
   const [unread, setUnread] = useState(0);
@@ -190,10 +247,22 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   const chatOpenRef = useRef(false);
   chatOpenRef.current = chatOpen;
   const meRef = useRef<string | null>(null);
-  const totalDistRef = useRef(0);          // full trip distance (meters)
   const approachRef = useRef<{ req: number; from: LngLat | null; retryAt: number; timer?: ReturnType<typeof setTimeout> }>(
     { req: 0, from: null, retryAt: 0 },
   );
+  // Last route of each leg, kept while a new one loads so its progress carries on.
+  const approachLegRef = useRef<NavRoute | null>(null);
+  const tripLegRef = useRef<NavRoute | null>(null);
+  // Where the trip route in use was requested from, and for which destination.
+  const tripFromRef = useRef<{ from: LngLat | null; dest: string }>({ from: null, dest: '' });
+  const offRouteRef = useRef({ fixes: 0, at: 0 });
+  const driverPosRef = useRef<LngLat | null>(null);
+  const driverAccuracyRef = useRef<number | null>(null);
+  // Ref guards: state read by a press can be one render old.
+  const busyRef = useRef(false);
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  const armedAtRef = useRef(0);
   const finishedRef = useRef(false);
   const finishTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const onCompletedRef = useRef(onCompleted);
@@ -211,6 +280,15 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 
   useEffect(() => () => clearTimeout(finishTimerRef.current), []);
 
+  // Layout effect: set before the new label is on screen, so no press can get
+  // between the step change and the delay.
+  useLayoutEffect(() => {
+    armedAtRef.current = Date.now() + ARM_DELAY_MS;
+    setArmed(false);
+    const timer = setTimeout(() => setArmed(true), ARM_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [status]);
+
   // The navigator follows the saved ride (realtime and polling). Move forward
   // to its step, never back, so a lost answer can't leave the driver stuck.
   useEffect(() => {
@@ -227,22 +305,30 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     setCurrentDestinationAddress(destinationAddress);
   }, [destination?.[0], destination?.[1], destinationAddress]);
 
-  // ── Fetch trip route (pickup → destination) only after pickup ────────────────
+  // ── Fetch trip route (car → destination) only after pickup ───────────────────
   useEffect(() => {
     // Don't show or request the passenger's trip route until they are aboard.
     // Before pickup the driver's only route is their live position → pickup.
     if (status !== 'in_ride' || !origin || !currentDestination) return;
     let active = true;
     let retry: ReturnType<typeof setTimeout> | undefined;
-    // A route to the previous destination would contradict the moved flag.
-    setTripRoute(null);
+    const dest = `${currentDestination[0]},${currentDestination[1]}`;
+    // A route to the previous destination would contradict the moved flag. A
+    // reroute keeps the current line until the new one arrives.
+    if (tripFromRef.current.dest !== dest) setTripRoute(null);
     const load = (attempt: number) => {
-      getRoute(origin, currentDestination)
+      // From the car when its position is known, so the first turn is the
+      // driver's next one; from the pickup otherwise.
+      const from = driverPosRef.current ?? origin;
+      getNavigationRoute(from, currentDestination)
         .then((r) => {
           if (!active) return;
           if (!r) throw new Error('route unavailable');
-          setTripRoute(r.geometry as RouteGeometry);
-          totalDistRef.current = polyLen(r.geometry.coordinates as LngLat[]);
+          const next = followOn(tripLegRef.current, prepareNavigation(r.geometry.coordinates, r.steps), from);
+          tripLegRef.current = next;
+          tripFromRef.current = { from, dest };
+          offRouteRef.current.fixes = 0;
+          setTripRoute(next);
         })
         .catch(() => {
           // Offline or timed out: try again after 3 s, 6 s, 12 s… up to 30 s.
@@ -251,7 +337,28 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     };
     load(0);
     return () => { active = false; clearTimeout(retry); };
-  }, [status, origin?.[0], origin?.[1], currentDestination?.[0], currentDestination?.[1]]);
+  }, [status, origin?.[0], origin?.[1], currentDestination?.[0], currentDestination?.[1], tripReroute]);
+
+  // ── Off the trip route: new route from where the car is ─────────────────────
+  // The route to the pickup already follows the car (a new one every 80 m).
+  useEffect(() => {
+    if (status !== 'in_ride' || !driverPos || !tripRoute) return;
+    const accuracy = driverAccuracyRef.current;
+    if (accuracy != null && accuracy > OFF_ROUTE_MAX_ACCURACY_M) return;
+    const s = offRouteRef.current;
+    const pos = locateOnRoute(tripRoute.nav, driverPos);
+    if (!pos || pos.offM <= OFF_ROUTE_M) { s.fixes = 0; return; }
+    s.fixes += 1;
+    if (s.fixes < OFF_ROUTE_FIXES || Date.now() - s.at < REROUTE_MIN_MS) return;
+    // A car parked away from the street would get the same route again and
+    // again: only one that moved since the last request gets a new one.
+    const from = tripFromRef.current.from;
+    if (from && haversineM(from, driverPos) < OFF_ROUTE_M) return;
+    s.fixes = 0;
+    s.at = Date.now();
+    setTripReroute((n) => n + 1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driverPos]);
 
   // ── Fetch approach route (driver → pickup) when heading to passenger ─────────
   // Re-fetch only when driver moves > 80m to avoid hammering the API. A newer
@@ -260,7 +367,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     if (status !== 'to_passenger' || !driverPos || !origin) return;
     const s = approachRef.current;
     if (s.from ? haversineM(s.from, driverPos) < 80 : Date.now() < s.retryAt) return;
-    s.from = driverPos;
+    const from = driverPos;
+    s.from = from;
     const req = ++s.req;
     const failed = () => {
       if (req !== approachRef.current.req) return;
@@ -272,11 +380,13 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         setApproachRetry((n) => n + 1);
       }, APPROACH_RETRY_MS);
     };
-    getRoute(driverPos, origin)
+    getNavigationRoute(from, origin)
       .then((r) => {
         if (req !== approachRef.current.req) return;
-        if (r) setApproachRoute(r.geometry as RouteGeometry);
-        else failed();
+        if (!r) return failed();
+        const next = followOn(approachLegRef.current, prepareNavigation(r.geometry.coordinates, r.steps), from);
+        approachLegRef.current = next;
+        setApproachRoute(next);
       })
       .catch(failed);
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -297,7 +407,10 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       const next = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, distanceInterval: 0, timeInterval: 3000 },
         (pos) => {
-          setDriverPos([pos.coords.longitude, pos.coords.latitude]);
+          const here: LngLat = [pos.coords.longitude, pos.coords.latitude];
+          driverPosRef.current = here;
+          driverAccuracyRef.current = pos.coords.accuracy;
+          setDriverPos(here);
           setDriverSpeedMs(Math.max(0, pos.coords.speed ?? 0));
         },
       );
@@ -345,44 +458,43 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     }, 'unread');
   }, [rideId]);
 
-  // ── Computed: trimmed route + progress + ETA ─────────────────────────────────
-  const { activeRoute, approachLine, progress, etaText } = useMemo(() => {
-    // --- approaching passenger: only the street route to the pickup ---
-    if (status === 'to_passenger') {
-      const base = approachRoute;
-      if (!base || !driverPos) return { activeRoute: null, approachLine: base, progress: 0, etaText: null };
-      const trimmed: RouteGeometry = { ...base, coordinates: trimPolyline(base.coordinates, driverPos) };
-      const remaining = polyLen(trimmed.coordinates);
-      const total = polyLen(base.coordinates) || 1;
-      const spd = driverSpeedMs > 0.5 ? driverSpeedMs : 8.33; // fallback 30 km/h
-      const eta = Math.max(1, Math.ceil(remaining / spd / 60));
-      return {
-        activeRoute: null,
-        approachLine: trimmed,
-        progress: Math.min(1, (total - remaining) / total),
-        etaText: `~${eta} min para o passageiro`,
-      };
-    }
+  // ── Computed: trimmed route + progress + ETA + next maneuver ─────────────────
+  const { activeRoute, approachLine, progress, etaText, maneuver } = useMemo(() => {
+    // To the pickup: the street route from the car. In ride: the trip route.
+    const leg = status === 'to_passenger' ? approachRoute : status === 'in_ride' ? tripRoute : null;
+    const show = (line: RouteGeometry | null) => (status === 'in_ride'
+      ? { activeRoute: line, approachLine: null }
+      : { activeRoute: null, approachLine: line });
+    if (!leg) return { ...show(null), progress: 0, etaText: null, maneuver: null };
+    const full: RouteGeometry = { type: 'LineString', coordinates: leg.nav.coordinates };
+    const pos = driverPos ? locateOnRoute(leg.nav, driverPos) : null;
+    if (!pos) return { ...show(full), progress: 0, etaText: null, maneuver: null };
 
-    // --- in ride: trim trip route as driver moves ---
-    if (status === 'in_ride') {
-      const base = tripRoute;
-      if (!base || !driverPos) return { activeRoute: base, approachLine: null, progress: 0, etaText: null };
-      const trimmed: RouteGeometry = { ...base, coordinates: trimPolyline(base.coordinates, driverPos) };
-      const remaining = polyLen(trimmed.coordinates);
-      const total = totalDistRef.current || polyLen(base.coordinates) || 1;
-      const spd = driverSpeedMs > 0.5 ? driverSpeedMs : 8.33;
-      const eta = Math.max(1, Math.ceil(remaining / spd / 60));
-      return {
-        activeRoute: trimmed,
-        approachLine: null,
-        progress: Math.min(1, (total - remaining) / total),
-        etaText: `~${eta} min para o destino`,
-      };
-    }
-
-    return { activeRoute: status === 'in_ride' ? tripRoute : null, approachLine: null, progress: 0, etaText: null };
+    // The line starts where the car is on it; the part behind is gone.
+    const trimmed: RouteGeometry = {
+      type: 'LineString',
+      coordinates: [pos.point, ...leg.nav.coordinates.slice(pos.index + 1)],
+    };
+    const remaining = Math.max(0, leg.nav.lengthM - pos.alongM);
+    // Everything driven on this leg over everything the leg takes, so a newer
+    // route (every 80 m, reroute, new destination) doesn't reset the bar.
+    const total = leg.baseM + leg.nav.lengthM || 1;
+    const spd = driverSpeedMs > 0.5 ? driverSpeedMs : 8.33; // fallback 30 km/h
+    const eta = Math.max(1, Math.ceil(remaining / spd / 60));
+    return {
+      ...show(trimmed),
+      progress: Math.min(1, Math.max(0, (leg.baseM + pos.alongM) / total)),
+      etaText: `~${eta} min ${status === 'in_ride' ? 'para o destino' : 'para o passageiro'}`,
+      maneuver: nextManeuver(leg.nav, pos.alongM),
+    };
   }, [status, tripRoute, approachRoute, driverPos, driverSpeedMs]);
+
+  // The banner needs a route with maneuvers and the car's place on it.
+  const showNav = !!maneuver && (status === 'to_passenger' || status === 'in_ride');
+  // The status pill ends 66 px below the status bar, the turn banner under it
+  // at NAV_BANNER_TOP + NAV_BANNER_HEIGHT; the SOS button takes 64 px of the
+  // right edge (16 px margin + 48 px button).
+  const { mapPadding, onSheetLayout } = useRideMapPadding(showNav ? NAV_BANNER_TOP + NAV_BANNER_HEIGHT : 66, 64);
 
   // Until the street route arrives, a dashed straight line links the car to the pickup.
   const pickupLine: RouteGeometry | null = status === 'to_passenger' && !approachLine && driverPos && origin
@@ -396,17 +508,26 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     else Alert.alert('Indisponível', 'Telefone do passageiro não disponível.');
   };
 
-  const goNext = async () => {
-    if (busy) return;
+  // Forward only: the saved ride may have moved on while the call was out.
+  const moveTo = (step: DriverRideStatus) => {
+    // Covers the moment between the answer and the new label on screen.
+    armedAtRef.current = Date.now() + ARM_DELAY_MS;
+    setStatus((cur) => (STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(cur) ? step : cur));
+  };
+
+  // Saves the step after `from`. A press made for an older step does nothing.
+  const advance = async (from: DriverRideStatus) => {
+    if (busyRef.current || statusRef.current !== from) return;
+    busyRef.current = true;
     setBusy(true);
     try {
-      if (status === 'to_passenger') {
+      if (from === 'to_passenger') {
         if (rideId) await updateRideStatus(rideId, 'driver_arrived');
-        setStatus('passenger_pickup');
-      } else if (status === 'passenger_pickup') {
+        moveTo('passenger_pickup');
+      } else if (from === 'passenger_pickup') {
         if (rideId) await updateRideStatus(rideId, 'in_progress');
-        setStatus('in_ride');
-      } else if (status === 'in_ride') {
+        moveTo('in_ride');
+      } else if (from === 'in_ride') {
         const done = rideId ? await updateRideStatus(rideId, 'completed') : null;
         finish(done?.price ?? price ?? null);
       }
@@ -416,11 +537,86 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       const saved = rideId ? await getRide(rideId).catch(() => null) : null;
       const step = saved && (saved.status === 'completed' ? 'completed' : STEP_BY_RIDE_STATUS[saved.status]);
       if (step === 'completed') finish(saved?.price ?? price ?? null);
-      else if (step && STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(status)) setStatus(step);
+      else if (step && STEP_ORDER.indexOf(step) > STEP_ORDER.indexOf(from)) moveTo(step);
       else Alert.alert('Erro ao atualizar corrida', friendlyError(e?.message));
     } finally {
+      busyRef.current = false;
       setBusy(false);
     }
+  };
+
+  // Far from where the step happens: probably a slip, ask first.
+  const confirmStep = (from: DriverRideStatus, title: string, message: string, confirmLabel: string) => {
+    // A double tap would open the question twice before the first one shows.
+    armedAtRef.current = Math.max(armedAtRef.current, Date.now() + 1_000);
+    Alert.alert(title, message, [
+      { text: 'Cancelar', style: 'cancel' },
+      { text: confirmLabel, onPress: () => { void advance(from); } },
+    ]);
+  };
+
+  const goNext = () => {
+    if (busyRef.current || Date.now() < armedAtRef.current) return;
+    const from = statusRef.current;
+    // Without a GPS fix there's nothing to compare: the driver decides.
+    const here = driverPosRef.current;
+    if (here && from === 'to_passenger' && origin) {
+      const d = haversineM(here, origin);
+      if (d > ARRIVE_CONFIRM_M) {
+        confirmStep(from, 'Confirmar chegada', `Você está a ${fmtDistance(d)} do local de embarque. Já chegou ao passageiro?`, 'Confirmar chegada');
+        return;
+      }
+    }
+    if (here && from === 'passenger_pickup' && origin) {
+      const d = haversineM(here, origin);
+      if (d > ARRIVE_CONFIRM_M) {
+        confirmStep(from, 'Iniciar corrida', `Você está a ${fmtDistance(d)} do local de embarque. O passageiro já está no carro?`, 'Iniciar corrida');
+        return;
+      }
+    }
+    if (here && from === 'in_ride' && currentDestination) {
+      const d = haversineM(here, currentDestination);
+      if (d > FINISH_CONFIRM_M) {
+        confirmStep(from, 'Finalizar corrida', `Você está a ${fmtDistance(d)} do destino. Finalizar a corrida mesmo assim?`, 'Finalizar corrida');
+        return;
+      }
+    }
+    void advance(from);
+  };
+
+  // ── External navigation app ──────────────────────────────────────────────────
+  // No canOpenURL (it needs the schemes declared in the app config): try each
+  // link and fall to the next when the app isn't installed.
+  const openNavigationApp = () => {
+    const target = status === 'in_ride' ? currentDestination : origin;
+    if (!target) return;
+    const ll = `${target[1]},${target[0]}`;
+    const web = `https://www.google.com/maps/dir/?api=1&destination=${ll}&travelmode=driving`;
+    const open = async (urls: string[]) => {
+      for (const url of urls) {
+        try {
+          await Linking.openURL(url);
+          return;
+        } catch { /* not installed: next link */ }
+      }
+      Alert.alert('Não foi possível abrir', 'Nenhum app de navegação respondeu. Siga a rota pelo mapa.');
+    };
+    const google = Platform.OS === 'ios'
+      ? [`comgooglemaps://?daddr=${ll}&directionsmode=driving`, web]
+      : [`google.navigation:q=${ll}&mode=d`, web];
+    // Android shows at most 3 buttons: Apple Maps only exists on iOS anyway.
+    Alert.alert(
+      status === 'in_ride' ? 'Navegar até o destino' : 'Navegar até o embarque',
+      'Volte ao app sempre que puder: com ele aberto, o passageiro vê sua posição atualizada.',
+      [
+        { text: 'Waze', onPress: () => { void open([`https://waze.com/ul?ll=${ll}&navigate=yes`]); } },
+        { text: 'Google Maps', onPress: () => { void open(google); } },
+        ...(Platform.OS === 'ios'
+          ? [{ text: 'Apple Maps', onPress: () => { void open([`http://maps.apple.com/?daddr=${ll}&dirflg=d`]); } }]
+          : []),
+        { text: 'Cancelar', style: 'cancel' as const },
+      ],
+    );
   };
 
   // ── Cancel ───────────────────────────────────────────────────────────────────
@@ -481,6 +677,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   const canConfirm = !!cancelReason && cancelDescription.trim().length > 0;
   const progressPct = Math.round(progress * 100);
   const canChangeRoute = status === 'passenger_pickup' || status === 'in_ride';
+  const canNavigate = (status === 'to_passenger' && !!origin) || (status === 'in_ride' && !!currentDestination);
+  const ManeuverIcon = maneuver ? maneuverIcon(maneuver.step) : ArrowUp;
 
   const openRouteEditor = () => {
     setRouteQuery('');
@@ -558,6 +756,23 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         <AlertTriangle size={18} color={Colors.danger} />
       </TouchableOpacity>
 
+      {/* Next turn, measured along the route from the car */}
+      {showNav && maneuver && (
+        <View style={[styles.navBanner, { top: insets.top + NAV_BANNER_TOP }]} pointerEvents="none">
+          <View style={styles.navIcon}>
+            <ManeuverIcon size={22} color={Colors.textInverse} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.navDistance} numberOfLines={1}>
+              {maneuver.distanceM < 20 ? 'Agora' : `Em ${fmtDistance(maneuver.distanceM)}`}
+            </Text>
+            <Text style={styles.navInstruction} numberOfLines={2}>
+              {maneuver.step.instruction || (maneuver.step.name ? `Siga pela ${maneuver.step.name}` : 'Siga pela rota')}
+            </Text>
+          </View>
+        </View>
+      )}
+
       {/* Bottom sheet */}
       <View style={[styles.bottomSheet, { paddingBottom: insets.bottom + 16 }]} onLayout={onSheetLayout}>
         <View style={styles.handle} />
@@ -611,11 +826,21 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
               Destino: {currentDestinationAddress ?? (currentDestination ? `${currentDestination[1].toFixed(4)}, ${currentDestination[0].toFixed(4)}` : '—')}
             </Text>
           </View>
-          {canChangeRoute && (
-            <TouchableOpacity style={styles.changeRouteBtn} onPress={openRouteEditor} activeOpacity={0.8}>
-              <Navigation size={15} color={Colors.primary} />
-              <Text style={styles.changeRouteTxt}>Alterar a rota</Text>
-            </TouchableOpacity>
+          {(canChangeRoute || canNavigate) && (
+            <View style={styles.routeActions}>
+              {canNavigate && (
+                <TouchableOpacity style={styles.navigateBtn} onPress={openNavigationApp} activeOpacity={0.8}>
+                  <Navigation2 size={15} color={Colors.info} />
+                  <Text style={styles.navigateTxt}>Navegar</Text>
+                </TouchableOpacity>
+              )}
+              {canChangeRoute && (
+                <TouchableOpacity style={styles.changeRouteBtn} onPress={openRouteEditor} activeOpacity={0.8}>
+                  <Navigation size={15} color={Colors.primary} />
+                  <Text style={styles.changeRouteTxt}>Alterar a rota</Text>
+                </TouchableOpacity>
+              )}
+            </View>
           )}
           <RouteChangeLog rideId={rideId ?? null} refreshKey={routeChangeKey} />
           {/* Fare and how the driver gets paid, during the whole ride */}
@@ -657,7 +882,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
                 title={config.nextLabel}
                 onPress={goNext}
                 loading={busy}
-                disabled={busy}
+                disabled={busy || !armed}
               />
             </View>
           </View>
@@ -849,6 +1074,20 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.danger + '22', borderWidth: 1.5, borderColor: Colors.danger + '66',
     alignItems: 'center', justifyContent: 'center',
   },
+  // Right: 16 px margin + 48 px SOS button + 8 px gap.
+  navBanner: {
+    position: 'absolute', left: 16, right: 72, height: NAV_BANNER_HEIGHT,
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    backgroundColor: Colors.dark + 'F2', paddingHorizontal: 12, borderRadius: Radius.lg,
+    borderWidth: 1, borderColor: Colors.primary + '44',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.25, shadowRadius: 10, elevation: 8,
+  },
+  navIcon: {
+    width: 40, height: 40, borderRadius: 20, backgroundColor: Colors.primary,
+    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  },
+  navDistance: { fontSize: 16, lineHeight: 20, fontFamily: 'Poppins_700Bold', color: '#fff' },
+  navInstruction: { fontSize: 12, lineHeight: 16, fontFamily: 'Poppins_400Regular', color: '#fff' },
   bottomSheet: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
     backgroundColor: Colors.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24,
@@ -883,12 +1122,19 @@ const styles = StyleSheet.create({
   routeDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
   routePointAddr: { ...Typography.bodyMedium, color: Colors.textPrimary, flex: 1 },
   routeDivider: { width: 2, height: 14, backgroundColor: Colors.border, marginLeft: 4, marginVertical: 4 },
+  routeActions: { flexDirection: 'row', gap: 8, marginTop: 12 },
   changeRouteBtn: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
-    marginTop: 12, paddingVertical: 10, borderRadius: Radius.md,
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    paddingVertical: 10, borderRadius: Radius.md,
     borderWidth: 1, borderColor: Colors.primary + '55', backgroundColor: Colors.primary + '0D',
   },
   changeRouteTxt: { ...Typography.smallMedium, color: Colors.primary, fontWeight: '700' },
+  navigateBtn: {
+    flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7,
+    paddingVertical: 10, borderRadius: Radius.md,
+    borderWidth: 1, borderColor: Colors.info + '55', backgroundColor: Colors.info + '0D',
+  },
+  navigateTxt: { ...Typography.smallMedium, color: Colors.info, fontWeight: '700' },
   fareRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.borderLight },
   fareLabel: { ...Typography.caption, color: Colors.textSecondary },
   fareSub: { ...Typography.caption, color: Colors.textMuted },

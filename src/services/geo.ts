@@ -1,5 +1,6 @@
 import {
   COUNTRY_NAMES,
+  distanceKm,
   getOfficialServiceAreaBounds,
   getServiceArea,
   isLocationInServiceArea,
@@ -278,21 +279,163 @@ async function legacyGeocode(query: string, area: ServiceArea, bounds: Bbox | nu
     .filter((place: Place | null): place is Place => !!place && matchesConfiguredScope(place, area, { bounds }));
 }
 
-/** Driving route geometry + distance/duration between two points. */
-export async function getRoute(from: LngLat, to: LngLat): Promise<RouteResult | null> {
+async function fetchDrivingRoute(from: LngLat, to: LngLat, extra = ''): Promise<any | null> {
   if (!TOKEN) return null;
   const coords = `${from[0]},${from[1]};${to[0]},${to[1]}`;
   const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coords}` +
-    `?geometries=geojson&overview=full&access_token=${TOKEN}`;
+    `?geometries=geojson&overview=full${extra}&access_token=${TOKEN}`;
   const data = await fetchJson<{ routes?: any[] }>(url);
-  if (!data) return null;
-  const route = data.routes?.[0];
-  if (!route) return null;
+  const route = data?.routes?.[0];
+  return Array.isArray(route?.geometry?.coordinates) ? route : null;
+}
+
+function routeResult(route: any): RouteResult {
   return {
     geometry: route.geometry,
     distanceKm: Math.round((route.distance / 1000) * 100) / 100,
     durationMin: Math.max(1, Math.round(route.duration / 60)),
   };
+}
+
+/** Driving route geometry + distance/duration between two points. */
+export async function getRoute(from: LngLat, to: LngLat): Promise<RouteResult | null> {
+  const route = await fetchDrivingRoute(from, to);
+  return route ? routeResult(route) : null;
+}
+
+// ── Turn-by-turn ─────────────────────────────────────────────────────────────
+
+export interface RouteStep {
+  /** Where the maneuver happens. */
+  location: LngLat;
+  /** Mapbox maneuver type: depart, turn, fork, roundabout, arrive... */
+  type: string;
+  /** left, slight right, sharp left, uturn, straight... */
+  modifier?: string;
+  /** Ready-made text in pt-BR, e.g. "Vire à direita na Rua das Nogueiras". */
+  instruction: string;
+  /** Street taken after the maneuver ('' when unnamed). */
+  name: string;
+  /** From this maneuver to the next one, in metres. */
+  distanceM: number;
+}
+
+export interface NavigationRoute extends RouteResult {
+  steps: RouteStep[];
+}
+
+function stepFromMapbox(step: any): RouteStep | null {
+  const maneuver = step?.maneuver;
+  const location = maneuver?.location;
+  if (!Array.isArray(location) || typeof location[0] !== 'number' || typeof location[1] !== 'number') return null;
+  return {
+    location: [location[0], location[1]],
+    type: String(maneuver.type ?? ''),
+    modifier: typeof maneuver.modifier === 'string' ? maneuver.modifier : undefined,
+    instruction: String(maneuver.instruction ?? ''),
+    name: String(step.name ?? ''),
+    distanceM: Number(step.distance) || 0,
+  };
+}
+
+/** Same route as getRoute(), plus the maneuvers with pt-BR instructions. */
+export async function getNavigationRoute(from: LngLat, to: LngLat): Promise<NavigationRoute | null> {
+  const route = await fetchDrivingRoute(from, to, '&steps=true&language=pt-BR');
+  if (!route) return null;
+  const steps = (Array.isArray(route.legs) ? route.legs : [])
+    .flatMap((leg: any) => (Array.isArray(leg?.steps) ? leg.steps : []))
+    .map(stepFromMapbox)
+    .filter((step: RouteStep | null): step is RouteStep => !!step);
+  return { ...routeResult(route), steps };
+}
+
+/** A route ready to follow: lengths along the line and where each maneuver sits. */
+export interface NavigationLine {
+  coordinates: LngLat[];
+  /** Metres from the start to each coordinate. */
+  cumM: number[];
+  lengthM: number;
+  steps: RouteStep[];
+  /** Metres from the start to each step's maneuver. */
+  stepAlongM: number[];
+}
+
+export interface LinePosition {
+  /** Metres from the start of the line to the closest point on it. */
+  alongM: number;
+  /** Metres between the point and the line. */
+  offM: number;
+  /** Segment holding the closest point (coordinates[index] → [index + 1]). */
+  index: number;
+  point: LngLat;
+}
+
+function closestOnLine(coordinates: LngLat[], cumM: number[], p: LngLat, minAlongM = 0): LinePosition | null {
+  if (coordinates.length < 2) return null;
+  // Flat metres around the point; exact enough at street scale.
+  const kx = 111_320 * Math.cos((p[1] * Math.PI) / 180);
+  const ky = 110_540;
+  let best: LinePosition | null = null;
+  for (let i = 0; i < coordinates.length - 1; i++) {
+    const segM = cumM[i + 1] - cumM[i];
+    // Only the part of the line at or after minAlongM.
+    if (cumM[i + 1] < minAlongM) continue;
+    const tMin = segM > 0 ? Math.max(0, (minAlongM - cumM[i]) / segM) : 0;
+    const [ax, ay] = [(coordinates[i][0] - p[0]) * kx, (coordinates[i][1] - p[1]) * ky];
+    const [bx, by] = [(coordinates[i + 1][0] - p[0]) * kx, (coordinates[i + 1][1] - p[1]) * ky];
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? Math.min(1, Math.max(tMin, -(ax * dx + ay * dy) / len2)) : tMin;
+    const offM = Math.hypot(ax + t * dx, ay + t * dy);
+    // Strict: where the line passes twice, the earlier pass wins.
+    if (!best || offM < best.offM) {
+      best = {
+        alongM: cumM[i] + t * (cumM[i + 1] - cumM[i]),
+        offM,
+        index: i,
+        point: [
+          coordinates[i][0] + t * (coordinates[i + 1][0] - coordinates[i][0]),
+          coordinates[i][1] + t * (coordinates[i + 1][1] - coordinates[i][1]),
+        ],
+      };
+    }
+  }
+  return best;
+}
+
+export function prepareNavigation(coordinates: LngLat[], steps: RouteStep[] = []): NavigationLine {
+  const cumM = [0];
+  for (let i = 1; i < coordinates.length; i++) {
+    cumM.push(cumM[i - 1] + distanceKm(coordinates[i - 1], coordinates[i]) * 1000);
+  }
+  // Maneuvers are points of the line, in order: each one is searched from the
+  // previous one on, so a street driven twice keeps them in sequence.
+  let from = 0;
+  const stepAlongM = steps.map((step) => {
+    const pos = closestOnLine(coordinates, cumM, step.location, from);
+    if (!pos) return from;
+    from = pos.alongM;
+    return pos.alongM;
+  });
+  return { coordinates, cumM, lengthM: cumM[cumM.length - 1] ?? 0, steps, stepAlongM };
+}
+
+/** Where a position sits along the route, and how far it is from it. */
+export function locateOnRoute(line: NavigationLine, p: LngLat): LinePosition | null {
+  return closestOnLine(line.coordinates, line.cumM, p);
+}
+
+/**
+ * The maneuver ahead of a position along the route and the distance to it
+ * along the streets. A maneuver just passed (5 m) no longer counts.
+ */
+export function nextManeuver(line: NavigationLine, alongM: number): { step: RouteStep; distanceM: number } | null {
+  // The first step is the departure, where the route starts.
+  for (let i = 1; i < line.steps.length; i++) {
+    const distanceM = line.stepAlongM[i] - alongM;
+    if (distanceM > -5) return { step: line.steps[i], distanceM: Math.max(0, distanceM) };
+  }
+  return null;
 }
 
 /**

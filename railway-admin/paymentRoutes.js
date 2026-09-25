@@ -2,6 +2,7 @@ import {
   MercadoPagoError,
   cancelPaymentQuietly,
   cancelPreapproval,
+  createCardSubscription,
   createPlanCardPayment,
   createPlanPassPreference,
   createPlanPixPayment,
@@ -310,6 +311,8 @@ async function syncSubscription(admin, provider, existing, driverId, segment = e
   const pending = pendingCheckoutOf(existing);
   const kept = {};
   if (pending && !promote && String(pending.preapproval_id) !== String(provider.id)) kept.pending_checkout = pending;
+  // A card subscription Mercado Pago did not answer (see subscribeMonthlyWithCard).
+  if (!promote && previousMetadata.card_subscription_unknown) kept.card_subscription_unknown = previousMetadata.card_subscription_unknown;
   const cancelPending = metadataList(previousMetadata, 'cancel_pending').filter((id) => id !== String(provider.id));
   if (cancelPending.length) kept.cancel_pending = cancelPending;
   const metadata = withRetired({
@@ -374,6 +377,39 @@ async function promotePreapproval(admin, provider, local, segment) {
   }
   console.log('[MercadoPago] plano promovido', { driverId: local.driver_id, preapproval: String(provider.id), plan: promoted.plan });
   return promoted;
+}
+
+// The ledger needs a row to point at. It grants nothing until the payment is
+// confirmed, and never replaces a row created meanwhile.
+async function ensureSubscriptionRow(admin, driverId, { plan, segment, amount }) {
+  const existing = await getSubscription(admin, driverId);
+  if (existing?.id) return existing;
+  const { error } = await admin.from('subscriptions').upsert({
+    driver_id: driverId,
+    plan,
+    plan_segment: segment,
+    status: 'expired',
+    amount,
+    due_date: todayIso(),
+    provider: 'mercadopago',
+    provider_status: 'checkout_pending',
+    provider_metadata: PASS_PLANS.has(plan) ? { billing_model: 'one_time_pass' } : {},
+  }, { onConflict: 'driver_id', ignoreDuplicates: true });
+  if (error) throw error;
+  const local = await getSubscription(admin, driverId);
+  if (!local?.id) throw new MercadoPagoError('Não foi possível preparar a assinatura do motorista.', 502);
+  return local;
+}
+
+// The recurring plan asked for is already the one renewing, and paid up.
+function recurringPlanActive(row, plan, segment) {
+  return row?.plan === plan
+    && row?.plan_segment === segment
+    && row?.status === 'active'
+    && Boolean(row?.provider_subscription_id)
+    // An admin override that kept the preapproval still renews through it.
+    && (isAuthorizedStatus(row?.provider_status) || keptPreapprovalRenews(row))
+    && (dateOnlyOrNull(row?.due_date) || '') >= todayIso();
 }
 
 // Applies what Mercado Pago says about a preapproval without letting an
@@ -468,6 +504,8 @@ const passChannel = (intent) => {
 // Card charges being sent to Mercado Pago right now, by pass checkout id. The
 // checkout is not closed under them, and a second tap waits for the answer.
 const cardChargesInFlight = new Set();
+// Monthly subscriptions being sent with a card right now, by driver id.
+const cardSubscriptionsInFlight = new Set();
 
 // A card payment under review, or a Pix or boleto made inside Checkout Pro and
 // not paid yet. It clears on its own within a few days, so another payment
@@ -1872,6 +1910,160 @@ export async function payPassWithCard(admin, { driver, profile, user, paymentId,
   };
 }
 
+const CARD_SUBSCRIPTION_DECLINED = 'O cartão não foi aceito para a assinatura e nada foi cobrado. Confira os dados ou use outro cartão de crédito.';
+const CARD_SUBSCRIPTION_UNKNOWN = 'Não conseguimos confirmar a assinatura com o Mercado Pago agora. Aguarde um instante e confira seu plano antes de tentar de novo.';
+// A subscription Mercado Pago did not answer may exist and be charging. Its
+// notification makes it the plan; until then another card is not sent.
+const CARD_SUBSCRIPTION_UNKNOWN_MS = 10 * 60e3;
+
+// What the app's card form sent for the monthly plan, checked before anything
+// reaches Mercado Pago. Throws the 400 the app shows.
+export function cardSubscriptionInput(body, fallbackSegment = 'economy') {
+  const fail = (message, code) => Object.assign(new MercadoPagoError(message, 400), { code });
+  const plan = String(body?.plan || '').toLowerCase();
+  const segment = String(body?.segment || fallbackSegment || 'economy').toLowerCase();
+  if (plan !== 'monthly') throw fail('Só o plano mensal é assinado com cartão.', 'invalid_plan');
+  if (!VALID_SEGMENTS.has(segment)) throw fail('Categoria de plano inválida.', 'invalid_plan');
+  const token = String(body?.token || '').trim();
+  const paymentMethodId = String(body?.payment_method_id || '').trim().toLowerCase();
+  if (!/^[A-Za-z0-9-]{16,128}$/.test(token) || !/^[a-z0-9_-]{2,40}$/.test(paymentMethodId)) {
+    throw fail('Os dados do cartão não chegaram completos. Preencha de novo.', 'invalid_card_form');
+  }
+  // debvisa, debmaster, debelo: a debit card cannot be charged every month.
+  if (paymentMethodId.startsWith('deb')) throw fail('A assinatura mensal precisa de cartão de crédito.', 'debit_not_allowed');
+  const payer = body?.payer && typeof body.payer === 'object' ? body.payer : {};
+  return {
+    segment,
+    token,
+    paymentMethodId,
+    payerEmail: typeof payer.email === 'string' ? payer.email.slice(0, 254) : '',
+    deviceId: typeof body?.device_id === 'string' ? body.device_id.slice(0, 128) : null,
+  };
+}
+
+// The monthly plan with the card typed in the app. Mercado Pago checks the card
+// and authorizes the subscription in the same request, with no checkout page;
+// only then does it become the driver's plan, replacing the one they had.
+export async function subscribeMonthlyWithCard(admin, { driver, profile, user, segment: requestedSegment, token, paymentMethodId, payerEmail, deviceId, host }) {
+  const plan = 'monthly';
+  const fail = (message, status, code, extra = {}) => Object.assign(new MercadoPagoError(message, status), { code, ...extra });
+  if (String(paymentMethodId || '').toLowerCase().startsWith('deb')) {
+    throw fail('A assinatura mensal precisa de cartão de crédito.', 400, 'debit_not_allowed');
+  }
+  const segment = await planSegmentFor(admin, driver.id, requestedSegment);
+  const amount = amountFromSettings(await getSettings(admin), plan, segment);
+  if (!Number.isFinite(amount) || amount <= 0) throw fail('O valor do plano não está configurado no painel.', 400, 'invalid_plan');
+  const roundedAmount = Number(amount.toFixed(2));
+  const answer = (row, providerId, extra = {}) => ({
+    provider: 'mercadopago',
+    status: 'authorized',
+    ...extra,
+    subscription_id: String(providerId),
+    plan,
+    plan_segment: segment,
+    billing_type: 'recurring',
+    amount: extra.already_active ? Number(row.amount || roundedAmount) : roundedAmount,
+    subscription: row,
+  });
+
+  let local = await ensureSubscriptionRow(admin, driver.id, { plan, segment, amount: roundedAmount });
+  if (recurringPlanActive(local, plan, segment)) return answer(local, local.provider_subscription_id, { already_active: true });
+
+  // A checkout link opened before may have been paid, its webhook not arrived
+  // yet. Unpaid, it stays until this card is authorized; the promotion then
+  // cancels it.
+  const pending = pendingCheckoutOf(local);
+  if (pending) {
+    let attempt = null;
+    try {
+      attempt = await getPreapproval(pending.preapproval_id);
+    } catch (error) {
+      if (!(error instanceof MercadoPagoError) || error.status !== 404) throw error;
+    }
+    if (attempt && isAuthorizedStatus(attempt.status)) {
+      local = await promotePreapproval(admin, attempt, local, pending.plan_segment);
+      if (recurringPlanActive(local, plan, segment)) return answer(local, local.provider_subscription_id, { already_active: true });
+    }
+  }
+
+  const tokenHash = crypto.createHash('sha256').update(String(token)).digest('hex').slice(0, 16);
+  const unanswered = local.provider_metadata?.card_subscription_unknown;
+  const unansweredRecent = unanswered && Date.now() - new Date(unanswered.at || 0).getTime() < CARD_SUBSCRIPTION_UNKNOWN_MS;
+  // The same card again carries the same idempotency key, so Mercado Pago
+  // answers with the subscription it made instead of another one.
+  const replay = unansweredRecent && unanswered.token === tokenHash;
+  if (unansweredRecent && !replay) {
+    throw fail('A assinatura anterior ainda está sendo confirmada. Aguarde alguns minutos e confira seu plano.', 409, 'subscription_in_progress');
+  }
+  if (!replay && cardRateLimited(driver.id)) {
+    throw fail('Muitas tentativas com cartão na última hora. Aguarde um pouco e tente de novo.', 429, 'too_many_attempts');
+  }
+
+  const noteMetadata = async (change) => {
+    try {
+      const current = (await getSubscription(admin, driver.id)) || local;
+      await saveSubscriptionMetadata(admin, current, change(current.provider_metadata || {}));
+    } catch (error) {
+      console.warn('[MercadoPago] metadados da assinatura com cartão:', error.message);
+    }
+  };
+  let created;
+  try {
+    created = await createCardSubscription({
+      driverId: driver.id,
+      email: String(validEmail(payerEmail) ? payerEmail : (profile?.email || user?.email || '')).trim().toLowerCase(),
+      plan,
+      amount: roundedAmount,
+      cardTokenId: token,
+      backUrl: `${host}/pagamento/retorno`,
+      notificationUrl: `${host}/api/mercadopago/webhook`,
+      deviceId,
+      idempotencyKey: `subscription-card:${driver.id}:${tokenHash}`,
+    });
+  } catch (error) {
+    const status = error instanceof MercadoPagoError ? error.status : 502;
+    // The provider's message stays in the log; the driver gets the copy below.
+    console.warn('[MercadoPago] assinatura com cartão', status, error.message,
+      error instanceof MercadoPagoError && error.details ? JSON.stringify(error.details).slice(0, 800) : '');
+    // Refused before anything was charged: an invalid token, a card that did
+    // not pass Mercado Pago's check, or data it did not accept.
+    if (status >= 400 && status < 500 && ![401, 403, 408, 429].includes(status)) {
+      throw fail(CARD_SUBSCRIPTION_DECLINED, 402, 'card_declined', { detail: 'invalid_request' });
+    }
+    await noteMetadata((metadata) => ({ ...metadata, card_subscription_unknown: { at: new Date().toISOString(), token: tokenHash } }));
+    throw fail(CARD_SUBSCRIPTION_UNKNOWN, 502, 'payment_unknown');
+  }
+  if (!created?.id) throw fail(CARD_SUBSCRIPTION_UNKNOWN, 502, 'payment_unknown');
+  const createdId = String(created.id);
+
+  if (!isAuthorizedStatus(created.status)) {
+    // Kept without the card authorized: it must never start charging later.
+    const cancelled = await cancelPreapprovalQuietly(createdId);
+    await noteMetadata((metadata) => {
+      const { card_subscription_unknown: _unknown, ...rest } = metadata;
+      const next = withRetired(rest, [createdId]);
+      if (!cancelled) next.cancel_pending = [...new Set([...metadataList(next, 'cancel_pending'), createdId])];
+      return next;
+    });
+    console.log('[MercadoPago] assinatura com cartão não autorizada', { driverId: driver.id, preapproval: createdId, status: created.status });
+    throw fail(CARD_SUBSCRIPTION_DECLINED, 402, 'card_declined', { detail: 'not_authorized' });
+  }
+
+  try {
+    const current = (await getSubscription(admin, driver.id)) || local;
+    // The plan and price come from the schedule; this one was just sent.
+    const provider = created.auto_recurring ? created : {
+      ...created,
+      auto_recurring: { frequency: 1, frequency_type: 'months', transaction_amount: roundedAmount, currency_id: 'BRL' },
+    };
+    return answer(await promotePreapproval(admin, provider, current, segment), createdId);
+  } catch (error) {
+    // Mercado Pago has the subscription; its notification makes it the plan.
+    console.error('[MercadoPago] assinatura com cartão autorizada sem ativar o plano:', error.message);
+    throw fail('O Mercado Pago aprovou a assinatura, mas o plano ainda não foi atualizado aqui. Ele é liberado em instantes; não assine de novo.', 502, 'payment_unknown');
+  }
+}
+
 // The page the app's card form loads in a WebView. The card fields are
 // Mercado Pago's own (Card Payment Brick): the numbers never pass through the
 // app or this server, only the one-use token does. The app hands in the amount
@@ -1919,7 +2111,11 @@ export function cardFormPage({ publicKey = '' } = {}) {
       var mp = window.__ruMp || (window.__ruMp = new window.MercadoPago(KEY, { locale: 'pt-BR' }));
       mp.bricks().create('cardPayment', 'cardPaymentBrick_container', {
         initialization: { amount: init.amount, payer: init.email ? { email: init.email } : undefined },
-        customization: { paymentMethods: { minInstallments: 1, maxInstallments: 1 } },
+        customization: {
+          paymentMethods: init.credit_only
+            ? { minInstallments: 1, maxInstallments: 1, types: { excluded: ['debit_card'] } }
+            : { minInstallments: 1, maxInstallments: 1 }
+        },
         callbacks: {
           onReady: function () { building = false; statusBox.style.display = 'none'; post({ type: 'ready' }); },
           onSubmit: function (data) {
@@ -1937,7 +2133,12 @@ export function cardFormPage({ publicKey = '' } = {}) {
   }
   window.__ruInit = function (value) {
     if (init || !value || !(Number(value.amount) > 0)) return;
-    init = { amount: Number(value.amount), email: typeof value.email === 'string' ? value.email : '' };
+    // credit_only: the monthly plan renews on the card, which a debit card cannot do.
+    init = {
+      amount: Number(value.amount),
+      email: typeof value.email === 'string' ? value.email : '',
+      credit_only: value.credit_only === true
+    };
     build();
   };
   // The app answers every submit; the form then takes a new card or retry.
@@ -2254,6 +2455,40 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
     }
   });
 
+  // The monthly plan paid with the card typed in the app's form (credit only).
+  // Mercado Pago authorizes the card in this request; there is no checkout page.
+  app.post('/api/subscriptions/card-subscribe', requireDriver, async (req, res) => {
+    let input;
+    try {
+      input = cardSubscriptionInput(req.body, req.driverAuth.driver.plan_segment);
+    } catch (error) {
+      return res.status(400).json({ error: error.message, code: error.code });
+    }
+    if (!mercadopagoConfigured()) return res.status(503).json({ error: 'Mercado Pago ainda não está configurado no servidor.' });
+    const driverId = req.driverAuth.driver.id;
+    // A double tap, or a retry while the first request is still running.
+    if (cardSubscriptionsInFlight.has(driverId)) {
+      return res.status(409).json({ error: 'A assinatura já está sendo processada. Aguarde um instante.', code: 'subscription_in_progress' });
+    }
+    cardSubscriptionsInFlight.add(driverId);
+    try {
+      const { profile, user, driver } = req.driverAuth;
+      return res.json(await subscribeMonthlyWithCard(admin, { driver, profile, user, ...input, host: publicHost(req) }));
+    } catch (error) {
+      // Only the copy written for the driver goes out; anything else (a
+      // database error, a provider message) is logged and reported as unknown.
+      const known = error instanceof MercadoPagoError && typeof error.code === 'string';
+      if (!known) console.error('[MercadoPago card subscribe]', error);
+      return res.status(known ? error.status : 502).json({
+        error: known ? error.message : CARD_SUBSCRIPTION_UNKNOWN,
+        code: known ? error.code : 'payment_unknown',
+        ...(known && error.detail ? { detail: error.detail } : {}),
+      });
+    } finally {
+      cardSubscriptionsInFlight.delete(driverId);
+    }
+  });
+
   app.get('/api/mercadopago/connect/start', requireDriver, async (req, res) => {
     if (!mercadopagoOAuthConfigured() || !secretBoxConfigured()) {
       return res.status(503).json({ error: 'A conexão Mercado Pago ainda não está configurada no servidor.' });
@@ -2413,25 +2648,7 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
       const host = publicHost(req);
       const returnUrl = `${host}/pagamento/retorno`;
 
-      let local = await getSubscription(admin, driver.id);
-      if (!local?.id) {
-        // The ledger needs a row to point at. It grants nothing until the
-        // payment is confirmed, and never replaces a row created meanwhile.
-        const { error: createError } = await admin.from('subscriptions').upsert({
-          driver_id: driver.id,
-          plan,
-          plan_segment: segment,
-          status: 'expired',
-          amount: roundedAmount,
-          due_date: todayIso(),
-          provider: 'mercadopago',
-          provider_status: 'checkout_pending',
-          provider_metadata: PASS_PLANS.has(plan) ? { billing_model: 'one_time_pass' } : {},
-        }, { onConflict: 'driver_id', ignoreDuplicates: true });
-        if (createError) throw createError;
-        local = await getSubscription(admin, driver.id);
-        if (!local?.id) throw new MercadoPagoError('Não foi possível preparar a assinatura do motorista.', 502);
-      }
+      let local = await ensureSubscriptionRow(admin, driver.id, { plan, segment, amount: roundedAmount });
 
       if (PASS_PLANS.has(plan)) {
         // Older app builds send no method and get the Checkout Pro link.
@@ -2456,13 +2673,7 @@ export function registerMercadoPagoRoutes({ app, admin, isProd }) {
         }));
       }
 
-      const alreadyActive = (row) => row?.plan === plan
-        && row?.plan_segment === segment
-        && row?.status === 'active'
-        && Boolean(row?.provider_subscription_id)
-        // An admin override that kept the preapproval still renews through it.
-        && (isAuthorizedStatus(row?.provider_status) || keptPreapprovalRenews(row))
-        && (dateOnlyOrNull(row?.due_date) || '') >= todayIso();
+      const alreadyActive = (row) => recurringPlanActive(row, plan, segment);
       const activeResponse = (row) => res.json({
         provider: 'mercadopago',
         already_active: true,

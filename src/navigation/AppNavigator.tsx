@@ -503,6 +503,10 @@ const DriverFlow: React.FC = () => {
   // Rides this driver has already declined — kept out of the poll/realtime
   // feed so a decline doesn't keep resurfacing the same ride every few seconds.
   const rejectedIdsRef = useRef<Set<string>>(new Set());
+  // One accept at a time. A second tap on Aceitar used to reach the ride
+  // screen's first button (same spot) and mark the arrival at once.
+  const acceptingRef = useRef(false);
+  const [accepting, setAccepting] = useState(false);
 
   // Checks run from a timer, the app coming back and the plan screen at once.
   // A slow old read that saw no plan is dropped once a newer one landed, so it
@@ -665,9 +669,12 @@ const DriverFlow: React.FC = () => {
   useEffect(() => {
     if (!pendingRequest) return;
     const unsub = subscribeToRide(pendingRequest.id, (r) => {
-      if (r.status !== 'searching') {
+      // Our own accept also leaves 'searching'; handleAccept moves on from there.
+      if (r.status !== 'searching' && !acceptingRef.current) {
         setPendingRequest(null);
-        if (screenRef.current === 'ride_notification') setScreen('driver_home');
+        // Read the queued screen, not the rendered one: an accept that just
+        // answered may already have sent the driver to the ride.
+        setScreen((cur) => (cur === 'ride_notification' ? 'driver_home' : cur));
       }
     });
     return unsub;
@@ -796,7 +803,9 @@ const DriverFlow: React.FC = () => {
   };
 
   const handleAccept = async () => {
-    if (!pendingRequest) return;
+    if (!pendingRequest || acceptingRef.current) return;
+    acceptingRef.current = true;
+    setAccepting(true);
     try {
       const accepted = await acceptRide(pendingRequest.id);
       stopSound('request');
@@ -808,6 +817,9 @@ const DriverFlow: React.FC = () => {
       Alert.alert('Corrida indisponível', friendlyError(e?.message));
       setPendingRequest(null);
       setScreen('driver_home');
+    } finally {
+      acceptingRef.current = false;
+      setAccepting(false);
     }
   };
 
@@ -930,7 +942,11 @@ const DriverFlow: React.FC = () => {
               ride={pendingRequest}
               driverCoords={driverCoords ?? undefined}
               onAccept={handleAccept}
+              accepting={accepting}
               onReject={() => {
+                // Declining a ride the server may already have given us would
+                // strand the passenger; wait for the accept's answer.
+                if (acceptingRef.current) return;
                 if (pendingRequest) {
                   rejectedIdsRef.current.add(pendingRequest.id);
                   declineRide(pendingRequest.id).catch(() => {});

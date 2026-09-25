@@ -354,25 +354,44 @@ export function buildRecurringSchedule(plan, amount) {
   };
 }
 
-export async function createRecurringSubscription({ driverId, email, plan, amount, backUrl, notificationUrl, idempotencyKey }) {
+function recurringBody({ driverId, email, plan, amount, backUrl, notificationUrl }) {
   const schedule = buildRecurringSchedule(plan, amount);
-  const autoRecurring = {
-    frequency: schedule.frequency,
-    frequency_type: schedule.frequency_type,
-    transaction_amount: schedule.transaction_amount,
-    currency_id: schedule.currency_id,
+  return {
+    reason: `Rotta Urbana — Plano ${PLAN_LABELS[plan] || plan}`,
+    external_reference: driverId,
+    payer_email: email,
+    auto_recurring: {
+      frequency: schedule.frequency,
+      frequency_type: schedule.frequency_type,
+      transaction_amount: schedule.transaction_amount,
+      currency_id: schedule.currency_id,
+    },
+    back_url: backUrl,
+    notification_url: notificationUrl,
   };
+}
+
+export async function createRecurringSubscription({ driverId, email, plan, amount, backUrl, notificationUrl, idempotencyKey }) {
   return mercadopagoRequest('/preapproval', {
     method: 'POST',
     idempotencyKey,
+    body: { ...recurringBody({ driverId, email, plan, amount, backUrl, notificationUrl }), status: 'pending' },
+  });
+}
+
+// Same subscription, but with the card typed into the app's form: the token
+// from the Card Payment Brick goes with status 'authorized', so Mercado Pago
+// checks the card and starts charging right away, with no checkout page.
+export async function createCardSubscription({ driverId, email, plan, amount, cardTokenId, backUrl, notificationUrl, deviceId, idempotencyKey }) {
+  const session = /^[\w:.-]{1,128}$/.test(String(deviceId || '')) ? String(deviceId) : null;
+  return mercadopagoRequest('/preapproval', {
+    method: 'POST',
+    idempotencyKey,
+    headers: session ? { 'X-meli-session-id': session } : {},
     body: {
-      reason: `Rotta Urbana — Plano ${PLAN_LABELS[plan] || plan}`,
-      external_reference: driverId,
-      payer_email: email,
-      auto_recurring: autoRecurring,
-      back_url: backUrl,
-      notification_url: notificationUrl,
-      status: 'pending',
+      ...recurringBody({ driverId, email, plan, amount, backUrl, notificationUrl }),
+      card_token_id: String(cardTokenId),
+      status: 'authorized',
     },
   });
 }

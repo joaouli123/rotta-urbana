@@ -320,8 +320,9 @@ export interface CheckoutOptions {
 }
 
 /**
- * Monthly opens Mercado Pago's recurring checkout (card). Daily and weekly are
- * paid once: a Pix code shown in the app, or Checkout Pro for card.
+ * Monthly gets Mercado Pago's recurring checkout link, the fallback to the
+ * card in the app (subscribeMonthlyWithCard). Daily and weekly are paid once:
+ * a Pix code shown in the app, the card form, or Checkout Pro for card.
  */
 export async function createSubscriptionCheckout(
   plan: Exclude<PlanType, 'commission'>,
@@ -390,6 +391,52 @@ export async function payPlanWithCard(
       },
       device_id: deviceId,
       ...(allowProcessing ? { allow_processing: true } : {}),
+    }),
+  });
+}
+
+/** The monthly subscription, authorized on the card typed in the app. */
+export interface CardSubscriptionResult {
+  provider: 'mercadopago';
+  status: 'authorized';
+  /** The driver already had the monthly plan authorized and in date. */
+  already_active?: boolean;
+  /** Mercado Pago's subscription id. */
+  subscription_id: string;
+  plan: 'monthly';
+  plan_segment?: PlanSegment | null;
+  billing_type: 'recurring';
+  amount: number;
+  subscription?: SubscriptionRow | null;
+}
+
+/**
+ * Subscribes the monthly plan on the card typed in the app (credit only):
+ * Mercado Pago charges it now and every month. Only the card's one-use token
+ * is sent. A PaymentsApiError says why it did not go through: 'card_declined'
+ * (402) takes another card, 'subscription_in_progress' (409) is one already
+ * running, and 'payment_unknown' (5xx) must be checked on the plan.
+ */
+export async function subscribeMonthlyWithCard(
+  form: CardFormData,
+  deviceId: string | null,
+  segment?: PlanSegment | null,
+): Promise<CardSubscriptionResult> {
+  const email = form.payer?.email;
+  const identification = form.payer?.identification;
+  return paymentsApi<CardSubscriptionResult>('/api/subscriptions/card-subscribe', {
+    method: 'POST',
+    body: JSON.stringify({
+      plan: 'monthly',
+      ...(segment ? { segment } : {}),
+      token: form.token,
+      payment_method_id: form.payment_method_id,
+      issuer_id: form.issuer_id ?? null,
+      payer: {
+        ...(email ? { email } : {}),
+        ...(identification?.number ? { identification: { type: identification.type ?? '', number: identification.number } } : {}),
+      },
+      device_id: deviceId,
     }),
   });
 }
