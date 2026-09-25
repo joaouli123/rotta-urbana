@@ -13,6 +13,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import {
@@ -46,6 +47,7 @@ import type { LngLat } from '../../components/RouteMap';
 import type { RideStatusDb } from '../../types/db';
 import {
   getNavigationRoute,
+  getRoute,
   isCoordinateWithinServiceArea,
   locateOnRoute,
   nextManeuver,
@@ -116,14 +118,17 @@ type NavRoute = {
   nav: NavigationLine;
   /** Metres of this leg already driven when the route was fetched. */
   baseM: number;
+  /** Mapbox's average speed on this route, for the ETA. */
+  speedMs: number;
 };
 
 // A newer route replaces the current one mid-leg (every 80 m to the pickup, a
 // reroute, a new destination). Carry what was already driven so the progress
 // bar keeps going instead of starting over.
-function followOn(prev: NavRoute | null, nav: NavigationLine, from: LngLat): NavRoute {
+function followOn(prev: NavRoute | null, nav: NavigationLine, from: LngLat, route: { distanceKm: number; durationMin: number }): NavRoute {
   const driven = prev ? prev.baseM + (locateOnRoute(prev.nav, from)?.alongM ?? 0) : 0;
-  return { nav, baseM: driven };
+  const speedMs = route.durationMin > 0 ? (route.distanceKm * 1000) / (route.durationMin * 60) : 8.33;
+  return { nav, baseM: driven, speedMs: Math.min(30, Math.max(3, speedMs)) };
 }
 
 // A ride reopened after an app restart resumes at the step saved in the database.
@@ -150,8 +155,10 @@ const OFF_ROUTE_FIXES = 2;
 const REROUTE_MIN_MS = 15_000;
 const OFF_ROUTE_MAX_ACCURACY_M = 50;
 
-// Turn-by-turn banner, under the status pill.
-const NAV_BANNER_TOP = 72;
+// Status pill and panic button share one row at the top.
+const TOP_ROW_HEIGHT = 56;
+// Turn-by-turn banner, under that row.
+const NAV_BANNER_TOP = 8 + TOP_ROW_HEIGHT + 8;
 const NAV_BANNER_HEIGHT = 68;
 
 interface DriverActiveRideProps {
@@ -209,6 +216,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   onDestinationChanged,
 }) => {
   const insets = useSafeAreaInsets();
+  // Short phones: a tighter sheet so the route stays visible above it.
+  const compact = useWindowDimensions().height < 760;
   const [status, setStatus] = useState<DriverRideStatus>(
     () => (rideStatus && STEP_BY_RIDE_STATUS[rideStatus]) || 'to_passenger',
   );
@@ -328,7 +337,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         .then((r) => {
           if (!active) return;
           if (!r) throw new Error('route unavailable');
-          const next = followOn(tripLegRef.current, prepareNavigation(r.geometry.coordinates, r.steps), from);
+          const next = followOn(tripLegRef.current, prepareNavigation(r.geometry.coordinates, r.steps), from, r);
           tripLegRef.current = next;
           tripFromRef.current = { from, dest };
           offRouteRef.current.fixes = 0;
@@ -342,6 +351,18 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     load(0);
     return () => { active = false; clearTimeout(retry); };
   }, [status, origin?.[0], origin?.[1], currentDestination?.[0], currentDestination?.[1], tripReroute]);
+
+  // ── Trip preview (pickup → destination) before the passenger is aboard ──────
+  // Drawn under the blue route to the pickup, so the driver sees the whole job.
+  const [tripPreview, setTripPreview] = useState<RouteGeometry | null>(null);
+  useEffect(() => {
+    if (status === 'in_ride' || status === 'completed' || !origin || !currentDestination) return;
+    let active = true;
+    getRoute(origin, currentDestination)
+      .then((r) => { if (active && r) setTripPreview(r.geometry as RouteGeometry); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [status === 'in_ride' || status === 'completed', origin?.[0], origin?.[1], currentDestination?.[0], currentDestination?.[1]]);
 
   // ── Off the trip route: new route from where the car is ─────────────────────
   // The route to the pickup already follows the car (a new one every 80 m).
@@ -388,7 +409,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       .then((r) => {
         if (req !== approachRef.current.req) return;
         if (!r) return failed();
-        const next = followOn(approachLegRef.current, prepareNavigation(r.geometry.coordinates, r.steps), from);
+        const next = followOn(approachLegRef.current, prepareNavigation(r.geometry.coordinates, r.steps), from, r);
         approachLegRef.current = next;
         setApproachRoute(next);
       })
@@ -484,22 +505,23 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     // Everything driven on this leg over everything the leg takes, so a newer
     // route (every 80 m, reroute, new destination) doesn't reset the bar.
     const total = leg.baseM + leg.nav.lengthM || 1;
-    const spd = driverSpeedMs > 0.5 ? driverSpeedMs : 8.33; // fallback 30 km/h
-    const eta = Math.max(1, Math.ceil(remaining / spd / 60));
+    // Mapbox's average speed for the route: the speed of the moment made the
+    // ETA jump to absurd values when creeping or standing at a light.
+    const eta = Math.max(1, Math.ceil(remaining / leg.speedMs / 60));
     return {
       ...show(trimmed),
       progress: Math.min(1, Math.max(0, (leg.baseM + pos.alongM) / total)),
       etaText: `~${eta} min ${status === 'in_ride' ? 'para o destino' : 'para o passageiro'}`,
       maneuver: nextManeuver(leg.nav, pos.alongM),
     };
-  }, [status, tripRoute, approachRoute, driverPos, driverSpeedMs]);
+  }, [status, tripRoute, approachRoute, driverPos]);
 
   // The banner needs a route with maneuvers and the car's place on it.
   const showNav = !!maneuver && (status === 'to_passenger' || status === 'in_ride');
   useVoiceGuidance(showNav ? maneuver : null, driverSpeedMs, voiceOn);
-  // The status pill ends 66 px below the status bar, the turn banner under it
-  // at NAV_BANNER_TOP + NAV_BANNER_HEIGHT.
-  const { mapPadding, onSheetLayout } = useRideMapPadding(showNav ? NAV_BANNER_TOP + NAV_BANNER_HEIGHT : 66);
+  // The top row ends 8 + TOP_ROW_HEIGHT below the status bar, the turn banner
+  // under it at NAV_BANNER_TOP + NAV_BANNER_HEIGHT.
+  const { mapPadding, onSheetLayout } = useRideMapPadding(showNav ? NAV_BANNER_TOP + NAV_BANNER_HEIGHT : 8 + TOP_ROW_HEIGHT);
 
   // Until the street route arrives, a dashed straight line links the car to the pickup.
   const pickupLine: RouteGeometry | null = status === 'to_passenger' && !approachLine && driverPos && origin
@@ -632,10 +654,11 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   };
 
   const handleCancelConfirm = async () => {
-    if (!cancelReason || !cancelDescription.trim()) return;
+    if (!canConfirm) return;
     setCancelling(true);
     try {
-      const fullReason = `[${cancelReason}] ${cancelDescription.trim()}`;
+      const detail = cancelDescription.trim();
+      const fullReason = detail ? `[${cancelReason}] ${detail}` : cancelReason;
       if (rideId) await cancelRide(rideId, fullReason);
       setCancelOpen(false);
       onCancel();
@@ -679,7 +702,9 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 
   const config = statusConfig[status];
   const canCancel = status !== 'completed';
-  const canConfirm = !!cancelReason && cancelDescription.trim().length > 0;
+  // Only "Outro motivo" needs a written reason; the others already say it.
+  const needsDetail = cancelReason === 'Outro motivo';
+  const canConfirm = !!cancelReason && (!needsDetail || cancelDescription.trim().length > 0);
   const progressPct = Math.round(progress * 100);
   const canChangeRoute = status === 'passenger_pickup' || status === 'in_ride';
   const canNavigate = (status === 'to_passenger' && !!origin) || (status === 'in_ride' && !!currentDestination);
@@ -736,8 +761,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 
       <RouteMap
         origin={origin}
-        destination={status === 'in_ride' ? currentDestination : undefined}
-        route={activeRoute}
+        destination={currentDestination}
+        route={status === 'in_ride' ? activeRoute : tripPreview}
         approachRoute={approachLine}
         secondaryRoute={pickupLine}
         restrictToSinop
@@ -747,13 +772,20 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         style={styles.map}
       />
 
-      {/* Status pill */}
-      <View style={[styles.statusPill, { borderColor: config.color + '44', top: insets.top + 8 }]}>
-        <View style={[styles.statusDot, { backgroundColor: config.color }]} />
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.statusLabel, { color: config.color }]}>{config.label}</Text>
-          <Text style={styles.statusSub} numberOfLines={1}>{config.sub}</Text>
+      {/* Status pill and panic button, one row of the same height */}
+      <View style={[styles.topRow, { top: insets.top + 8 }]} pointerEvents="box-none">
+        <View style={[styles.statusPill, { borderColor: config.color + '44' }]}>
+          <View style={[styles.statusDot, { backgroundColor: config.color }]} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.statusLabel, { color: config.color }]} numberOfLines={1}>{config.label}</Text>
+            <Text style={styles.statusSub} numberOfLines={1}>{config.sub}</Text>
+          </View>
         </View>
+        {status !== 'completed' && (
+          <TouchableOpacity style={styles.panicTop} onPress={onPanic} activeOpacity={0.8} accessibilityLabel="Emergência">
+            <AlertTriangle size={20} color={Colors.danger} />
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Next turn, measured along the route from the car */}
@@ -774,8 +806,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       )}
 
       {/* Bottom sheet */}
-      <View style={[styles.bottomSheet, { paddingBottom: insets.bottom + 16 }]} onLayout={onSheetLayout}>
-        <View style={styles.handle} />
+      <View style={[styles.bottomSheet, { paddingBottom: insets.bottom + (compact ? 10 : 16) }, compact && { paddingTop: 8 }]} onLayout={onSheetLayout}>
+        <View style={[styles.handle, compact && { marginBottom: 8 }]} />
 
         {/* Progress bar — visible when route is active */}
         {status !== 'completed' && status !== 'passenger_pickup' && progressPct > 0 && (
@@ -788,8 +820,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         )}
 
         {/* Passenger info */}
-        <View style={styles.passengerRow}>
-          <Avatar name={counterpart?.name ?? 'Passageiro'} size={50} />
+        <View style={[styles.passengerRow, compact && { marginBottom: 8 }]}>
+          <Avatar name={counterpart?.name ?? 'Passageiro'} size={compact ? 40 : 50} />
           <View style={{ flex: 1 }}>
             <Text style={styles.passengerName}>{counterpart?.name ?? 'Passageiro'}</Text>
             <Text style={styles.passengerRating}>
@@ -808,14 +840,11 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
                 </View>
               )}
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.callBtn, styles.panicBtn]} onPress={onPanic}>
-              <AlertTriangle size={16} color={Colors.danger} />
-            </TouchableOpacity>
           </View>
         </View>
 
         {/* Route card */}
-        <Card style={styles.routeCard}>
+        <Card style={[styles.routeCard, compact && { padding: 10, marginBottom: 10 }]}>
           <View style={styles.routePoint}>
             <View style={[styles.routeDot, { backgroundColor: Colors.success }]} />
             <Text style={styles.routePointAddr} numberOfLines={1}>
@@ -864,15 +893,15 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
               <DollarSign size={14} color={Colors.success} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.fareLabel}>Valor da corrida</Text>
-                {paymentMethod && (
+                {paymentMethod && !compact && (
                   <Text style={styles.fareSub}>Recebimento: {PAYMENT_LABEL[paymentMethod] ?? paymentMethod}</Text>
                 )}
               </View>
               <Text style={styles.fareValue}>{fmtMoney(fare)}</Text>
             </View>
           )}
-          {/* ETA row */}
-          {etaText && status !== 'passenger_pickup' && status !== 'completed' && (
+          {/* ETA row (the status pill already shows it on short phones) */}
+          {!compact && etaText && status !== 'passenger_pickup' && status !== 'completed' && (
             <View style={styles.etaRow}>
               <Clock size={12} color={Colors.primary} />
               <Text style={styles.etaTxt}>{etaText}</Text>
@@ -1032,7 +1061,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
                 </TouchableOpacity>
               ))}
 
-              <Text style={[styles.sectionLabel, { marginTop: 16 }]}>Descreva o que aconteceu *</Text>
+              <Text style={[styles.sectionLabel, { marginTop: 16 }]}>{needsDetail ? 'Descreva o que aconteceu *' : 'Detalhes (opcional)'}</Text>
               <TextInput
                 style={styles.descInput}
                 placeholder="Explique com detalhes o motivo do cancelamento..."
@@ -1074,11 +1103,22 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: Colors.background },
   map: { ...StyleSheet.absoluteFillObject },
-  statusPill: {
-    position: 'absolute', alignSelf: 'center',
+  topRow: {
+    position: 'absolute', left: 16, right: 16, height: TOP_ROW_HEIGHT,
     flexDirection: 'row', alignItems: 'center', gap: 10,
-    backgroundColor: Colors.card + 'EE', paddingHorizontal: 16, paddingVertical: 10,
-    borderRadius: Radius.full, borderWidth: 1, maxWidth: '80%',
+  },
+  statusPill: {
+    flex: 1, height: TOP_ROW_HEIGHT,
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: Colors.card + 'F2', paddingHorizontal: 18,
+    borderRadius: TOP_ROW_HEIGHT / 2, borderWidth: 1,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.12, shadowRadius: 8, elevation: 5,
+  },
+  panicTop: {
+    width: TOP_ROW_HEIGHT, height: TOP_ROW_HEIGHT, borderRadius: TOP_ROW_HEIGHT / 2,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FFF1F1', borderWidth: 1.5, borderColor: Colors.danger + '66',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.12, shadowRadius: 8, elevation: 5,
   },
   statusDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
   statusLabel: { ...Typography.smallMedium, fontWeight: '600' },
@@ -1120,7 +1160,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary + '22', alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: Colors.primary + '33',
   },
-  panicBtn: { backgroundColor: Colors.danger + '1A', borderColor: Colors.danger + '55' },
   chatBadge: {
     position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8,
     backgroundColor: Colors.danger, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3,

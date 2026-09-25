@@ -198,13 +198,14 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     setRideStatus(status === 'driver_arrived' ? 'arrived' : status === 'in_progress' ? 'in_ride' : 'on_way');
   }, [status]);
 
-  // Só mostra/calcula a rota da viagem depois que o passageiro embarca.
+  // The trip route (pickup → destination) is on the map from the start, so the
+  // passenger sees the whole ride and not only a lone pin.
   useEffect(() => {
-    if (rideStatus !== 'in_ride' || !origin || !destination) return;
+    if (!origin || !destination) return;
     let active = true;
     getRoute(origin, destination).then((r) => { if (active && r) setRoute(r.geometry); }).catch(() => {});
     return () => { active = false; };
-  }, [rideStatus, origin?.[0], origin?.[1], destination?.[0], destination?.[1]]);
+  }, [origin?.[0], origin?.[1], destination?.[0], destination?.[1]]);
 
   // Localização do motorista ao vivo (poll a cada 4s) + linha até o embarque.
   useEffect(() => {
@@ -218,6 +219,24 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     const iv = setInterval(tick, 4000);
     return () => { active = false; clearInterval(iv); };
   }, [rideId]);
+
+  // Street route from the car to the pickup while the driver is coming, asked
+  // again only after the car moved ~150 m.
+  const [approach, setApproach] = useState<{ type: 'LineString'; coordinates: [number, number][] } | null>(null);
+  const [approachMin, setApproachMin] = useState<number | null>(null);
+  const approachFromRef = useRef<[number, number] | null>(null);
+  useEffect(() => {
+    if (rideStatus !== 'on_way' || !driverLoc || !origin) {
+      if (rideStatus !== 'on_way') setApproach(null);
+      return;
+    }
+    const last = approachFromRef.current;
+    if (last && Math.abs(last[0] - driverLoc[0]) + Math.abs(last[1] - driverLoc[1]) < 0.0015) return;
+    approachFromRef.current = driverLoc;
+    let active = true;
+    getRoute(driverLoc, origin).then((r) => { if (active && r) { setApproach(r.geometry); setApproachMin(r.durationMin); } }).catch(() => {});
+    return () => { active = false; };
+  }, [rideStatus, driverLoc?.[0], driverLoc?.[1], origin?.[0], origin?.[1]]);
 
   // Real driver contact (name / phone / vehicle).
   const [counterpart, setCounterpart] = useState<RideCounterpart | null>(null);
@@ -254,6 +273,9 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
   const [cancelDescription, setCancelDescription] = useState('');
+  // Only "Outro motivo" needs a written reason; the others already say it.
+  const needsCancelDetail = cancelReason === 'Outro motivo';
+  const canConfirmCancel = !!cancelReason && (!needsCancelDetail || cancelDescription.trim().length > 0);
   const [cancelling, setCancelling] = useState(false);
   const [unreadCount, setUnreadCount] = useState(0);
   const chatOpenRef = useRef(false);
@@ -307,10 +329,11 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
   };
 
   const confirmCancel = async () => {
-    if (!cancelReason || !cancelDescription.trim() || cancelling) return;
+    if (!canConfirmCancel || cancelling) return;
     setCancelling(true);
     try {
-      const result = await onCancel(`[${cancelReason}] ${cancelDescription.trim()}`);
+      const detail = cancelDescription.trim();
+      const result = await onCancel(detail ? `[${cancelReason}] ${detail}` : cancelReason);
       if (result !== false) {
         setCancelOpen(false);
         setCancelReason('');
@@ -322,9 +345,10 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
   };
 
   // Live ETA to pickup, computed from the driver's last known position.
-  const pickupEtaMin = driverLoc && origin
-    ? Math.max(1, Math.round((haversineKm(driverLoc, origin) / 30) * 60))
-    : null;
+  // Road time from the approach route, else straight line at 30 km/h. Anything
+  // over an hour means a stale or wrong driver position, so show no number.
+  const rawEtaMin = approachMin ?? (driverLoc && origin ? (haversineKm(driverLoc, origin) / 30) * 60 : null);
+  const pickupEtaMin = rawEtaMin != null && rawEtaMin <= 60 ? Math.max(1, Math.round(rawEtaMin)) : null;
 
   // Trip progress and time left, from the driver's last known position.
   const rideProgress = rideStatus === 'in_ride' && route && driverLoc
@@ -348,8 +372,9 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
       {/* Mapa (Mapbox no dev build; placeholder no Expo Go) com a rota traçada */}
       <RouteMap
         origin={origin}
-        destination={rideStatus === 'in_ride' ? destination : undefined}
-        route={rideStatus === 'in_ride' ? route : null}
+        destination={destination}
+        route={route}
+        approachRoute={approach}
         restrictToSinop
         driverLocation={driverLoc ?? undefined}
         {...mapPadding}
@@ -557,7 +582,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
                   <Text style={[styles.reasonTxt, cancelReason === reason && { color: Colors.danger, fontFamily: 'Poppins_600SemiBold' }]}>{reason}</Text>
                 </TouchableOpacity>
               ))}
-              <Text style={[styles.reportSub, { marginTop: 14 }]}>Detalhe o motivo *</Text>
+              <Text style={[styles.reportSub, { marginTop: 14 }]}>{needsCancelDetail ? 'Detalhe o motivo *' : 'Detalhes (opcional)'}</Text>
               <TextInput
                 style={styles.cancelInput}
                 placeholder="Explique brevemente..."
@@ -573,9 +598,9 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
                 <Text style={styles.dismissCancelTxt}>Voltar</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.confirmCancelBtn, (!cancelReason || !cancelDescription.trim() || cancelling) && styles.confirmCancelDisabled]}
+                style={[styles.confirmCancelBtn, (!canConfirmCancel || cancelling) && styles.confirmCancelDisabled]}
                 onPress={confirmCancel}
-                disabled={!cancelReason || !cancelDescription.trim() || cancelling}
+                disabled={!canConfirmCancel || cancelling}
               >
                 <Text style={styles.confirmCancelTxt}>{cancelling ? 'Cancelando...' : 'Confirmar cancelamento'}</Text>
               </TouchableOpacity>

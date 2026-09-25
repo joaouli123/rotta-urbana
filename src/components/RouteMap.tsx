@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ViewStyle, useWindowDimensions, type LayoutChangeEvent } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../constants';
@@ -162,6 +162,8 @@ function useMapLimits(enabled: boolean): MapLimits | null {
 
 const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, paddingRight, driverLocation, secondaryRoute, approachRoute, style }) => {
   const limits = useMapLimits(restrictToSinop);
+  // Last frame sent to the camera; see the framing below.
+  const frameRef = useRef<{ bbox: number[]; pad: string; bounds: any } | null>(null);
 
   if (!MAP_READY) {
     return (
@@ -180,44 +182,56 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
   const follow = !restrictToSinop && !!followUser && !origin && !destination && !route;
   const pad = { paddingTop: paddingTop ?? 0, paddingBottom: paddingBottom ?? 0, paddingLeft: 0, paddingRight: paddingRight ?? 0 };
 
-  // Frame the WHOLE trip when we have a route or both endpoints.
-  // Also extend bounds to include the live driver position so the pin stays on screen.
-  const basePts: LngLat[] =
-    route && route.coordinates.length > 1 ? [...route.coordinates]
-      : (origin && destination ? [origin, destination] : origin && driverLocation ? [origin] : []);
-  if (approachRoute && approachRoute.coordinates.length > 1) basePts.push(...approachRoute.coordinates);
-  if (driverLocation && basePts.length > 0) basePts.push(driverLocation);
-  const framePts: LngLat[] | null = basePts.length > 1 ? basePts : null;
+  // Frame every line and pin of the trip, plus the live car so it stays on screen.
+  const framePts: LngLat[] = [];
+  for (const line of [route, approachRoute, secondaryRoute]) {
+    if (line && line.coordinates.length > 1) framePts.push(...line.coordinates);
+  }
+  if (origin) framePts.push(origin);
+  if (destination) framePts.push(destination);
+  if (driverLocation && framePts.length > 0) framePts.push(driverLocation);
   let bounds: any = null;
-  let boundsKey = 'static';
-  if (framePts) {
+  if (framePts.length > 1) {
     let minLng = Infinity, minLat = Infinity, maxLng = -Infinity, maxLat = -Infinity;
     for (const [lng, lat] of framePts) {
       minLng = Math.min(minLng, lng); maxLng = Math.max(maxLng, lng);
       minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
     }
-    // Caller padding is authoritative (it already accounts for the bottom sheet).
-    // Add only a small margin so the pins aren't glued to the edges.
-    bounds = {
-      ne: [maxLng, maxLat], sw: [minLng, minLat],
-      paddingTop: (paddingTop ?? 0) + 24, paddingBottom: (paddingBottom ?? 0) + 24,
-      paddingLeft: 40, paddingRight: (paddingRight ?? 0) + 40,
-    };
-    boundsKey = [
-      origin?.map((n) => n.toFixed(5)).join(',') ?? 'no-origin',
-      destination?.map((n) => n.toFixed(5)).join(',') ?? 'no-destination',
-      route?.coordinates.length ?? 0,
-      paddingTop ?? 0,
-      paddingBottom ?? 0,
-      paddingRight ?? 0,
-    ].join(':');
+    const bbox = [minLng, minLat, maxLng, maxLat];
+    const padKey = `${paddingTop ?? 0}:${paddingBottom ?? 0}:${paddingRight ?? 0}`;
+    // Routes are trimmed and the car moves every second. A new frame on each
+    // fix kept the camera flying around; it only moves when the frame changed
+    // by more than 12% of its size (or at least ~50 m).
+    const prev = frameRef.current;
+    const tolLng = Math.max(0.0005, (maxLng - minLng) * 0.12);
+    const tolLat = Math.max(0.0005, (maxLat - minLat) * 0.12);
+    const same = !!prev && prev.pad === padKey && prev.bbox.every((v, i) =>
+      Math.abs(v - bbox[i]) <= (i % 2 === 0 ? tolLng : tolLat));
+    if (same) {
+      bounds = prev!.bounds;
+    } else {
+      // Caller padding is authoritative (it already accounts for the bottom sheet).
+      // Add only a small margin so the pins aren't glued to the edges.
+      bounds = {
+        ne: [maxLng, maxLat], sw: [minLng, minLat],
+        paddingTop: (paddingTop ?? 0) + 24, paddingBottom: (paddingBottom ?? 0) + 24,
+        paddingLeft: 40, paddingRight: (paddingRight ?? 0) + 40,
+      };
+      frameRef.current = { bbox, pad: padKey, bounds };
+    }
+  } else {
+    frameRef.current = null;
   }
 
   // The admin-configured area replaces the old hardcoded Sinop rectangle.
   // No limit is applied until the shared one is resolved: a provisional
   // rectangle would clamp this map differently from the others.
   const serviceArea = limits?.area ?? DEFAULT_SERVICE_AREA;
-  const mapCenter = restrictToSinop ? serviceArea.center : center;
+  // A single known point (the pickup, a car) is the place to show; the middle
+  // of the service area only when there is nothing else.
+  const pinned = origin ?? destination ?? driverLocation;
+  const mapCenter = pinned ?? (restrictToSinop ? serviceArea.center : center);
+  const pinnedZoom = 15.5;
   const maxBounds = limits?.bounds;
   const minZoomLevel = limits?.minZoom;
   const minServiceZoom = minZoomFor(serviceArea);
@@ -225,14 +239,13 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
   return (
     <Mapbox.MapView style={[{ flex: 1 }, style]} styleURL={Mapbox.StyleURL.Street} logoEnabled={false} compassEnabled={false}>
       {bounds ? (
-        // key is based on the destination only — it forces a re-mount (hard animation) when
-        // the user picks a new destination, but NOT on every driver location poll.
+        // A new bounds object animates the camera; the same one leaves it alone.
+        // No service-area limit here: a trip point outside it (a driver coming
+        // from far) was clamped away and the map showed a random corner.
         <Mapbox.Camera
-          key={boundsKey}
+          key="frame"
           bounds={bounds}
-          maxBounds={maxBounds}
-          minZoomLevel={minZoomLevel}
-          maxZoomLevel={15.5}
+          maxZoomLevel={16}
           animationDuration={700}
         />
       ) : follow ? (
@@ -246,7 +259,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
           animationDuration={700}
         />
       ) : (
-        <Mapbox.Camera zoomLevel={Math.min(15, minServiceZoom + 3.5)} centerCoordinate={mapCenter} maxBounds={maxBounds} minZoomLevel={minZoomLevel} padding={pad} animationDuration={700} />
+        <Mapbox.Camera zoomLevel={pinned ? pinnedZoom : Math.min(15, minServiceZoom + 3.5)} centerCoordinate={mapCenter} maxBounds={maxBounds} minZoomLevel={minZoomLevel} padding={pad} animationDuration={700} />
       )}
       {/* Stable location dot (default puck, no spinning heading arrow). */}
       <Mapbox.UserLocation visible androidRenderMode="normal" />
