@@ -3,6 +3,7 @@
 // ignores bounds, so the web app showed no route and a map zoomed out on
 // another continent.
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+// @ts-expect-error react-dom ships without types here; only createPortal is used.
 import { createPortal } from 'react-dom';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';

@@ -42,6 +42,29 @@ export async function pickFromGallery(): Promise<PickedFile | null> {
   return { base64: validate(r.assets?.[0]?.base64), contentType: 'image/jpeg', ext: 'jpg' };
 }
 
+/** Square profile photo: camera (front) or gallery, cropped by the picker. */
+export function pickProfilePhoto(): Promise<PickedFile | null> {
+  const opts = { quality: 0.5, base64: true, allowsEditing: true, aspect: [1, 1] as [number, number] };
+  const run = async (camera: boolean) => {
+    const perm = camera
+      ? await ImagePicker.requestCameraPermissionsAsync()
+      : await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) throw new Error(camera ? 'Permita o acesso à câmera para tirar a foto.' : 'Permita o acesso à galeria para enviar a imagem.');
+    const r = camera
+      ? await ImagePicker.launchCameraAsync({ ...opts, cameraType: ImagePicker.CameraType.front })
+      : await ImagePicker.launchImageLibraryAsync({ ...opts, mediaTypes: ['images'] });
+    if (r.canceled) return null;
+    return { base64: validate(r.assets?.[0]?.base64), contentType: 'image/jpeg', ext: 'jpg' };
+  };
+  return new Promise((resolve, reject) => {
+    Alert.alert('Foto de perfil', 'Os passageiros verão esta foto na corrida.', [
+      { text: 'Tirar foto', onPress: () => run(true).then(resolve, reject) },
+      { text: 'Galeria', onPress: () => run(false).then(resolve, reject) },
+      { text: 'Cancelar', style: 'cancel', onPress: () => resolve(null) },
+    ], { cancelable: true, onDismiss: () => resolve(null) });
+  });
+}
+
 /** Pick any file (PDF or image) from the device's files. */
 export async function pickFromFiles(): Promise<PickedFile | null> {
   const r = await DocumentPicker.getDocumentAsync({

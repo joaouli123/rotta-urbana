@@ -451,6 +451,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
               driverName={driverName}
               vehicleInfo={vehicleInfo}
               rating={counterpart?.rating ?? 5}
+              photoUrl={counterpart?.avatarUrl ?? undefined}
               onPressName={() => setProfileOpen(true)}
               onPhone={callNow}
               onChat={openChat}
@@ -472,6 +473,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
               driverName={driverName}
               vehicleInfo={vehicleInfo}
               rating={counterpart?.rating ?? 5}
+              photoUrl={counterpart?.avatarUrl ?? undefined}
               onPressName={() => setProfileOpen(true)}
               onPhone={callNow}
               onChat={openChat}
@@ -715,7 +717,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
             <ScrollView showsVerticalScrollIndicator={false}>
               {/* Driver info */}
               <View style={styles.profileInfo}>
-                <Avatar name={driverName} size={60} />
+                <Avatar name={driverName} size={60} imageUrl={counterpart?.avatarUrl ?? undefined} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.profileName}>{driverName}</Text>
                   <Text style={styles.profileVehicle}>{vehicleInfo}</Text>
@@ -752,15 +754,16 @@ const DriverCard: React.FC<{
   driverName: string;
   vehicleInfo: string;
   rating: number;
+  photoUrl?: string;
   onPressName: () => void;
   onPhone: () => void;
   onChat: () => void;
   unreadCount: number;
-}> = ({ driverName, vehicleInfo, rating, onPressName, onPhone, onChat, unreadCount }) => (
+}> = ({ driverName, vehicleInfo, rating, photoUrl, onPressName, onPhone, onChat, unreadCount }) => (
   <View style={styles.driverCard}>
     {/* Top row: avatar + name + rating (tappable for profile) */}
     <TouchableOpacity style={styles.driverInfo} onPress={onPressName} activeOpacity={0.75}>
-      <Avatar name={driverName} size={48} />
+      <Avatar name={driverName} size={48} imageUrl={photoUrl} />
       <View style={{ flex: 1 }}>
         <View style={styles.driverNameRow}>
           <Text style={styles.driverName}>{driverName}</Text>

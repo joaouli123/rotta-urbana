@@ -1,4 +1,6 @@
+import { decode } from 'base64-arraybuffer';
 import { supabase } from '../lib/supabase';
+import type { PickedFile } from '../lib/filePick';
 import type { ProfileRow } from '../types/db';
 
 export async function updateProfile(patch: Partial<Pick<ProfileRow, 'full_name' | 'phone' | 'avatar_url'>>): Promise<ProfileRow> {
@@ -8,6 +10,23 @@ export async function updateProfile(patch: Partial<Pick<ProfileRow, 'full_name' 
     .from('profiles').update(patch).eq('id', u.user.id).select().single();
   if (error) throw error;
   return data as ProfileRow;
+}
+
+/**
+ * Uploads a profile photo to the public avatars bucket and saves its URL on
+ * the profile. The ?v= makes the ride screens load the new photo instead of a
+ * cached one at the same path.
+ */
+export async function uploadMyAvatar(file: PickedFile): Promise<string> {
+  const { data: u } = await supabase.auth.getUser();
+  if (!u?.user) throw new Error('not authenticated');
+  const path = `${u.user.id}/avatar.jpg`;
+  const { error } = await supabase.storage.from('avatars')
+    .upload(path, decode(file.base64), { contentType: file.contentType, upsert: true });
+  if (error) throw error;
+  const url = `${supabase.storage.from('avatars').getPublicUrl(path).data.publicUrl}?v=${Date.now()}`;
+  await updateProfile({ avatar_url: url });
+  return url;
 }
 
 /**

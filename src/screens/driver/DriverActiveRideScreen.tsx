@@ -909,7 +909,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         </View>
 
         {/* Route card */}
-        <Card style={[styles.routeCard, compact && { padding: 10, marginBottom: 10 }]}>
+        <Card style={compact ? { ...styles.routeCard, padding: 10, marginBottom: 10 } : styles.routeCard}>
           <View style={styles.routePoint}>
             <View style={[styles.routeDot, { backgroundColor: Colors.success }]} />
             <Text style={styles.routePointAddr} numberOfLines={1}>

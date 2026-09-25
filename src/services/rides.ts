@@ -244,6 +244,7 @@ export async function getRidePoints(rideId: string): Promise<RidePoints | null> 
 export interface RideCounterpart {
   name: string; phone: string | null; rating: number;
   vehicleModel: string | null; vehiclePlate: string | null;
+  avatarUrl: string | null;
 }
 
 /** The other party of a ride (driver for a passenger, passenger for a driver). */
@@ -254,6 +255,7 @@ export async function getRideCounterpart(rideId: string): Promise<RideCounterpar
   return r ? {
     name: r.name, phone: r.phone, rating: Number(r.rating) || 5,
     vehicleModel: r.vehicle_model, vehiclePlate: r.vehicle_plate,
+    avatarUrl: r.avatar_url ?? null,
   } : null;
 }
 

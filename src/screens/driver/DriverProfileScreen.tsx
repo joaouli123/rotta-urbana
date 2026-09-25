@@ -8,8 +8,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ChevronLeft, Star, Navigation, DollarSign, Clock, Shield,
   FileText, CreditCard, HelpCircle, LogOut, ChevronRight,
-  CheckCircle, AlertCircle, User, Trash2,
+  CheckCircle, AlertCircle, User, Trash2, Camera,
 } from 'lucide-react-native';
+import { pickProfilePhoto } from '../../lib/filePick';
+import { uploadMyAvatar } from '../../services/profile';
 import { Avatar, Rating } from '../../components/ui';
 import { Colors, Radius, Typography, Legal } from '../../constants';
 import { supabase } from '../../lib/supabase';
@@ -65,6 +67,21 @@ const DriverProfileScreen: React.FC<DriverProfileScreenProps> = ({
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const changePhoto = async () => {
+    try {
+      const file = await pickProfilePhoto();
+      if (!file) return;
+      setUploadingPhoto(true);
+      const url = await uploadMyAvatar(file);
+      setProfile((p) => (p ? { ...p, avatar_url: url } : p));
+    } catch (e: any) {
+      Alert.alert('Foto de perfil', e?.message || 'Não foi possível enviar a foto. Tente novamente.');
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   const confirmLogout = () => {
     Alert.alert('Sair da conta', 'Deseja realmente sair?', [
@@ -137,14 +154,17 @@ const DriverProfileScreen: React.FC<DriverProfileScreenProps> = ({
 
           {/* Profile header — dark hero for readability */}
           <LinearGradient colors={[Colors.darkElevated, Colors.dark]} style={styles.headerGrad}>
-            <View style={styles.avatarWrap}>
-              <Avatar name={profile?.full_name ?? 'Motorista'} size={88} />
+            <TouchableOpacity style={styles.avatarWrap} onPress={changePhoto} activeOpacity={0.8} disabled={uploadingPhoto}>
+              <Avatar name={profile?.full_name ?? 'Motorista'} size={88} imageUrl={profile?.avatar_url ?? undefined} />
+              <View style={styles.photoBadge}>
+                {uploadingPhoto ? <ActivityIndicator size="small" color="#fff" /> : <Camera size={14} color="#fff" />}
+              </View>
               {driver?.is_verified && (
                 <View style={styles.verifiedBadge}>
                   <CheckCircle size={16} color={Colors.success} />
                 </View>
               )}
-            </View>
+            </TouchableOpacity>
             <Text style={styles.driverName}>{profile?.full_name ?? 'Motorista'}</Text>
             <View style={styles.starsRow}>
               {[1,2,3,4,5].map(s => (
@@ -250,6 +270,11 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   avatarWrap: { position: 'relative', marginBottom: 14 },
+  photoBadge: {
+    position: 'absolute', bottom: 0, left: 0, width: 28, height: 28, borderRadius: 14,
+    backgroundColor: Colors.primary, alignItems: 'center', justifyContent: 'center',
+    borderWidth: 2, borderColor: Colors.dark,
+  },
   verifiedBadge: {
     position: 'absolute', bottom: 0, right: 0, backgroundColor: Colors.surface,
     borderRadius: 10, padding: 1,
