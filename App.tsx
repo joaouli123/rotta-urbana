@@ -37,6 +37,10 @@ class AppErrorBoundary extends React.Component<
           <Text style={{ color: '#555555', fontSize: 14, textAlign: 'center', lineHeight: 21, marginBottom: 22 }}>
             Tente carregar novamente. Sua sessão e seus dados continuam protegidos.
           </Text>
+          {/* Shown so a screenshot from a release build tells us what broke. */}
+          <Text style={{ color: '#999999', fontSize: 11, textAlign: 'center', marginBottom: 18 }} numberOfLines={4} selectable>
+            {String(this.state.error.message || this.state.error).slice(0, 300)}
+          </Text>
           <TouchableOpacity
             style={{ backgroundColor: '#6DC228', borderRadius: 12, paddingVertical: 14, paddingHorizontal: 28 }}
             onPress={() => this.setState({ error: null })}

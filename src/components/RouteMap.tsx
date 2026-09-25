@@ -19,6 +19,17 @@ try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const mod = require('@rnmapbox/maps');
   Mapbox = mod?.default ?? mod;
+  // The web build of @rnmapbox/maps only ships MapView, Camera and MarkerView;
+  // rendering an undefined component takes the whole screen down.
+  if (Mapbox?.MapView) {
+    const Nothing = () => null;
+    const parts = ['Camera', 'UserLocation', 'PointAnnotation', 'ShapeSource', 'LineLayer'];
+    const missing = parts.filter((p) => !Mapbox[p]);
+    if (missing.length) {
+      Mapbox = { ...Mapbox, ...Object.fromEntries(missing.map((p) => [p, Nothing])) };
+    }
+    if (!Mapbox.StyleURL?.Street) Mapbox = { ...Mapbox, StyleURL: { ...Mapbox.StyleURL, Street: 'mapbox://styles/mapbox/streets-v12' } };
+  }
   const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
   if (Mapbox?.setAccessToken && token) {
     Mapbox.setAccessToken(token);          // throws in Expo Go (no native module)
