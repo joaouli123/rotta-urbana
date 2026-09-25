@@ -2085,6 +2085,7 @@ export function cardFormPage({ publicKey = '' } = {}) {
 <body>
 <div id="status">Carregando o formulário seguro do Mercado Pago…</div>
 <div id="cardPaymentBrick_container"></div>
+<script src="https://www.mercadopago.com/v2/security.js" view="checkout"></script>
 <script src="https://sdk.mercadopago.com/js/v2"></script>
 <script>
 (function () {
