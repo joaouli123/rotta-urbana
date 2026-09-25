@@ -7,7 +7,14 @@ import { privacyPolicyPage, deleteAccountPage } from './policies.js';
 import * as emailService from './emailService.js';
 import { registerManagerRoutes } from './managerRoutes.js';
 import { registerManagerPortalRoutes } from './managerPortalRoutes.js';
-import { expireOverdueSubscriptions, registerMercadoPagoRoutes, syncPaymentForAdmin, syncSubscriptionForDriver } from './paymentRoutes.js';
+import {
+  amountFromSettings,
+  expireOverdueSubscriptions,
+  registerMercadoPagoRoutes,
+  retryPendingCancelsQuietly,
+  syncPaymentForAdmin,
+  syncSubscriptionForDriver,
+} from './paymentRoutes.js';
 import { loadUserBundle, resetUserPassword, updateDriverProfile, updateUserProfile } from './userAdmin.js';
 import { syncServiceAreaBoundary } from './serviceAreaBoundary.js';
 
@@ -966,16 +973,34 @@ adminRouter.post('/drivers/:id/reset-password', requireAuth, async (req, res) =>
 // ─── Driver Plan / Subscription Change ──────────────────────────────────────
 adminRouter.get('/drivers/:id/plan', requireAuth, async (req, res) => {
   const id = req.params.id;
-  const [{ data: profile }, { data: sub }, { data: settings }] = await Promise.all([
+  const [{ data: profile }, { data: sub }, { data: settings }, { data: driver }, { data: vehicles }] = await Promise.all([
     admin.from('profiles').select('*').eq('id', id).single(),
     admin.from('subscriptions').select('*').eq('driver_id', id).maybeSingle(),
     admin.from('app_settings').select('*').eq('id', 1).single(),
+    admin.from('drivers').select('plan_segment').eq('id', id).maybeSingle(),
+    admin.from('vehicles').select('type').eq('driver_id', id)
+      .order('is_primary', { ascending: false }).order('created_at').limit(1),
   ]);
 
   if (!profile) return res.status(404).send('Motorista não encontrado.');
 
   const s = sub ?? {};
   const set = settings ?? {};
+  const vehicleType = vehicles?.[0]?.type ?? null;
+  // The saved category, unless it does not fit the vehicle (a moto pays moto
+  // prices and a car never does), as driver_plan_segment_for in the database.
+  const storedSegment = s.plan_segment || driver?.plan_segment || null;
+  const fitsVehicle = (seg) => !vehicleType || (vehicleType === 'moto' ? seg === 'moto' : seg !== 'moto');
+  const segment = storedSegment && fitsVehicle(storedSegment) ? storedSegment : (vehicleType === 'moto' ? 'moto' : 'economy');
+  const segmentLabels = { moto: 'Moto', economy: 'Econômico', comfort: 'Conforto', premium: 'Premium' };
+  const priceCell = (plan, seg) => {
+    const value = amountFromSettings(set, plan, seg);
+    return value > 0 ? `R$ ${value.toFixed(2).replace('.', ',')}` : '<span style="color:var(--mut)">sem preço</span>';
+  };
+  const priceRows = Object.entries(segmentLabels).map(([seg, label]) => `
+    <tr${seg === segment ? ' style="font-weight:700;"' : ''}>
+      <td>${label}</td><td>${priceCell('daily', seg)}</td><td>${priceCell('weekly', seg)}</td><td>${priceCell('monthly', seg)}</td>
+    </tr>`).join('');
 
   const body = `
     <div style="margin-bottom:16px;">
@@ -984,18 +1009,34 @@ adminRouter.get('/drivers/:id/plan', requireAuth, async (req, res) => {
     <div class="card" style="max-width:600px;margin:0 auto;">
       <h2>Gerenciar Plano do Motorista</h2>
       <p style="color:var(--mut);font-size:14px;margin-bottom:20px;">Altere o plano e o status da assinatura do motorista <strong>${esc(profile.full_name)}</strong>.</p>
-      
+      ${req.query.error ? `<div class="err">${esc(String(req.query.error))}</div>` : ''}
+
       <form method="post" action="/drivers/${id}/plan">
         <div class="row2">
           <div>
             <label>Selecione o Plano</label>
             <select name="plan" style="font-weight:600;">
               <option value="commission" ${s.plan === 'commission' ? 'selected' : ''}>Por corrida (${set.commission_pct ?? 15}% por corrida)</option>
-              <option value="daily" ${s.plan === 'daily' ? 'selected' : ''}>Diária (R$ ${Number(set.subscription_daily_amount ?? 3).toFixed(2)})</option>
-              <option value="weekly" ${s.plan === 'weekly' ? 'selected' : ''}>Semanal (R$ ${Number(set.plan_weekly_price || 12.5).toFixed(2)})</option>
-              <option value="monthly" ${s.plan === 'monthly' || !s.plan ? 'selected' : ''}>Mensal (R$ ${Number(set.subscription_monthly_amount || 49.9).toFixed(2)})</option>
+              <option value="daily" ${s.plan === 'daily' ? 'selected' : ''}>Diária (pagamento avulso)</option>
+              <option value="weekly" ${s.plan === 'weekly' ? 'selected' : ''}>Semanal (pagamento avulso)</option>
+              <option value="monthly" ${s.plan === 'monthly' || !s.plan ? 'selected' : ''}>Mensal (assinatura)</option>
             </select>
           </div>
+          <div>
+            <label>Categoria do Plano</label>
+            <select name="segment" style="font-weight:600;">
+              ${Object.entries(segmentLabels).map(([seg, label]) => `<option value="${seg}" ${seg === segment ? 'selected' : ''}>${label}</option>`).join('')}
+            </select>
+            <div style="color:var(--mut);font-size:12px;margin-top:4px;">Veículo principal: ${vehicleType ? esc(segmentLabels[vehicleType] || vehicleType) : 'não cadastrado'}</div>
+          </div>
+        </div>
+
+        <table style="width:100%;margin-top:16px;font-size:13px;">
+          <thead><tr><th style="text-align:left;">Categoria</th><th style="text-align:left;">Diária</th><th style="text-align:left;">Semanal</th><th style="text-align:left;">Mensal</th></tr></thead>
+          <tbody>${priceRows}</tbody>
+        </table>
+
+        <div class="row2" style="margin-top:16px;">
           <div>
             <label>Status da Assinatura</label>
             <select name="status" style="font-weight:600;">
@@ -1005,12 +1046,13 @@ adminRouter.get('/drivers/:id/plan', requireAuth, async (req, res) => {
               <option value="suspended" ${s.status === 'suspended' ? 'selected' : ''}>Suspenso</option>
             </select>
           </div>
+          <div>
+            <label>Vence em (último dia liberado)</label>
+            <input type="date" name="due_date" value="${s.due_date ? String(s.due_date).slice(0,10) : ''}" style="font-weight:600;">
+            <div style="color:var(--mut);font-size:12px;margin-top:4px;">Em branco: hoje + 1, 7 ou 30 dias conforme o plano.</div>
+          </div>
         </div>
-
-        <div style="margin-top:16px;">
-          <label>Data de Vencimento da Assinatura</label>
-          <input type="date" name="due_date" value="${s.due_date ? String(s.due_date).slice(0,10) : new Date(Date.now() + 30*864e5).toISOString().slice(0,10)}" style="font-weight:600;">
-        </div>
+        <p style="color:var(--mut);font-size:12px;margin-top:12px;">Trocar o plano, a categoria ou tirar do status Ativo cancela a assinatura Mensal no Mercado Pago, se houver.</p>
 
         <div style="margin-top:24px;text-align:right;display:flex;gap:10px;justify-content:flex-end;">
           <a href="/drivers" class="act gray" style="padding:10px 18px;border-radius:10px;">Cancelar</a>
@@ -1024,30 +1066,27 @@ adminRouter.get('/drivers/:id/plan', requireAuth, async (req, res) => {
 
 adminRouter.post('/drivers/:id/plan', requireAuth, async (req, res) => {
   const id = req.params.id;
-  const { plan, status, due_date } = req.body;
+  const { plan, status, segment, due_date } = req.body;
 
-  const { data: set } = await admin.from('app_settings').select('*').eq('id', 1).single();
   const validPlans = new Set(['commission', 'daily', 'weekly', 'monthly']);
   const validStatuses = new Set(['pending', 'active', 'expired', 'suspended']);
-  if (!validPlans.has(String(plan)) || !validStatuses.has(String(status))) {
-    return res.redirect(`/drivers/${id}/plan?error=${encodeURIComponent('Plano ou status inválido.')}`);
+  const validSegments = new Set(['moto', 'economy', 'comfort', 'premium']);
+  if (!validPlans.has(String(plan)) || !validStatuses.has(String(status)) || !validSegments.has(String(segment))) {
+    return res.redirect(`/drivers/${id}/plan?error=${encodeURIComponent('Plano, categoria ou status inválido.')}`);
   }
-  const amount = plan === 'commission'
-    ? 0
-    : plan === 'daily'
-      ? Number(set?.subscription_daily_amount ?? 0)
-      : plan === 'weekly'
-        ? Number(set?.plan_weekly_price ?? 0)
-        : Number(set?.subscription_monthly_amount ?? 0);
-  const { error } = await admin.from('subscriptions').upsert({
-    driver_id: id,
-    plan,
-    status,
-    amount,
-    due_date: due_date || todayIso(),
-    paid_at: status === 'active' ? new Date().toISOString() : null,
+  const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(String(due_date || '')) ? String(due_date) : null;
+  // The function prices the plan by category, keeps one row per driver and
+  // queues the Mercado Pago subscription for cancelling when the plan changes.
+  const { error } = await admin.rpc('admin_set_driver_plan', {
+    p_driver_id: id,
+    p_plan: plan,
+    p_segment: segment,
+    p_status: status,
+    p_due_date: dueDate,
   });
-  res.redirect(error ? `/drivers/${id}/plan?error=${safeActionError(error)}` : '/drivers?ok=1');
+  if (error) return res.redirect(`/drivers/${id}/plan?error=${safeActionError(error)}`);
+  await retryPendingCancelsQuietly(admin, id);
+  res.redirect('/drivers?ok=1');
 });
 
 // ─── Driver Documents View ─────────────────────────────────────────────────
@@ -1436,9 +1475,13 @@ adminRouter.get('/payments', requireAuth, async (req, res) => {
   const commissionNames = await profileNames(commissionSource.map((row) => row.driver_id));
   const count = (status) => source.filter((p) => p.status === status).length;
   const notice = req.query.error ? `<div class="err">${esc(String(req.query.error))}</div>` : req.query.ok ? '<div class="ok">Operação concluída.</div>' : '';
+  // A pass (daily or weekly) is credited only by a Mercado Pago payment, so it
+  // has no manual Confirmar; Sincronizar looks it up even before it has a
+  // payment id (a Checkout Pro link is found by its reference).
+  const isPass = (p) => ['one_time_pass', 'one_time_daily'].includes(p.provider_metadata?.billing_model);
   const rows = pagePayments.map((p) => [
     `<strong>${esc(names[p.driver_id] ?? '—')}</strong><br><span class="muted">${esc(p.driver_id || '')}</span>`, brl(p.amount), esc(p.method || '—'), esc(p.provider || '—'), badge(p.status), esc(p.provider_status || '—'), p.paid_at ? fmtDate(p.paid_at) : '—', fmtDate(p.created_at),
-    `<div class="filters">${(p.provider_payment_id || p.provider_authorized_payment_id) ? `<form class="inline" method="post" action="/payments/${p.id}/sync">${iconBtnApprove('Sincronizar')}</form>` : ''}${p.status === 'pending' ? `<form class="inline" method="post" action="/payments/${p.id}/confirm" onsubmit="return confirm('Confirmar manualmente este pagamento?')">${iconBtnDollar('Confirmar')}</form><form class="inline" method="post" action="/payments/${p.id}/reject" onsubmit="return confirm('Marcar este pagamento como recusado?')">${iconBtnClose('Recusar')}</form>` : ''}</div>`,
+    `<div class="filters">${(p.provider_payment_id || p.provider_authorized_payment_id || isPass(p)) ? `<form class="inline" method="post" action="/payments/${p.id}/sync">${iconBtnApprove('Sincronizar')}</form>` : ''}${p.status === 'pending' && !isPass(p) ? `<form class="inline" method="post" action="/payments/${p.id}/confirm" onsubmit="return confirm('Confirmar manualmente este pagamento?')">${iconBtnDollar('Confirmar')}</form>` : ''}${p.status === 'pending' ? `<form class="inline" method="post" action="/payments/${p.id}/reject" onsubmit="return confirm('Marcar este pagamento como recusado?')">${iconBtnClose('Recusar')}</form>` : ''}</div>`,
   ]);
   const href = (status) => `/payments?status=${encodeURIComponent(status)}`;
   const filters = `<div class="card"><div class="filters"><a class="${statusFilter === 'all' ? 'on' : ''}" href="${href('all')}">Todos (${source.length})</a><a class="${statusFilter === 'pending' ? 'on' : ''}" href="${href('pending')}">Pendentes (${count('pending')})</a><a class="${statusFilter === 'approved' ? 'on' : ''}" href="${href('approved')}">Aprovados (${count('approved')})</a><a class="${statusFilter === 'rejected' ? 'on' : ''}" href="${href('rejected')}">Recusados (${count('rejected')})</a><a class="${statusFilter === 'refunded' ? 'on' : ''}" href="${href('refunded')}">Estornados (${count('refunded')})</a></div></div>`;

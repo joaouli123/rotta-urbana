@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { buildRecurringSchedule, createDailyPlanPreference } from './mercadoPago.js';
+import { buildRecurringSchedule, createPlanPassPreference } from './mercadoPago.js';
 import { applyDailyPlanPaymentWebhook } from './paymentRoutes.js';
 
 const originalFetch = globalThis.fetch;
@@ -25,7 +25,8 @@ test('daily pass creates a guest Checkout Pro preference for a single Pix/card p
     });
   };
 
-  const preference = await createDailyPlanPreference({
+  const preference = await createPlanPassPreference({
+    plan: 'daily',
     driverId: 'driver-123',
     amount: 12.5,
     externalReference: 'ru_daily:driver-123:subscription-456:attempt-789',
@@ -44,7 +45,8 @@ test('daily pass creates a guest Checkout Pro preference for a single Pix/card p
   assert.equal(body.payer, undefined);
   assert.equal(body.auto_recurring, undefined);
   assert.equal(body.payment_methods.installments, 1);
-  assert.deepEqual(body.payment_methods.excluded_payment_types.map(({ id }) => id), ['ticket']);
+  assert.deepEqual(body.payment_methods.excluded_payment_types.map(({ id }) => id), ['ticket', 'atm']);
+  assert.equal(body.expires, undefined);
   assert.equal(preference.init_point, 'https://checkout.example/pay');
 });
 
@@ -68,37 +70,37 @@ test('approved daily payment activates its recorded intent exactly once', async 
     external_reference: 'ru_daily:driver-123:subscription-456:attempt-789',
     provider_metadata: { billing_model: 'one_time_daily', plan: 'daily' },
   };
-  let savedIntent = { ...intent };
-  let confirmCalls = 0;
+  const savedIntent = { ...intent };
+  let credits = 0;
+  const rpcCalls = [];
+  // Only the intent lookup answers; the cleanup after a credit is best effort.
   const admin = {
     from(table) {
-      let filters = {};
-      let update;
+      const filters = {};
       const query = {
         select() { return query; },
         eq(key, value) { filters[key] = value; return query; },
+        in() { return query; },
         maybeSingle: async () => ({
-          data: table === 'payments' && filters.external_reference === savedIntent.external_reference
-            ? savedIntent
-            : table === 'subscriptions' && filters.driver_id === savedIntent.driver_id
-              ? { id: savedIntent.subscription_id, driver_id: savedIntent.driver_id, provider_subscription_id: null }
-              : null,
+          data: table === 'payments' && filters.external_reference === savedIntent.external_reference ? savedIntent : null,
           error: null,
         }),
-        update(value) { update = value; return query; },
-        then(resolve, reject) {
-          savedIntent = { ...savedIntent, ...update };
-          return Promise.resolve({ error: null }).then(resolve, reject);
-        },
+        then(resolve, reject) { return Promise.resolve({ data: [], error: null }).then(resolve, reject); },
       };
       return query;
     },
     async rpc(name, args) {
-      assert.equal(name, 'confirm_daily_plan_payment');
+      rpcCalls.push(name);
+      assert.equal(name, 'apply_one_time_plan_payment');
       assert.equal(args.p_payment_id, intent.id);
-      confirmCalls += 1;
-      savedIntent.status = 'approved';
-      return { error: null };
+      assert.equal(args.p_provider_payment_id, '987654');
+      assert.equal(args.p_status, 'approved');
+      assert.equal(args.p_method, 'pix');
+      // The database function credits under a lock; a repeat changes nothing.
+      if (savedIntent.status === 'approved') return { data: 'unchanged', error: null };
+      credits += 1;
+      Object.assign(savedIntent, { status: 'approved', method: 'pix', provider_payment_id: args.p_provider_payment_id });
+      return { data: 'credited', error: null };
     },
   };
   const providerPayment = {
@@ -110,13 +112,16 @@ test('approved daily payment activates its recorded intent exactly once', async 
     payment_type_id: 'bank_transfer',
   };
 
-  await applyDailyPlanPaymentWebhook(admin, providerPayment);
-  await applyDailyPlanPaymentWebhook(admin, providerPayment);
+  const first = await applyDailyPlanPaymentWebhook(admin, providerPayment);
+  const second = await applyDailyPlanPaymentWebhook(admin, providerPayment);
 
+  assert.equal(first.result, 'credited');
+  assert.equal(second.result, 'unchanged');
+  assert.deepEqual(rpcCalls, ['apply_one_time_plan_payment', 'apply_one_time_plan_payment']);
   assert.equal(savedIntent.status, 'approved');
   assert.equal(savedIntent.method, 'pix');
   assert.equal(savedIntent.provider_payment_id, '987654');
-  assert.equal(confirmCalls, 1);
+  assert.equal(credits, 1);
 });
 
 test('daily payment with the wrong amount cannot activate the subscription', async () => {
@@ -126,15 +131,22 @@ test('daily payment with the wrong amount cannot activate the subscription', asy
     }) }),
     rpc: async () => { throw new Error('must not grant access'); },
   };
-  await assert.rejects(
-    applyDailyPlanPaymentWebhook(admin, {
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    // Retrying cannot fix a wrong amount, so the notification is acknowledged
+    // without crediting anything.
+    const result = await applyDailyPlanPaymentWebhook(admin, {
       id: 'payment-id',
       external_reference: 'ru_daily:driver:subscription:attempt',
       transaction_amount: 99,
       status: 'approved',
       payment_method_id: 'pix',
       payment_type_id: 'bank_transfer',
-    }),
-    /valor pago não confere/i,
-  );
+    });
+    assert.equal(result.paymentStatus, 'ignored');
+    assert.equal(result.reason, 'amount_mismatch');
+  } finally {
+    console.error = originalError;
+  }
 });

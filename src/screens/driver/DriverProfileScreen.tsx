@@ -15,6 +15,8 @@ import { Colors, Radius, Typography, Legal } from '../../constants';
 import { supabase } from '../../lib/supabase';
 import { deleteAccount } from '../../services/profile';
 import { friendlyError } from '../../lib/errors';
+import { isSubscriptionCurrent, isPlanLapsed } from '../../services/payments';
+import { PLAN_LABELS, cutoffPhrase } from '../../components/PlanPayment';
 import type { ProfileRow, DriverRow, SubscriptionRow } from '../../types/db';
 
 interface DriverProfileScreenProps {
@@ -94,15 +96,21 @@ const DriverProfileScreen: React.FC<DriverProfileScreenProps> = ({
   };
 
   // Subscription status
-  const subActive = sub?.status === 'active';
-  const subDue = sub?.due_date ? new Date(sub.due_date) : null;
-  const subOverdue = subDue ? subDue < new Date() && !subActive : false;
+  const subActive = isSubscriptionCurrent(sub);
+  const subOverdue = isPlanLapsed(sub);
+  const subLine = subOverdue
+    ? 'Vencido — toque para renovar'
+    : subActive && sub?.plan && sub.plan !== 'commission'
+      ? `${PLAN_LABELS[sub.plan]} · vence ${cutoffPhrase(sub.due_date)}`
+      : subActive && sub?.plan === 'commission'
+        ? 'Por Corrida · em dia'
+        : sub?.status === 'pending' ? 'Aguardando pagamento' : 'Ver detalhes';
 
   const menuItems = [
     { icon: <DollarSign size={18} color={Colors.textPrimary} />, label: 'Meus ganhos', sub: 'Relatório financeiro completo', onPress: onEarnings },
     { icon: <Navigation size={18} color={Colors.textPrimary} />, label: 'Minhas corridas', sub: 'Histórico de viagens', onPress: onRides },
     { icon: <Star size={18} color={Colors.textPrimary} />, label: 'Avaliações', sub: `Nota atual: ${profile?.rating?.toFixed(1) ?? '—'}`, onPress: onRatings },
-    { icon: <CreditCard size={18} color={Colors.textPrimary} />, label: 'Mensalidade', sub: subOverdue ? 'Vencida — regularize!' : subActive ? 'Em dia' : 'Ver detalhes', onPress: onSubscription, alert: subOverdue },
+    { icon: <CreditCard size={18} color={Colors.textPrimary} />, label: 'Plano e mensalidade', sub: subLine, onPress: onSubscription, alert: subOverdue },
     { icon: <FileText size={18} color={Colors.textPrimary} />, label: 'Documentos', sub: driver?.documents_status === 'approved' ? 'Aprovado' : driver?.documents_status === 'pending' ? 'Em análise' : 'Ver situação', onPress: onDocuments },
     { icon: <HelpCircle size={18} color={Colors.textPrimary} />, label: 'Suporte', sub: 'Fale conosco', onPress: onSupport },
     { icon: <FileText size={18} color={Colors.textPrimary} />, label: 'Termos de uso', sub: 'Contrato e regras', onPress: () => Linking.openURL(Legal.termsUrl) },

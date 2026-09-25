@@ -16,8 +16,18 @@ const accessToken = () => String(process.env.MERCADOPAGO_ACCESS_TOKEN || '').tri
 const clientId = () => String(process.env.MERCADOPAGO_CLIENT_ID || '').trim();
 const clientSecret = () => String(process.env.MERCADOPAGO_CLIENT_SECRET || '').trim();
 
+// The public key only loads the card form (Card Payment Brick) in the app.
+export const mercadoPagoPublicKey = () => String(process.env.MERCADOPAGO_PUBLIC_KEY || '').trim();
+
 export function mercadopagoConfigured() {
   return accessToken().length >= 20;
+}
+
+// Card typed inside the app. Without the public key the card goes through
+// Checkout Pro instead.
+export function mercadopagoCardConfigured() {
+  const key = mercadoPagoPublicKey();
+  return mercadopagoConfigured() && key.length >= 20 && /^[\w-]+$/.test(key);
 }
 
 export function mercadopagoWebhookConfigured() {
@@ -36,11 +46,11 @@ function safeJson(value) {
   try { return JSON.stringify(value); } catch { return '{}'; }
 }
 
-export async function mercadopagoRequest(path, { method = 'GET', body, idempotencyKey } = {}) {
+export async function mercadopagoRequest(path, { method = 'GET', body, idempotencyKey, headers } = {}) {
   const token = accessToken();
   if (!token) throw new MercadoPagoError('MERCADOPAGO_ACCESS_TOKEN não configurado.', 503);
 
-  return mercadopagoRequestWithToken(token, path, { method, body, idempotencyKey });
+  return mercadopagoRequestWithToken(token, path, { method, body, idempotencyKey, headers });
 }
 
 async function parseResponse(response) {
@@ -70,11 +80,12 @@ async function requestJson(url, { method = 'GET', headers = {}, body } = {}) {
   }
 }
 
-export async function mercadopagoRequestWithToken(token, path, { method = 'GET', body, idempotencyKey } = {}) {
+export async function mercadopagoRequestWithToken(token, path, { method = 'GET', body, idempotencyKey, headers: extraHeaders = {} } = {}) {
   const normalizedToken = String(token || '').trim();
   if (!normalizedToken) throw new MercadoPagoError('Token do Mercado Pago ausente.', 503);
 
   const headers = {
+    ...extraHeaders,
     Authorization: `Bearer ${normalizedToken}`,
     Accept: 'application/json',
   };
@@ -115,7 +126,7 @@ export function mercadopagoAuthorizationUrl({ state, redirectUri }) {
   if (!mercadopagoOAuthConfigured()) {
     throw new MercadoPagoError('OAuth do Mercado Pago não está configurado no servidor.', 503);
   }
-  const url = new URL('https://auth.mercadopago.com/authorization');
+  const url = new URL('https://auth.mercadopago.com.br/authorization');
   url.searchParams.set('client_id', clientId());
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('platform_id', 'mp');
@@ -160,18 +171,40 @@ export function createSplitPreference({ sellerAccessToken, rideId, amount, marke
   });
 }
 
-// A daily pass is a one-time charge. Unlike /preapproval it does not create a
-// recurring authorization or require the driver to link a Mercado Pago account.
-export function createDailyPlanPreference({ driverId, amount, externalReference, notificationUrl, backUrls, idempotencyKey }) {
+const PASS_COPY = {
+  daily: { title: 'Plano Diário Rotta Urbana', description: 'Acesso ao app por 1 dia; renovação manual.' },
+  weekly: { title: 'Plano Semanal Rotta Urbana', description: 'Acesso ao app por 7 dias; renovação manual.' },
+};
+
+// Mercado Pago wants yyyy-MM-ddTHH:mm:ss.SSS with an offset. Brasília has had
+// no daylight saving time since 2019, so -03:00 is always right.
+export function mercadopagoDateTime(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new MercadoPagoError('Data de expiração inválida.', 500);
+  return `${new Date(date.getTime() - 3 * 3600e3).toISOString().slice(0, 23)}-03:00`;
+}
+
+// A pass (daily or weekly) is a one-time charge. Unlike /preapproval it does
+// not create a recurring authorization or require a Mercado Pago account.
+// The link stops working at expiresAt, so an old tab cannot be paid again.
+export function createPlanPassPreference({ plan = 'daily', driverId, amount, externalReference, notificationUrl, backUrls, idempotencyKey, expiresAt }) {
   const safeAmount = Number(Number(amount).toFixed(2));
+  const copy = PASS_COPY[plan] || PASS_COPY.daily;
+  const expiry = expiresAt ? {
+    expires: true,
+    expiration_date_from: mercadopagoDateTime(Date.now() - 60e3),
+    expiration_date_to: mercadopagoDateTime(expiresAt),
+    // Also ends a Pix generated inside Checkout Pro at the same time.
+    date_of_expiration: mercadopagoDateTime(expiresAt),
+  } : {};
   return mercadopagoRequest('/checkout/preferences', {
     method: 'POST',
     idempotencyKey,
     body: {
       items: [{
-        id: `daily-pass-${driverId}`,
-        title: 'Plano Diário Rotta Urbana',
-        description: 'Acesso ao app por um dia; renovação manual.',
+        id: `${plan}-pass-${driverId}`,
+        title: copy.title,
+        description: copy.description,
         currency_id: 'BRL',
         quantity: 1,
         unit_price: safeAmount,
@@ -185,11 +218,108 @@ export function createDailyPlanPreference({ driverId, amount, externalReference,
       // remain available where Mercado Pago supports them.
       payment_methods: {
         installments: 1,
-        excluded_payment_types: [{ id: 'ticket' }],
+        excluded_payment_types: [{ id: 'ticket' }, { id: 'atm' }],
       },
+      ...expiry,
       // No payer is pre-filled so Checkout Pro can offer its guest flow.
     },
   });
+}
+
+// Pix paid inside the app: Mercado Pago returns the copy-and-paste code and
+// the QR image. Needs a Pix key registered on the platform's account.
+export function createPlanPixPayment({ plan = 'daily', amount, externalReference, notificationUrl, payer = {}, expiresAt, idempotencyKey }) {
+  const copy = PASS_COPY[plan] || PASS_COPY.daily;
+  const cpf = String(payer.cpf || '').replace(/\D/g, '');
+  const names = String(payer.name || '').trim().split(/\s+/).filter(Boolean);
+  return mercadopagoRequest('/v1/payments', {
+    method: 'POST',
+    idempotencyKey,
+    body: {
+      transaction_amount: Number(Number(amount).toFixed(2)),
+      description: copy.title,
+      payment_method_id: 'pix',
+      payer: {
+        email: String(payer.email || '').trim().toLowerCase(),
+        ...(names.length ? { first_name: names[0] } : {}),
+        ...(names.length > 1 ? { last_name: names.slice(1).join(' ') } : {}),
+        ...(cpf.length === 11 ? { identification: { type: 'CPF', number: cpf } } : {}),
+      },
+      external_reference: String(externalReference),
+      notification_url: notificationUrl,
+      date_of_expiration: mercadopagoDateTime(expiresAt),
+    },
+  });
+}
+
+// Card typed into the app's form (Card Payment Brick). The card data goes from
+// the form straight to Mercado Pago, which hands back a one-use token; only the
+// token reaches this server. binary_mode asks for an answer right away
+// (approved or rejected) instead of a manual review that could take days.
+export function createPlanCardPayment({ plan = 'daily', amount, externalReference, notificationUrl, token, paymentMethodId, issuerId, payer = {}, deviceId, idempotencyKey }) {
+  const copy = PASS_COPY[plan] || PASS_COPY.daily;
+  const safeAmount = Number(Number(amount).toFixed(2));
+  const names = String(payer.name || '').trim().split(/\s+/).filter(Boolean);
+  const nameParts = {
+    ...(names.length ? { first_name: names[0] } : {}),
+    ...(names.length > 1 ? { last_name: names.slice(1).join(' ') } : {}),
+  };
+  const docType = String(payer.identification?.type || '').toUpperCase();
+  const docNumber = String(payer.identification?.number || '').replace(/\D/g, '');
+  const identification = (docType === 'CPF' && docNumber.length === 11) || (docType === 'CNPJ' && docNumber.length === 14)
+    ? { type: docType, number: docNumber }
+    : null;
+  const issuer = /^\d{1,12}$/.test(String(issuerId ?? '')) ? String(issuerId) : null;
+  // The device fingerprint of the form helps Mercado Pago approve the card.
+  const session = /^[\w:.-]{1,128}$/.test(String(deviceId || '')) ? String(deviceId) : null;
+  return mercadopagoRequest('/v1/payments', {
+    method: 'POST',
+    idempotencyKey,
+    headers: session ? { 'X-meli-session-id': session } : {},
+    body: {
+      transaction_amount: safeAmount,
+      token: String(token),
+      description: copy.title,
+      installments: 1,
+      payment_method_id: String(paymentMethodId),
+      ...(issuer ? { issuer_id: issuer } : {}),
+      payer: {
+        email: String(payer.email || '').trim().toLowerCase(),
+        ...nameParts,
+        ...(identification ? { identification } : {}),
+      },
+      external_reference: String(externalReference),
+      notification_url: notificationUrl,
+      statement_descriptor: 'ROTTA URBANA',
+      binary_mode: true,
+      additional_info: {
+        items: [{
+          id: `${plan}-pass`,
+          title: copy.title,
+          description: copy.description,
+          category_id: 'services',
+          quantity: 1,
+          unit_price: safeAmount,
+        }],
+        ...(names.length ? { payer: nameParts } : {}),
+      },
+    },
+  });
+}
+
+// A Pix code the driver will not use anymore. Cancelling fails when it was
+// just paid; the webhook then credits it like any other payment, so a failure
+// here is only logged.
+export async function cancelPaymentQuietly(id) {
+  if (!id) return true;
+  try {
+    await mercadopagoRequest(`/v1/payments/${encodeURIComponent(id)}`, { method: 'PUT', body: { status: 'cancelled' } });
+    return true;
+  } catch (error) {
+    if (error instanceof MercadoPagoError && error.status === 404) return true;
+    console.warn('[MercadoPago] não foi possível cancelar o Pix', id, error.message);
+    return false;
+  }
 }
 
 export function refundPaymentWithToken(sellerAccessToken, paymentId, amount, idempotencyKey) {
@@ -198,6 +328,15 @@ export function refundPaymentWithToken(sellerAccessToken, paymentId, amount, ide
     method: 'POST', body, idempotencyKey,
   });
 }
+
+// A charge the platform account received and must give back in full.
+export function refundPayment(paymentId, idempotencyKey) {
+  return mercadopagoRequest(`/v1/payments/${encodeURIComponent(paymentId)}/refunds`, {
+    method: 'POST', body: {}, idempotencyKey,
+  });
+}
+
+const PLAN_LABELS = { weekly: 'Semanal', monthly: 'Mensal' };
 
 export function buildRecurringSchedule(plan, amount) {
   const schedules = {
@@ -227,7 +366,7 @@ export async function createRecurringSubscription({ driverId, email, plan, amoun
     method: 'POST',
     idempotencyKey,
     body: {
-      reason: `Rotta Urbana — Plano ${plan}`,
+      reason: `Rotta Urbana — Plano ${PLAN_LABELS[plan] || plan}`,
       external_reference: driverId,
       payer_email: email,
       auto_recurring: autoRecurring,
@@ -241,6 +380,9 @@ export async function createRecurringSubscription({ driverId, email, plan, amoun
 export const getPreapproval = (id) => mercadopagoRequest(`/preapproval/${encodeURIComponent(id)}`);
 export const getAuthorizedPayment = (id) => mercadopagoRequest(`/authorized_payments/${encodeURIComponent(id)}`);
 export const getPayment = (id) => mercadopagoRequest(`/v1/payments/${encodeURIComponent(id)}`);
+export const searchPaymentsByReference = (externalReference) => mercadopagoRequest(
+  `/v1/payments/search?sort=date_created&criteria=desc&limit=10&external_reference=${encodeURIComponent(externalReference)}`,
+);
 
 export const updatePreapproval = (id, body) => mercadopagoRequest(`/preapproval/${encodeURIComponent(id)}`, {
   method: 'PUT', body,
@@ -296,6 +438,7 @@ export function providerConfigSummary() {
     webhookSecret: mercadopagoWebhookConfigured(),
     oauth: mercadopagoOAuthConfigured(),
     split: mercadopagoSplitConfigured(),
+    cardForm: mercadopagoCardConfigured(),
     api: API_BASE,
   };
 }

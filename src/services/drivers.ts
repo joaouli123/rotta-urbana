@@ -87,9 +87,13 @@ export async function getSearchingRides(): Promise<RideRow[]> {
 }
 
 export async function getMyPrimaryVehicleSegment(): Promise<'moto' | 'car'> {
-  const { data: u } = await supabase.auth.getUser();
-  if (!u?.user) return 'car';
-  const { data } = await supabase.from('vehicles').select('type').eq('driver_id', u.user.id).eq('is_primary', true).order('created_at').limit(1).maybeSingle();
+  const { data: u, error: authError } = await supabase.auth.getUser();
+  if (authError) throw authError;
+  if (!u?.user) throw new Error('not authenticated');
+  // Same pick as the server's checkout: the primary vehicle, else the oldest.
+  const { data, error } = await supabase.from('vehicles').select('type').eq('driver_id', u.user.id)
+    .order('is_primary', { ascending: false }).order('created_at').limit(1).maybeSingle();
+  if (error) throw error;
   return data?.type === 'moto' ? 'moto' : 'car';
 }
 

@@ -26,7 +26,8 @@ import { Colors, Radius, Typography } from '../../constants';
 import RouteMap, { homeMapPadding } from '../../components/RouteMap';
 import { useAuth } from '../../contexts/AuthContext';
 import { getMyDriver, getEarnings } from '../../services/drivers';
-import { getSubscription } from '../../services/payments';
+import { getSubscription, isSubscriptionCurrent, planAutoRenews, planHoursLeft } from '../../services/payments';
+import { PLAN_LABELS, cutoffPhrase, fmtDate } from '../../components/PlanPayment';
 import type { DriverRow, SubscriptionRow } from '../../types/db';
 
 interface DriverHomeScreenProps {
@@ -43,11 +44,6 @@ interface DriverHomeScreenProps {
 
 const fmtMoney = (v: number, decimals = 0) =>
   'R$ ' + v.toLocaleString('pt-BR', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
-
-function fmtDueDate(iso?: string | null): string {
-  if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
-}
 
 const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
   online,
@@ -86,17 +82,35 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
   const driverName = profile?.full_name ?? 'Motorista';
   const rating = profile?.rating ?? 5;
 
-  // Subscription status: derive badge from real status + due date.
-  const subActive = sub?.status === 'active' && !!sub?.due_date && String(sub.due_date).slice(0, 10) >= new Date().toISOString().slice(0, 10);
-  const subDue = sub?.due_date ? new Date(sub.due_date) : null;
-  const subOverdue = subDue ? subDue < new Date() && !subActive : sub?.status === 'expired';
-  const subBadge = subOverdue
-    ? { label: 'Vencida', variant: 'danger' as const }
-    : sub?.status === 'suspended'
-      ? { label: 'Suspensa', variant: 'warning' as const }
-      : sub?.status === 'pending'
-        ? { label: 'Pendente', variant: 'warning' as const }
-        : { label: subActive ? 'Em dia' : '—', variant: 'success' as const };
+  // Plan status. The due date is a UTC day that ends at 21:00 in Brasília,
+  // so it is shown through cutoffPhrase, not as a local date.
+  const subCurrent = isSubscriptionCurrent(sub);
+  const subAutoRenews = planAutoRenews(sub);
+  const hoursLeft = subCurrent ? planHoursLeft(sub) : null;
+  const subDueSoon = subCurrent && !subAutoRenews && hoursLeft !== null && hoursLeft > 0 && (
+    (sub?.plan === 'daily' && hoursLeft <= 12)
+    || (sub?.plan === 'weekly' && hoursLeft <= 24)
+    || (sub?.plan === 'monthly' && hoursLeft <= 72)
+  );
+  const subTitle = sub?.plan ? `Plano ${PLAN_LABELS[sub.plan]}` : 'Mensalidade';
+  const subBadge = subCurrent
+    ? (subDueSoon ? { label: 'Vence logo', variant: 'warning' as const } : { label: 'Em dia', variant: 'success' as const })
+    : sub?.status === 'pending'
+      ? { label: 'Pendente', variant: 'warning' as const }
+      : sub?.status === 'suspended'
+        ? { label: 'Suspenso', variant: 'warning' as const }
+        : { label: 'Vencido', variant: 'danger' as const };
+  const subLine = !sub
+    ? 'Toque para ver detalhes'
+    : sub.plan === 'commission'
+      ? 'Comissão por corrida, sem vencimento'
+      : subCurrent
+        ? (subAutoRenews
+          ? `Renova sozinho em ${fmtDate(sub.due_date)}`
+          : `Vence ${cutoffPhrase(sub.due_date)}${subDueSoon ? ' · toque para renovar' : ''}`)
+        : sub.status === 'pending'
+          ? 'Aguardando pagamento · toque para ver'
+          : 'Toque para renovar';
 
   return (
     <View style={styles.container}>
@@ -205,13 +219,13 @@ const DriverHomeScreen: React.FC<DriverHomeScreenProps> = ({
 
           {/* Subscription Status */}
           <TouchableOpacity onPress={onSubscription} activeOpacity={0.8}>
-            <Card style={styles.subCard}>
+            <Card style={subDueSoon ? { ...styles.subCard, borderWidth: 1, borderColor: Colors.warning } : styles.subCard}>
               <View style={styles.subCardContent}>
                 <View style={styles.subCopy}>
                   <Text style={styles.subEyebrow}>PLANO ATUAL</Text>
-                  <Text style={styles.subTitle}>Mensalidade</Text>
-                  <Text style={styles.subDate}>
-                    {sub ? `Vence em ${fmtDueDate(sub.due_date)}` : 'Toque para ver detalhes'}
+                  <Text style={styles.subTitle}>{subTitle}</Text>
+                  <Text style={[styles.subDate, subDueSoon && { color: Colors.warning, fontWeight: '600' }]}>
+                    {subLine}
                   </Text>
                 </View>
                 <View style={styles.subAction}>

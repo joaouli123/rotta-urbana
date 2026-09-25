@@ -118,10 +118,18 @@ let rideId;
 
 // ── Plans, settings, admin gating ────────────────────────────────────────────
 {
-  const { data: psub, error } = await drv.rpc('set_subscription_plan', { p_plan: 'daily' });
-  const s = Array.isArray(psub) ? psub[0] : psub;
-  ok('driver can switch to daily plan', !error && s?.plan === 'daily');
-  await drv.rpc('set_subscription_plan', { p_plan: 'monthly' }); // restore
+  // A paid plan only starts once Mercado Pago confirms the payment.
+  const { error: legacyErr } = await drv.rpc('set_subscription_plan', { p_plan: 'daily' });
+  ok('driver CANNOT switch plan without paying (set_subscription_plan removed)', !!legacyErr);
+  const { data: before } = await drv.from('subscriptions').select('plan').eq('driver_id', drvU.id).maybeSingle();
+  await drv.rpc('driver_select_plan', { p_plan: 'daily' });
+  const { data: after } = await drv.from('subscriptions').select('plan').eq('driver_id', drvU.id).maybeSingle();
+  ok('choosing a paid plan does not change it before payment', (before?.plan ?? null) === (after?.plan ?? null));
+  const { data: drvBefore } = await drv.from('drivers').select('plan_type').eq('id', drvU.id).maybeSingle();
+  const target = drvBefore?.plan_type === 'weekly' ? 'monthly' : 'weekly';
+  await drv.from('drivers').update({ plan_type: target }).eq('id', drvU.id);
+  const { data: drvAfter } = await drv.from('drivers').select('plan_type').eq('id', drvU.id).maybeSingle();
+  ok('driver CANNOT edit plan_type directly', drvAfter?.plan_type === drvBefore?.plan_type);
 
   const { data: settings } = await pax.from('app_settings').select('subscription_monthly_amount').eq('id', 1).maybeSingle();
   ok('authenticated can read app_settings', !!settings);

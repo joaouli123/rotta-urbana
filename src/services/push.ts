@@ -86,3 +86,22 @@ export async function registerForPushNotifications(): Promise<void> {
 export async function clearPushToken(): Promise<void> {
   try { await supabase.rpc('set_push_token', { p_token: '' }); } catch { /* ignore */ }
 }
+
+/**
+ * Calls `handler` when the driver taps a plan renewal reminder, also the tap
+ * that opened the app. Returns a function that stops listening.
+ */
+export function onPlanRenewalTap(handler: () => void): () => void {
+  const seen = new Set<string>();
+  const handle = (response: Notifications.NotificationResponse | null) => {
+    const request = response?.notification.request;
+    if (!request || request.content.data?.type !== 'plan_renewal' || seen.has(request.identifier)) return;
+    seen.add(request.identifier);
+    // Handled once: a later remount must not open the plan screen again.
+    try { Notifications.clearLastNotificationResponse(); } catch { /* ignore */ }
+    handler();
+  };
+  try { handle(Notifications.getLastNotificationResponse()); } catch { /* ignore */ }
+  const subscription = Notifications.addNotificationResponseReceivedListener(handle);
+  return () => subscription.remove();
+}
