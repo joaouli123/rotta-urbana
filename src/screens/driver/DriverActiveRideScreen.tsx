@@ -147,7 +147,7 @@ const OFF_ROUTE_FIXES = 2;
 const REROUTE_MIN_MS = 15_000;
 const OFF_ROUTE_MAX_ACCURACY_M = 50;
 
-// Turn-by-turn banner, under the status pill and left of the SOS button.
+// Turn-by-turn banner, under the status pill.
 const NAV_BANNER_TOP = 72;
 const NAV_BANNER_HEIGHT = 68;
 
@@ -492,9 +492,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   // The banner needs a route with maneuvers and the car's place on it.
   const showNav = !!maneuver && (status === 'to_passenger' || status === 'in_ride');
   // The status pill ends 66 px below the status bar, the turn banner under it
-  // at NAV_BANNER_TOP + NAV_BANNER_HEIGHT; the SOS button takes 64 px of the
-  // right edge (16 px margin + 48 px button).
-  const { mapPadding, onSheetLayout } = useRideMapPadding(showNav ? NAV_BANNER_TOP + NAV_BANNER_HEIGHT : 66, 64);
+  // at NAV_BANNER_TOP + NAV_BANNER_HEIGHT.
+  const { mapPadding, onSheetLayout } = useRideMapPadding(showNav ? NAV_BANNER_TOP + NAV_BANNER_HEIGHT : 66);
 
   // Until the street route arrives, a dashed straight line links the car to the pickup.
   const pickupLine: RouteGeometry | null = status === 'to_passenger' && !approachLine && driverPos && origin
@@ -751,11 +750,6 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         </View>
       </View>
 
-      {/* Panic button */}
-      <TouchableOpacity style={[styles.panicBtn, { top: insets.top + 64 }]} onPress={onPanic}>
-        <AlertTriangle size={18} color={Colors.danger} />
-      </TouchableOpacity>
-
       {/* Next turn, measured along the route from the car */}
       {showNav && maneuver && (
         <View style={[styles.navBanner, { top: insets.top + NAV_BANNER_TOP }]} pointerEvents="none">
@@ -807,6 +801,9 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
                   <Text style={styles.chatBadgeTxt}>{unread}</Text>
                 </View>
               )}
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.callBtn, styles.panicBtn]} onPress={onPanic}>
+              <AlertTriangle size={16} color={Colors.danger} />
             </TouchableOpacity>
           </View>
         </View>
@@ -1068,15 +1065,8 @@ const styles = StyleSheet.create({
   statusDot: { width: 8, height: 8, borderRadius: 4, flexShrink: 0 },
   statusLabel: { ...Typography.smallMedium, fontWeight: '600' },
   statusSub: { ...Typography.caption, color: Colors.textMuted },
-  panicBtn: {
-    position: 'absolute', right: 16,
-    width: 48, height: 48, borderRadius: 24,
-    backgroundColor: Colors.danger + '22', borderWidth: 1.5, borderColor: Colors.danger + '66',
-    alignItems: 'center', justifyContent: 'center',
-  },
-  // Right: 16 px margin + 48 px SOS button + 8 px gap.
   navBanner: {
-    position: 'absolute', left: 16, right: 72, height: NAV_BANNER_HEIGHT,
+    position: 'absolute', left: 16, right: 16, height: NAV_BANNER_HEIGHT,
     flexDirection: 'row', alignItems: 'center', gap: 12,
     backgroundColor: Colors.dark + 'F2', paddingHorizontal: 12, borderRadius: Radius.lg,
     borderWidth: 1, borderColor: Colors.primary + '44',
@@ -1112,6 +1102,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.primary + '22', alignItems: 'center', justifyContent: 'center',
     borderWidth: 1, borderColor: Colors.primary + '33',
   },
+  panicBtn: { backgroundColor: Colors.danger + '1A', borderColor: Colors.danger + '55' },
   chatBadge: {
     position: 'absolute', top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8,
     backgroundColor: Colors.danger, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3,
