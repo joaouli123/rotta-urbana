@@ -9,6 +9,11 @@ import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 const MapCtx = createContext<any>(null);
+
+// Child effects still run after MapView removed the map (unmount order), and
+// a removed map throws on any style call; that crashed the whole app.
+const alive = (m: any) => !!m && !!m.style && !m._removed;
+const safe = (m: any, fn: () => void) => { if (!alive(m)) return; try { fn(); } catch { /* map going away */ } };
 const SourceCtx = createContext<{ id: string; shape: any } | null>(null);
 
 const flatStyle = (style: any) =>
@@ -53,13 +58,14 @@ function Camera(props: any) {
   } = props;
   const first = useRef(true);
   useEffect(() => {
-    if (!map) return;
-    map.setMaxBounds(maxBounds ? [maxBounds.sw, maxBounds.ne] : null);
-    map.setMinZoom(minZoomLevel ?? 0);
-    map.setMaxZoom(maxZoomLevel ?? 22);
+    safe(map, () => {
+      map.setMaxBounds(maxBounds ? [maxBounds.sw, maxBounds.ne] : null);
+      map.setMinZoom(minZoomLevel ?? 0);
+      map.setMaxZoom(maxZoomLevel ?? 22);
+    });
   }, [map, JSON.stringify(maxBounds), minZoomLevel, maxZoomLevel]);
   useEffect(() => {
-    if (!map) return;
+    if (!alive(map)) return;
     // No animation on the first frame: the map opens already on the trip.
     const duration = first.current ? 0 : animationDuration;
     first.current = false;
@@ -83,6 +89,7 @@ function PointAnnotation({ coordinate, anchor, children }: any) {
   const marker = useRef<any>(null);
   useEffect(() => {
     const at = anchor && anchor.y === 1 ? 'bottom' : 'center';
+    if (!alive(map)) return;
     marker.current = new mapboxgl.Marker({ element: el, anchor: at }).setLngLat(coordinate).addTo(map);
     return () => marker.current?.remove();
   }, [map]);
@@ -92,12 +99,12 @@ function PointAnnotation({ coordinate, anchor, children }: any) {
 
 function ShapeSource({ id, shape, children }: any) {
   const map = useContext(MapCtx);
-  useEffect(() => { map.getSource(id)?.setData(shape); }, [map, JSON.stringify(shape)]);
+  useEffect(() => { safe(map, () => map.getSource(id)?.setData(shape)); }, [map, JSON.stringify(shape)]);
   useEffect(() => () => {
-    try {
+    safe(map, () => {
       map.getStyle()?.layers?.filter((l: any) => l.source === id).forEach((l: any) => map.removeLayer(l.id));
       if (map.getSource(id)) map.removeSource(id);
-    } catch { /* map already removed */ }
+    });
   }, [map]);
   return <SourceCtx.Provider value={{ id, shape }}>{children}</SourceCtx.Provider>;
 }
@@ -111,15 +118,17 @@ function LineLayer({ id, style }: any) {
   const map = useContext(MapCtx);
   const src = useContext(SourceCtx)!;
   useEffect(() => {
-    if (!map.getSource(src.id)) map.addSource(src.id, { type: 'geojson', data: src.shape });
     const paint: any = {};
     const layout: any = {};
     Object.entries(style || {}).forEach(([k, v]) => {
       if (PAINT[k]) paint[PAINT[k]] = v;
       if (LAYOUT[k]) layout[LAYOUT[k]] = v;
     });
-    map.addLayer({ id, type: 'line', source: src.id, paint, layout });
-    return () => { try { if (map.getLayer(id)) map.removeLayer(id); } catch { /* map already removed */ } };
+    safe(map, () => {
+      if (!map.getSource(src.id)) map.addSource(src.id, { type: 'geojson', data: src.shape });
+      if (!map.getLayer(id)) map.addLayer({ id, type: 'line', source: src.id, paint, layout });
+    });
+    return () => safe(map, () => { if (map.getLayer(id)) map.removeLayer(id); });
   }, [map]);
   return null;
 }

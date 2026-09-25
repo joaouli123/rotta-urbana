@@ -548,10 +548,6 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   // under it at NAV_BANNER_TOP + NAV_BANNER_HEIGHT.
   const { mapPadding, onSheetLayout } = useRideMapPadding(showNav ? NAV_BANNER_TOP + NAV_BANNER_HEIGHT : 8 + TOP_ROW_HEIGHT);
 
-  // Until the street route arrives, a dashed straight line links the car to the pickup.
-  const pickupLine: RouteGeometry | null = status === 'to_passenger' && !approachLine && driverPos && origin
-    ? { type: 'LineString', coordinates: [driverPos, origin] }
-    : null;
 
   // ── Advance status ───────────────────────────────────────────────────────────
   const callPassenger = () => {
@@ -789,7 +785,6 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         destination={currentDestination}
         route={status === 'in_ride' ? activeRoute : tripPreview}
         approachRoute={approachLine}
-        secondaryRoute={pickupLine}
         restrictToSinop
         driverLocation={driverPos ?? undefined}
         followUser

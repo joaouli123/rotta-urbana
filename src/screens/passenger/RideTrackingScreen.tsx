@@ -74,6 +74,9 @@ type RideStatus = 'on_way' | 'arrived' | 'in_ride';
 const fmtMoney = (v?: number | null) =>
   v != null ? 'R$ ' + Number(v).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '—';
 
+// Farther than this from the pickup, the driver's position is not believable.
+const MAX_DRIVER_KM = 150;
+
 function haversineKm(a: [number, number], b: [number, number]): number {
   const R = 6371;
   const dLat = ((b[1] - a[1]) * Math.PI) / 180;
@@ -211,12 +214,20 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
   }, [origin?.[0], origin?.[1], destination?.[0], destination?.[1]]);
 
   // Localização do motorista ao vivo (poll a cada 4s) + linha até o embarque.
+  // A position hundreds of km from the pickup is a stale or simulated one (a
+  // test driver left in another city): drawing it sent the map and the route
+  // across Brazil. It is left out until a plausible one arrives.
+  const originRef = useRef(origin);
+  originRef.current = origin;
   useEffect(() => {
     if (!rideId) return;
     let active = true;
     const tick = async () => {
       const loc = await getRideDriverLocation(rideId);
-      if (active && loc) setDriverLoc([loc.lng, loc.lat]);
+      if (!active || !loc) return;
+      const at: [number, number] = [loc.lng, loc.lat];
+      const o = originRef.current;
+      setDriverLoc(o && haversineKm(at, o) > MAX_DRIVER_KM ? null : at);
     };
     tick();
     const iv = setInterval(tick, 4000);

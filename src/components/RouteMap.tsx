@@ -203,6 +203,11 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
       minLng = Math.min(minLng, lng); maxLng = Math.max(maxLng, lng);
       minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
     }
+    // At least ~400 m across, so a short trip frames at street level without
+    // a zoom cap (a camera maxZoomLevel also stops the user's pinch zoom).
+    const MIN_SPAN = 0.004;
+    if (maxLng - minLng < MIN_SPAN) { const c = (minLng + maxLng) / 2; minLng = c - MIN_SPAN / 2; maxLng = c + MIN_SPAN / 2; }
+    if (maxLat - minLat < MIN_SPAN) { const c = (minLat + maxLat) / 2; minLat = c - MIN_SPAN / 2; maxLat = c + MIN_SPAN / 2; }
     const bbox = [minLng, minLat, maxLng, maxLat];
     const padKey = `${paddingTop ?? 0}:${paddingBottom ?? 0}:${paddingRight ?? 0}`;
     // Routes are trimmed and the car moves every second. A new frame on each
@@ -263,7 +268,6 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
         <Mapbox.Camera
           key="frame"
           bounds={bounds}
-          maxZoomLevel={16}
           animationDuration={700}
         />
       ) : follow ? (
