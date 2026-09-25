@@ -17,10 +17,9 @@ let Mapbox: any = null;
 let MAP_READY = false;
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const mod = require('@rnmapbox/maps');
-  Mapbox = mod?.default ?? mod;
-  // The web build of @rnmapbox/maps only ships MapView, Camera and MarkerView;
-  // rendering an undefined component takes the whole screen down.
+  // @rnmapbox/maps on the phone, mapbox-gl on the web (mapboxImpl.web.tsx).
+  Mapbox = require('./mapboxImpl').default;
+  // Rendering an undefined component takes the whole screen down.
   if (Mapbox?.MapView) {
     const Nothing = () => null;
     const parts = ['Camera', 'UserLocation', 'PointAnnotation', 'ShapeSource', 'LineLayer'];
@@ -64,6 +63,13 @@ interface RouteMapProps {
   secondaryRoute?: { type: 'LineString'; coordinates: LngLat[] } | null;
   /** Street route from the driver to the pickup, drawn in blue above the trip route. */
   approachRoute?: { type: 'LineString'; coordinates: LngLat[] } | null;
+  /**
+   * Navigation view: the camera follows this point up close, turned to the
+   * heading, instead of framing the whole trip.
+   */
+  focus?: { center: LngLat; heading?: number | null } | null;
+  /** Changing it frames the whole trip again (after the user moved the map). */
+  recenterKey?: number;
   style?: ViewStyle;
 }
 
@@ -160,10 +166,10 @@ function useMapLimits(enabled: boolean): MapLimits | null {
   return enabled ? limits : null;
 }
 
-const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, paddingRight, driverLocation, secondaryRoute, approachRoute, style }) => {
+const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, paddingRight, driverLocation, secondaryRoute, approachRoute, focus, recenterKey = 0, style }) => {
   const limits = useMapLimits(restrictToSinop);
   // Last frame sent to the camera; see the framing below.
-  const frameRef = useRef<{ bbox: number[]; pad: string; bounds: any } | null>(null);
+  const frameRef = useRef<{ bbox: number[]; pad: string; bounds: any; key: number } | null>(null);
 
   if (!MAP_READY) {
     return (
@@ -205,7 +211,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
     const prev = frameRef.current;
     const tolLng = Math.max(0.0005, (maxLng - minLng) * 0.12);
     const tolLat = Math.max(0.0005, (maxLat - minLat) * 0.12);
-    const same = !!prev && prev.pad === padKey && prev.bbox.every((v, i) =>
+    const same = !!prev && prev.pad === padKey && prev.key === recenterKey && prev.bbox.every((v, i) =>
       Math.abs(v - bbox[i]) <= (i % 2 === 0 ? tolLng : tolLat));
     if (same) {
       bounds = prev!.bounds;
@@ -217,7 +223,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
         paddingTop: (paddingTop ?? 0) + 24, paddingBottom: (paddingBottom ?? 0) + 24,
         paddingLeft: 40, paddingRight: (paddingRight ?? 0) + 40,
       };
-      frameRef.current = { bbox, pad: padKey, bounds };
+      frameRef.current = { bbox, pad: padKey, bounds, key: recenterKey };
     }
   } else {
     frameRef.current = null;
@@ -238,7 +244,19 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
 
   return (
     <Mapbox.MapView style={[{ flex: 1 }, style]} styleURL={Mapbox.StyleURL.Street} logoEnabled={false} compassEnabled={false}>
-      {bounds ? (
+      {focus ? (
+        // Up close on the car, turned to where it goes, with the car in the
+        // lower part of the free map (like Waze and Google Maps).
+        <Mapbox.Camera
+          key="focus"
+          centerCoordinate={focus.center}
+          zoomLevel={17}
+          heading={focus.heading ?? 0}
+          pitch={45}
+          padding={{ ...pad, paddingTop: pad.paddingTop + 140 }}
+          animationDuration={800}
+        />
+      ) : bounds ? (
         // A new bounds object animates the camera; the same one leaves it alone.
         // No service-area limit here: a trip point outside it (a driver coming
         // from far) was clamped away and the map showed a random corner.

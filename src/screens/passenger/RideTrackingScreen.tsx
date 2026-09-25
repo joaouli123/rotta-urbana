@@ -35,6 +35,7 @@ import {
   Shield,
   Search,
   MapPinned,
+  Route as RouteIcon,
 } from 'lucide-react-native';
 import { Avatar, Rating, Card } from '../../components/ui';
 import { Colors, Radius } from '../../constants';
@@ -120,6 +121,8 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
   const insets = useSafeAreaInsets();
   // The panic button ends 54 px below the status bar (top 8 + 46 px).
   const { mapPadding, onSheetLayout } = useRideMapPadding(54);
+  // Bumped by the button that frames the whole trip again.
+  const [recenterKey, setRecenterKey] = useState(0);
   const [rideStatus, setRideStatus] = useState<RideStatus>('on_way');
   const [route, setRoute] = useState<{ type: 'LineString'; coordinates: [number, number][] } | null>(null);
   const [driverLoc, setDriverLoc] = useState<[number, number] | null>(null);
@@ -402,9 +405,20 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
         approachRoute={approach}
         restrictToSinop
         driverLocation={driverLoc ?? undefined}
+        recenterKey={recenterKey}
         {...mapPadding}
         style={styles.map}
       />
+
+      {/* Frame the whole trip again after moving the map */}
+      <TouchableOpacity
+        style={[styles.recenterBtn, { bottom: mapPadding.paddingBottom + 12 }]}
+        onPress={() => setRecenterKey((k) => k + 1)}
+        activeOpacity={0.85}
+        accessibilityLabel="Centralizar a rota"
+      >
+        <RouteIcon size={20} color={Colors.textPrimary} />
+      </TouchableOpacity>
 
       {/* Panic button */}
       <TouchableOpacity style={[styles.panicBtn, { top: insets.top + 8 }]} onPress={onPanic}>
@@ -836,6 +850,12 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.info + '10', borderRadius: Radius.md,
     paddingHorizontal: 14, paddingVertical: 10, marginBottom: 12,
     borderWidth: 1, borderColor: Colors.info + '25',
+  },
+  recenterBtn: {
+    position: 'absolute', right: 16, width: 44, height: 44, borderRadius: 22,
+    alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF',
+    borderWidth: 1, borderColor: Colors.borderLight,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 6,
   },
   queueSub: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textMuted, marginTop: -6, marginBottom: 8, paddingHorizontal: 4 },
   etaBannerTxt: { fontSize: 13, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary, flex: 1 },

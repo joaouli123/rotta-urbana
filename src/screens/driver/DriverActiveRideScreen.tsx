@@ -39,6 +39,8 @@ import {
   Volume2,
   VolumeX,
   Repeat,
+  LocateFixed,
+  Route as RouteIcon,
 } from 'lucide-react-native';
 import * as Location from 'expo-location';
 import { Avatar, Button, Card } from '../../components/ui';
@@ -77,6 +79,13 @@ import RouteChangeLog from '../../components/RouteChangeLog';
 import { friendlyError } from '../../lib/errors';
 
 // ── Geo helpers ───────────────────────────────────────────────────────────────
+
+function bearingDeg([lng1, lat1]: LngLat, [lng2, lat2]: LngLat): number {
+  const r = Math.PI / 180;
+  const y = Math.sin((lng2 - lng1) * r) * Math.cos(lat2 * r);
+  const x = Math.cos(lat1 * r) * Math.sin(lat2 * r) - Math.sin(lat1 * r) * Math.cos(lat2 * r) * Math.cos((lng2 - lng1) * r);
+  return (Math.atan2(y, x) / r + 360) % 360;
+}
 
 function haversineM([lng1, lat1]: LngLat, [lng2, lat2]: LngLat): number {
   const R = 6_371_000;
@@ -244,6 +253,11 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   // Driver live position
   const [driverPos, setDriverPos] = useState<LngLat | null>(null);
   const [driverSpeedMs, setDriverSpeedMs] = useState(0);
+  // Where the car points, in degrees from north; kept while it stands still.
+  const [driverHeading, setDriverHeading] = useState<number | null>(null);
+  // 'route' frames the whole trip; 'follow' rides along with the car up close.
+  const [mapMode, setMapMode] = useState<'route' | 'follow'>('route');
+  const [recenterKey, setRecenterKey] = useState(0);
   const [voiceOn, setVoiceOn] = useState(true);
 
   // Cancel modal
@@ -438,6 +452,13 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         { accuracy: Location.Accuracy.BestForNavigation, distanceInterval: 0, timeInterval: 1000 },
         (pos) => {
           const here: LngLat = [pos.coords.longitude, pos.coords.latitude];
+          // GPS heading while moving; otherwise the direction of the last ~10 m.
+          const prev = driverPosRef.current;
+          if ((pos.coords.speed ?? 0) > 1 && pos.coords.heading != null && pos.coords.heading >= 0) {
+            setDriverHeading(pos.coords.heading);
+          } else if (prev && haversineM(prev, here) > 10) {
+            setDriverHeading(bearingDeg(prev, here));
+          }
           driverPosRef.current = here;
           driverAccuracyRef.current = pos.coords.accuracy;
           setDriverPos(here);
@@ -772,9 +793,49 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         restrictToSinop
         driverLocation={driverPos ?? undefined}
         followUser
+        focus={mapMode === 'follow' && driverPos ? { center: driverPos, heading: driverHeading } : null}
+        recenterKey={recenterKey}
         {...mapPadding}
         style={styles.map}
       />
+
+      {/* Map view: whole route, or the car up close (like Waze / Google Maps) */}
+      {status !== 'completed' && (
+        <View style={[styles.mapBtns, { bottom: mapPadding.paddingBottom + 12 }]} pointerEvents="box-none">
+          {mapMode === 'follow' ? (
+            <TouchableOpacity
+              style={styles.mapBtn}
+              onPress={() => { setMapMode('route'); setRecenterKey((k) => k + 1); }}
+              activeOpacity={0.85}
+              accessibilityLabel="Ver a rota inteira"
+            >
+              <RouteIcon size={20} color={Colors.textPrimary} />
+              <Text style={styles.mapBtnTxt}>Rota</Text>
+            </TouchableOpacity>
+          ) : (
+            <>
+              <TouchableOpacity
+                style={styles.mapBtnRound}
+                onPress={() => setRecenterKey((k) => k + 1)}
+                activeOpacity={0.85}
+                accessibilityLabel="Centralizar a rota"
+              >
+                <RouteIcon size={20} color={Colors.textPrimary} />
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.mapBtn, !driverPos && { opacity: 0.5 }]}
+                onPress={() => driverPos && setMapMode('follow')}
+                disabled={!driverPos}
+                activeOpacity={0.85}
+                accessibilityLabel="Minha posição"
+              >
+                <LocateFixed size={20} color={Colors.info} />
+                <Text style={[styles.mapBtnTxt, { color: Colors.info }]}>Minha posição</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      )}
 
       {/* Status pill and panic button, one row of the same height */}
       <View style={[styles.topRow, { top: insets.top + 8 }]} pointerEvents="box-none">
@@ -1129,6 +1190,18 @@ const styles = StyleSheet.create({
     borderRadius: TOP_ROW_HEIGHT / 2, borderWidth: 1,
     shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.12, shadowRadius: 8, elevation: 5,
   },
+  mapBtns: { position: 'absolute', right: 16, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  mapBtn: {
+    height: 44, paddingHorizontal: 14, borderRadius: 22, flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: Colors.borderLight,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 6,
+  },
+  mapBtnRound: {
+    width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: Colors.borderLight,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.15, shadowRadius: 8, elevation: 6,
+  },
+  mapBtnTxt: { fontSize: 13, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
   panicTop: {
     width: TOP_ROW_HEIGHT, height: TOP_ROW_HEIGHT, borderRadius: TOP_ROW_HEIGHT / 2,
     alignItems: 'center', justifyContent: 'center',
