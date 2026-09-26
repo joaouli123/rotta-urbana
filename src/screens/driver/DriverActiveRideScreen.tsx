@@ -542,6 +542,15 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   // The banner needs a route with maneuvers and the car's place on it.
   const showNav = !!maneuver && (status === 'to_passenger' || status === 'in_ride');
   useVoiceGuidance(showNav ? maneuver : null, driverSpeedMs, voiceOn);
+  // Like Uber / 99: each leg (to the pickup, then to the destination) starts
+  // in the car view with turn-by-turn, inside the app. "Rota" still zooms out.
+  const autoFollowRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (status !== 'to_passenger' && status !== 'in_ride') return;
+    if (!driverPos || autoFollowRef.current === status) return;
+    autoFollowRef.current = status;
+    setMapMode('follow');
+  }, [status, driverPos]);
   // The top row ends 8 + TOP_ROW_HEIGHT below the status bar, the turn banner
   // under it at NAV_BANNER_TOP + NAV_BANNER_HEIGHT.
   // At the pickup: the "Cheguei" button is called out and the phone buzzes once.
@@ -637,41 +646,6 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       }
     }
     void advance(from);
-  };
-
-  // ── External navigation app ──────────────────────────────────────────────────
-  // No canOpenURL (it needs the schemes declared in the app config): try each
-  // link and fall to the next when the app isn't installed.
-  const openNavigationApp = () => {
-    const target = status === 'in_ride' ? currentDestination : origin;
-    if (!target) return;
-    const ll = `${target[1]},${target[0]}`;
-    const web = `https://www.google.com/maps/dir/?api=1&destination=${ll}&travelmode=driving`;
-    const open = async (urls: string[]) => {
-      for (const url of urls) {
-        try {
-          await Linking.openURL(url);
-          return;
-        } catch { /* not installed: next link */ }
-      }
-      Alert.alert('Não foi possível abrir', 'Nenhum app de navegação respondeu. Siga a rota pelo mapa.');
-    };
-    const google = Platform.OS === 'ios'
-      ? [`comgooglemaps://?daddr=${ll}&directionsmode=driving`, web]
-      : [`google.navigation:q=${ll}&mode=d`, web];
-    // Android shows at most 3 buttons: Apple Maps only exists on iOS anyway.
-    Alert.alert(
-      status === 'in_ride' ? 'Navegar até o destino' : 'Navegar até o embarque',
-      'Volte ao app sempre que puder: com ele aberto, o passageiro vê sua posição atualizada.',
-      [
-        { text: 'Waze', onPress: () => { void open([`https://waze.com/ul?ll=${ll}&navigate=yes`]); } },
-        { text: 'Google Maps', onPress: () => { void open(google); } },
-        ...(Platform.OS === 'ios'
-          ? [{ text: 'Apple Maps', onPress: () => { void open([`http://maps.apple.com/?daddr=${ll}&dirflg=d`]); } }]
-          : []),
-        { text: 'Cancelar', style: 'cancel' as const },
-      ],
-    );
   };
 
   // ── Cancel ───────────────────────────────────────────────────────────────────
@@ -937,7 +911,13 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
           {(canChangeRoute || canNavigate) && (
             <View style={styles.routeActions}>
               {canNavigate && (
-                <TouchableOpacity style={styles.navigateBtn} onPress={openNavigationApp} activeOpacity={0.8}>
+                // In-app turn-by-turn only (car view + voice), never an external app.
+                <TouchableOpacity
+                  style={styles.navigateBtn}
+                  onPress={() => { if (driverPos) setMapMode('follow'); setVoiceOn(true); }}
+                  activeOpacity={0.8}
+                  accessibilityLabel="Navegar pelo app"
+                >
                   <Navigation2 size={15} color={Colors.info} />
                   <Text style={styles.navigateTxt}>Navegar</Text>
                 </TouchableOpacity>
