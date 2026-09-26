@@ -512,22 +512,30 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   }, [rideId]);
 
   // ── Computed: trimmed route + progress + ETA + next maneuver ─────────────────
-  const { activeRoute, approachLine, progress, etaText, maneuver } = useMemo(() => {
+  const { activeRoute, approachLine, progress, etaText, maneuver, routeHeading } = useMemo(() => {
     // To the pickup: the street route from the car. In ride: the trip route.
     const leg = status === 'to_passenger' ? approachRoute : status === 'in_ride' ? tripRoute : null;
     const show = (line: RouteGeometry | null) => (status === 'in_ride'
       ? { activeRoute: line, approachLine: null }
       : { activeRoute: null, approachLine: line });
-    if (!leg) return { ...show(null), progress: 0, etaText: null, maneuver: null };
+    if (!leg) return { ...show(null), progress: 0, etaText: null, maneuver: null, routeHeading: null };
     const full: RouteGeometry = { type: 'LineString', coordinates: leg.nav.coordinates };
     const pos = driverPos ? locateOnRoute(leg.nav, driverPos) : null;
-    if (!pos) return { ...show(full), progress: 0, etaText: null, maneuver: null };
+    if (!pos) return { ...show(full), progress: 0, etaText: null, maneuver: null, routeHeading: null };
 
     // The line starts where the car is on it; the part behind is gone.
     const trimmed: RouteGeometry = {
       type: 'LineString',
       coordinates: [pos.point, ...leg.nav.coordinates.slice(pos.index + 1)],
     };
+    // The street's direction ~20 m ahead: the follow view faces the road even
+    // standing still, when the GPS gives no heading.
+    let ahead = trimmed.coordinates[trimmed.coordinates.length - 1] as LngLat;
+    for (let i = 1, d = 0; i < trimmed.coordinates.length; i++) {
+      d += haversineM(trimmed.coordinates[i - 1] as LngLat, trimmed.coordinates[i] as LngLat);
+      if (d >= 20) { ahead = trimmed.coordinates[i] as LngLat; break; }
+    }
+    const routeHeading = haversineM(pos.point, ahead) > 2 ? bearingDeg(pos.point, ahead) : null;
     const remaining = Math.max(0, leg.nav.lengthM - pos.alongM);
     // Everything driven on this leg over everything the leg takes, so a newer
     // route (every 80 m, reroute, new destination) doesn't reset the bar.
@@ -540,6 +548,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       progress: Math.min(1, Math.max(0, (leg.baseM + pos.alongM) / total)),
       etaText: `~${eta} min ${status === 'in_ride' ? 'para o destino' : 'para o passageiro'}`,
       maneuver: arrivalAtPickup(nextManeuver(leg.nav, pos.alongM), status),
+      routeHeading,
     };
   }, [status, tripRoute, approachRoute, driverPos]);
 
@@ -778,7 +787,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         restrictToSinop
         driverLocation={driverPos ?? undefined}
         followUser
-        focus={mapMode === 'follow' && driverPos ? { center: driverPos, heading: driverHeading } : null}
+        focus={mapMode === 'follow' && driverPos ? { center: driverPos, heading: routeHeading ?? driverHeading } : null}
         recenterKey={recenterKey}
         {...mapPadding}
         style={styles.map}
@@ -799,38 +808,24 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
                 : <VolumeX size={20} color={Colors.textMuted} />}
             </TouchableOpacity>
           )}
-          {mapMode === 'follow' ? (
-            <TouchableOpacity
-              style={styles.mapBtn}
-              onPress={() => { setMapMode('route'); setRecenterKey((k) => k + 1); }}
-              activeOpacity={0.85}
-              accessibilityLabel="Ver a rota inteira"
-            >
-              <RouteIcon size={20} color={Colors.textPrimary} />
-              <Text style={styles.mapBtnTxt}>Rota</Text>
-            </TouchableOpacity>
-          ) : (
-            <>
-              <TouchableOpacity
-                style={styles.mapBtnRound}
-                onPress={() => setRecenterKey((k) => k + 1)}
-                activeOpacity={0.85}
-                accessibilityLabel="Centralizar a rota"
-              >
-                <RouteIcon size={20} color={Colors.textPrimary} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.mapBtn, !driverPos && { opacity: 0.5 }]}
-                onPress={() => driverPos && setMapMode('follow')}
-                disabled={!driverPos}
-                activeOpacity={0.85}
-                accessibilityLabel="Minha posição"
-              >
-                <LocateFixed size={20} color={Colors.info} />
-                <Text style={[styles.mapBtnTxt, { color: Colors.info }]}>Minha posição</Text>
-              </TouchableOpacity>
-            </>
-          )}
+          {/* Icons only: the whole route, and the car up close facing the road */}
+          <TouchableOpacity
+            style={styles.mapBtnRound}
+            onPress={() => { setMapMode('route'); setRecenterKey((k) => k + 1); }}
+            activeOpacity={0.85}
+            accessibilityLabel="Ver a rota inteira"
+          >
+            <RouteIcon size={20} color={mapMode === 'route' ? Colors.info : Colors.textPrimary} />
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.mapBtnRound, !driverPos && { opacity: 0.5 }]}
+            onPress={() => { if (driverPos) { setMapMode('follow'); setRecenterKey((k) => k + 1); } }}
+            disabled={!driverPos}
+            activeOpacity={0.85}
+            accessibilityLabel="Minha posição"
+          >
+            <LocateFixed size={20} color={mapMode === 'follow' ? Colors.info : Colors.textPrimary} />
+          </TouchableOpacity>
         </View>
       )}
 
@@ -968,8 +963,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
                 onPress={goNext}
                 loading={busy}
                 disabled={busy || !armed}
-                size={compact ? 'md' : 'lg'}
-                style={nearPickup && armed && !busy ? { backgroundColor: Colors.success } : undefined}
+                size="sm"
+                style={nearPickup && armed && !busy ? { paddingVertical: 12, backgroundColor: Colors.success } : { paddingVertical: 12 }}
               />
             </View>
           </View>
@@ -1270,7 +1265,7 @@ const styles = StyleSheet.create({
   },
   arrivedHintTxt: { flex: 1, fontSize: 13, lineHeight: 18, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
   cancelBtn: {
-    width: 52, alignItems: 'center', justifyContent: 'center', borderRadius: Radius.md,
+    width: 46, alignItems: 'center', justifyContent: 'center', borderRadius: Radius.md,
     borderWidth: 1.5, borderColor: Colors.danger + '55',
     backgroundColor: Colors.danger + '0E',
   },

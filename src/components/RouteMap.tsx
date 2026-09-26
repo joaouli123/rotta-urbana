@@ -253,11 +253,12 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
         // Up close on the car, turned to where it goes, with the car in the
         // lower part of the free map (like Waze and Google Maps).
         <Mapbox.Camera
-          key="focus"
+          // A new recenterKey remounts it: "Minha posição" snaps back after a pan.
+          key={`focus-${recenterKey}`}
           centerCoordinate={focus.center}
-          zoomLevel={17}
+          zoomLevel={18}
           heading={focus.heading ?? 0}
-          pitch={45}
+          pitch={55}
           padding={{ ...pad, paddingTop: pad.paddingTop + 140 }}
           animationDuration={800}
         />
