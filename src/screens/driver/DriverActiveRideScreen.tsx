@@ -210,6 +210,10 @@ const PAYMENT_LABEL: Record<string, string> = {
   boleto: 'Pagamento indisponível',
   mercadopago: 'Mercado Pago (repasse automático)',
 };
+// One word for the compact sheet.
+const PAYMENT_SHORT: Record<string, string> = {
+  pix: 'Pix', cash: 'Dinheiro', card: 'Cartão', boleto: 'Boleto', mercadopago: 'Mercado Pago',
+};
 
 const CANCEL_REASONS = [
   'Passageiro não foi encontrado',
@@ -710,6 +714,9 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   const progressPct = Math.round(progress * 100);
   const canChangeRoute = status === 'passenger_pickup' || status === 'in_ride';
   const canNavigate = (status === 'to_passenger' && !!origin) || (status === 'in_ride' && !!currentDestination);
+  const stopIsDest = status === 'in_ride' || status === 'completed';
+  const pickupLabel = originAddress ?? (origin ? `${origin[1].toFixed(4)}, ${origin[0].toFixed(4)}` : '—');
+  const destLabel = currentDestinationAddress ?? (currentDestination ? `${currentDestination[1].toFixed(4)}, ${currentDestination[0].toFixed(4)}` : '—');
   const ManeuverIcon = maneuver ? maneuverIcon(maneuver.step) : ArrowUp;
 
   const openRouteEditor = () => {
@@ -780,6 +787,18 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       {/* Map view: whole route, or the car up close (like Waze / Google Maps) */}
       {status !== 'completed' && (
         <View style={[styles.mapBtns, { bottom: mapPadding.paddingBottom + 12 }]} pointerEvents="box-none">
+          {canNavigate && (
+            <TouchableOpacity
+              style={styles.mapBtnRound}
+              onPress={() => setVoiceOn((v) => !v)}
+              activeOpacity={0.85}
+              accessibilityLabel={voiceOn ? 'Silenciar voz do GPS' : 'Ativar voz do GPS'}
+            >
+              {voiceOn
+                ? <Volume2 size={20} color={Colors.info} />
+                : <VolumeX size={20} color={Colors.textMuted} />}
+            </TouchableOpacity>
+          )}
           {mapMode === 'follow' ? (
             <TouchableOpacity
               style={styles.mapBtn}
@@ -862,27 +881,49 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
           </View>
         )}
 
-        {/* Passenger and route info scroll; the action button below stays on screen. */}
+        {/* Compact sheet, like Uber / 99: where to go now, the passenger and the
+            fare. It scrolls on short phones; the action button stays on screen. */}
         <ScrollView
-          style={{ flexGrow: 0, maxHeight: win.height * (compact ? 0.34 : 0.4) }}
+          style={{ flexGrow: 0, maxHeight: win.height * (compact ? 0.3 : 0.36) }}
           bounces={false}
           showsVerticalScrollIndicator={false}
           keyboardShouldPersistTaps="handled"
         >
-        {/* Passenger info */}
-        <View style={[styles.passengerRow, compact && { marginBottom: 8 }]}>
-          <Avatar name={counterpart?.name ?? 'Passageiro'} size={compact ? 40 : 50} />
+        {/* Current stop: the pickup, then the destination */}
+        <View style={styles.stopRow}>
+          <View style={[styles.routeDot, { backgroundColor: stopIsDest ? Colors.danger : Colors.success }]} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.passengerName}>{counterpart?.name ?? 'Passageiro'}</Text>
-            <Text style={styles.passengerRating}>
-              {(counterpart?.rating ?? 5).toFixed(1)} ★ • Passageiro
+            <Text style={styles.stopLabel}>{stopIsDest ? 'Destino' : 'Embarque'}</Text>
+            <Text style={styles.stopAddr} numberOfLines={2}>{stopIsDest ? destLabel : pickupLabel}</Text>
+            {!stopIsDest && (
+              <Text style={styles.stopNext} numberOfLines={1}>Depois: {destLabel}</Text>
+            )}
+          </View>
+          {canChangeRoute && (
+            <TouchableOpacity style={styles.stopEdit} onPress={openRouteEditor} activeOpacity={0.8} accessibilityLabel="Alterar a rota">
+              <Navigation size={14} color={Colors.primary} />
+              <Text style={styles.stopEditTxt}>Alterar</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+        <RouteChangeLog rideId={rideId ?? null} refreshKey={routeChangeKey} />
+
+        {/* Passenger, fare and how it's paid */}
+        <View style={styles.passengerRow}>
+          <Avatar name={counterpart?.name ?? 'Passageiro'} size={38} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.passengerName} numberOfLines={1}>{counterpart?.name ?? 'Passageiro'}</Text>
+            <Text style={styles.passengerRating} numberOfLines={1}>
+              {(counterpart?.rating ?? 5).toFixed(1)} ★
+              {status !== 'completed' ? `  ·  ${fmtMoney(fare)}` : ''}
+              {status !== 'completed' && paymentMethod ? `  ·  ${PAYMENT_SHORT[paymentMethod] ?? paymentMethod}` : ''}
             </Text>
           </View>
           <View style={styles.callBtns}>
-            <TouchableOpacity style={styles.callBtn} onPress={callPassenger}>
+            <TouchableOpacity style={styles.callBtn} onPress={callPassenger} accessibilityLabel="Ligar para o passageiro">
               <Phone size={16} color={Colors.primary} />
             </TouchableOpacity>
-            <TouchableOpacity style={styles.callBtn} onPress={() => { setUnread(0); setChatOpen(true); }}>
+            <TouchableOpacity style={styles.callBtn} onPress={() => { setUnread(0); setChatOpen(true); }} accessibilityLabel="Conversar com o passageiro">
               <MessageCircle size={16} color={Colors.primary} />
               {unread > 0 && (
                 <View style={styles.chatBadge}>
@@ -893,91 +934,15 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
           </View>
         </View>
 
-        {/* Route card */}
-        <Card style={compact ? { ...styles.routeCard, padding: 10, marginBottom: 10 } : styles.routeCard}>
-          <View style={styles.routePoint}>
-            <View style={[styles.routeDot, { backgroundColor: Colors.success }]} />
-            <Text style={styles.routePointAddr} numberOfLines={1}>
-              Embarque: {originAddress ?? (origin ? `${origin[1].toFixed(4)}, ${origin[0].toFixed(4)}` : '—')}
+        {/* Next ride, taken while finishing this one */}
+        {nextPickupAddress && status !== 'completed' && (
+          <View style={styles.nextRow}>
+            <Repeat size={14} color={Colors.info} />
+            <Text style={[styles.nextAddr, { flex: 1 }]} numberOfLines={1}>
+              Próxima corrida: {nextPickupAddress}
             </Text>
           </View>
-          <View style={styles.routeDivider} />
-          <View style={styles.routePoint}>
-            <View style={[styles.routeDot, { backgroundColor: Colors.danger }]} />
-            <Text style={styles.routePointAddr} numberOfLines={1}>
-              Destino: {currentDestinationAddress ?? (currentDestination ? `${currentDestination[1].toFixed(4)}, ${currentDestination[0].toFixed(4)}` : '—')}
-            </Text>
-          </View>
-          {(canChangeRoute || canNavigate) && (
-            <View style={styles.routeActions}>
-              {canNavigate && (
-                // In-app turn-by-turn only (car view + voice), never an external app.
-                <TouchableOpacity
-                  style={styles.navigateBtn}
-                  onPress={() => { if (driverPos) setMapMode('follow'); setVoiceOn(true); }}
-                  activeOpacity={0.8}
-                  accessibilityLabel="Navegar pelo app"
-                >
-                  <Navigation2 size={15} color={Colors.info} />
-                  <Text style={styles.navigateTxt}>Navegar</Text>
-                </TouchableOpacity>
-              )}
-              {canNavigate && (
-                <TouchableOpacity
-                  style={[styles.voiceBtn, !voiceOn && styles.voiceBtnOff]}
-                  onPress={() => setVoiceOn((v) => !v)}
-                  activeOpacity={0.8}
-                  accessibilityLabel={voiceOn ? 'Silenciar voz do GPS' : 'Ativar voz do GPS'}
-                >
-                  {voiceOn
-                    ? <Volume2 size={17} color={Colors.info} />
-                    : <VolumeX size={17} color={Colors.textMuted} />}
-                </TouchableOpacity>
-              )}
-              {canChangeRoute && (
-                <TouchableOpacity style={styles.changeRouteBtn} onPress={openRouteEditor} activeOpacity={0.8}>
-                  <Navigation size={15} color={Colors.primary} />
-                  <Text style={styles.changeRouteTxt}>Alterar a rota</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
-          <RouteChangeLog rideId={rideId ?? null} refreshKey={routeChangeKey} />
-          {/* Fare and how the driver gets paid, during the whole ride */}
-          {status !== 'completed' && (
-            <View style={styles.fareRow}>
-              <DollarSign size={14} color={Colors.success} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.fareLabel}>Valor da corrida</Text>
-                {paymentMethod && !compact && (
-                  <Text style={styles.fareSub}>Recebimento: {PAYMENT_LABEL[paymentMethod] ?? paymentMethod}</Text>
-                )}
-              </View>
-              <Text style={styles.fareValue}>{fmtMoney(fare)}</Text>
-            </View>
-          )}
-          {/* Next ride, taken while finishing this one */}
-          {nextPickupAddress && status !== 'completed' && (
-            <View style={styles.nextRow}>
-              <Repeat size={14} color={Colors.info} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.nextLabel}>Próxima corrida</Text>
-                <Text style={styles.nextAddr} numberOfLines={1}>Embarque: {nextPickupAddress}</Text>
-                <Text style={styles.fareSub}>Começa assim que você finalizar esta.</Text>
-              </View>
-            </View>
-          )}
-          {/* ETA row (the status pill already shows it on short phones) */}
-          {!compact && etaText && status !== 'passenger_pickup' && status !== 'completed' && (
-            <View style={styles.etaRow}>
-              <Clock size={12} color={Colors.primary} />
-              <Text style={styles.etaTxt}>{etaText}</Text>
-              {progressPct > 0 && (
-                <Text style={styles.progressTxt}>{progressPct}% concluído</Text>
-              )}
-            </View>
-          )}
-        </Card>
+        )}
         </ScrollView>
 
         {nearPickup && (
@@ -993,9 +958,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         {status !== 'completed' && (
           <View style={styles.actionRow}>
             {canCancel && (
-              <TouchableOpacity style={styles.cancelBtn} onPress={openCancel} activeOpacity={0.8}>
-                <X size={16} color={Colors.danger} />
-                <Text style={styles.cancelBtnTxt}>Cancelar</Text>
+              <TouchableOpacity style={styles.cancelBtn} onPress={openCancel} activeOpacity={0.8} accessibilityLabel="Cancelar corrida">
+                <X size={20} color={Colors.danger} />
               </TouchableOpacity>
             )}
             <View style={{ flex: 1 }}>
@@ -1242,9 +1206,18 @@ const styles = StyleSheet.create({
   },
   progressFill: { height: 5, borderRadius: 3 },
 
-  passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 14 },
+  passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, marginBottom: 6, borderTopWidth: 1, borderTopColor: Colors.borderLight },
+  stopRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 10 },
+  stopLabel: { ...Typography.caption, color: Colors.textMuted },
+  stopAddr: { ...Typography.bodyMedium, color: Colors.textPrimary, fontFamily: 'Poppins_600SemiBold' },
+  stopNext: { ...Typography.caption, color: Colors.textMuted, marginTop: 2 },
+  stopEdit: {
+    flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 7,
+    borderRadius: Radius.md, borderWidth: 1, borderColor: Colors.primary + '44', backgroundColor: Colors.primary + '10',
+  },
+  stopEditTxt: { ...Typography.caption, color: Colors.primary, fontFamily: 'Poppins_600SemiBold' },
   passengerName: { ...Typography.h5, color: Colors.textPrimary },
-  passengerRating: { ...Typography.caption, color: Colors.textMuted, marginTop: 4 },
+  passengerRating: { ...Typography.caption, color: Colors.textMuted, marginTop: 1 },
   callBtns: { flexDirection: 'row', gap: 8 },
   callBtn: {
     width: 38, height: 38, borderRadius: 19,
@@ -1297,8 +1270,7 @@ const styles = StyleSheet.create({
   },
   arrivedHintTxt: { flex: 1, fontSize: 13, lineHeight: 18, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
   cancelBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 14, paddingVertical: 14, borderRadius: Radius.md,
+    width: 52, alignItems: 'center', justifyContent: 'center', borderRadius: Radius.md,
     borderWidth: 1.5, borderColor: Colors.danger + '55',
     backgroundColor: Colors.danger + '0E',
   },
