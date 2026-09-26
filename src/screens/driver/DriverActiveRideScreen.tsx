@@ -13,6 +13,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  Vibration,
   useWindowDimensions,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -149,12 +150,21 @@ const STEP_ORDER: DriverRideStatus[] = ['to_passenger', 'passenger_pickup', 'in_
 
 const APPROACH_RETRY_MS = 8_000;
 
+// Mapbox's last step says "você chegou ao seu destino"; on the way to the
+// passenger that end is the pickup, where the driver taps "Cheguei".
+function arrivalAtPickup<M extends { step: { type: string; instruction: string } } | null>(m: M, status: DriverRideStatus): M {
+  if (!m || status !== 'to_passenger' || m.step.type !== 'arrive') return m;
+  return { ...m, step: { ...m.step, instruction: 'Você chegou ao embarque. Toque em Cheguei ao passageiro.' } };
+}
+
 // A tap meant for Aceitar, or for this button before its label changed, must
 // not count for the next step: the button ignores presses for a moment after
 // it appears and after every step.
 const ARM_DELAY_MS = 1_500;
 // Past these distances the step is probably a mistake: ask before saving it.
 const ARRIVE_CONFIRM_M = 250;
+// Close enough to the pickup to call out the "Cheguei" button.
+const ARRIVE_NEAR_M = 150;
 const FINISH_CONFIRM_M = 500;
 
 // Off the route by more than this on 2 fixes in a row asks for a new one, at
@@ -229,7 +239,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
 }) => {
   const insets = useSafeAreaInsets();
   // Short phones: a tighter sheet so the route stays visible above it.
-  const compact = useWindowDimensions().height < 760;
+  const win = useWindowDimensions();
+  const compact = win.height < 760;
   const [status, setStatus] = useState<DriverRideStatus>(
     () => (rideStatus && STEP_BY_RIDE_STATUS[rideStatus]) || 'to_passenger',
   );
@@ -524,7 +535,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       ...show(trimmed),
       progress: Math.min(1, Math.max(0, (leg.baseM + pos.alongM) / total)),
       etaText: `~${eta} min ${status === 'in_ride' ? 'para o destino' : 'para o passageiro'}`,
-      maneuver: nextManeuver(leg.nav, pos.alongM),
+      maneuver: arrivalAtPickup(nextManeuver(leg.nav, pos.alongM), status),
     };
   }, [status, tripRoute, approachRoute, driverPos]);
 
@@ -533,6 +544,15 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   useVoiceGuidance(showNav ? maneuver : null, driverSpeedMs, voiceOn);
   // The top row ends 8 + TOP_ROW_HEIGHT below the status bar, the turn banner
   // under it at NAV_BANNER_TOP + NAV_BANNER_HEIGHT.
+  // At the pickup: the "Cheguei" button is called out and the phone buzzes once.
+  const nearPickup = status === 'to_passenger' && !!driverPos && !!origin && haversineM(driverPos, origin) <= ARRIVE_NEAR_M;
+  const nearBuzzedRef = useRef(false);
+  useEffect(() => {
+    if (!nearPickup || nearBuzzedRef.current) return;
+    nearBuzzedRef.current = true;
+    Vibration.vibrate([0, 120, 80, 240]);
+  }, [nearPickup]);
+
   const { mapPadding, onSheetLayout } = useRideMapPadding(showNav ? NAV_BANNER_TOP + NAV_BANNER_HEIGHT : 8 + TOP_ROW_HEIGHT);
 
 
@@ -868,6 +888,13 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
           </View>
         )}
 
+        {/* Passenger and route info scroll; the action button below stays on screen. */}
+        <ScrollView
+          style={{ flexGrow: 0, maxHeight: win.height * (compact ? 0.34 : 0.4) }}
+          bounces={false}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
         {/* Passenger info */}
         <View style={[styles.passengerRow, compact && { marginBottom: 8 }]}>
           <Avatar name={counterpart?.name ?? 'Passageiro'} size={compact ? 40 : 50} />
@@ -971,6 +998,16 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
             </View>
           )}
         </Card>
+        </ScrollView>
+
+        {nearPickup && (
+          <View style={styles.arrivedHint}>
+            <MapPin size={18} color={Colors.success} />
+            <Text style={styles.arrivedHintTxt}>
+              Você chegou ao embarque. Toque em "Cheguei" para avisar o passageiro.
+            </Text>
+          </View>
+        )}
 
         {/* Action buttons */}
         {status !== 'completed' && (
@@ -987,6 +1024,8 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
                 onPress={goNext}
                 loading={busy}
                 disabled={busy || !armed}
+                size={compact ? 'md' : 'lg'}
+                style={nearPickup && armed && !busy ? { backgroundColor: Colors.success } : undefined}
               />
             </View>
           </View>
@@ -1270,7 +1309,13 @@ const styles = StyleSheet.create({
   etaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: Colors.borderLight },
   etaTxt: { ...Typography.caption, color: Colors.primary, flex: 1 },
   progressTxt: { ...Typography.caption, color: Colors.textMuted },
-  actionRow: { flexDirection: 'row', gap: 10, alignItems: 'stretch' },
+  actionRow: { flexDirection: 'row', gap: 10, alignItems: 'stretch', marginTop: 4 },
+  arrivedHint: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 10,
+    backgroundColor: Colors.success + '1A', borderColor: Colors.success + '55', borderWidth: 1,
+    borderRadius: Radius.md, paddingHorizontal: 12, paddingVertical: 10,
+  },
+  arrivedHintTxt: { flex: 1, fontSize: 13, lineHeight: 18, fontFamily: 'Poppins_600SemiBold', color: Colors.textPrimary },
   cancelBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 14, paddingVertical: 14, borderRadius: Radius.md,
