@@ -43,6 +43,7 @@ import RouteMap, { useRideMapPadding } from '../../components/RouteMap';
 import { getRoute, isCoordinateWithinServiceArea, placeLabel, resolvePlace, searchPlaces, type LngLat, type PlaceSuggestion } from '../../services/geo';
 import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
 import { getRideDriverLocation, getRideCounterpart, updateRideDestination, getRideQueueVia, type RideCounterpart } from '../../services/rides';
+import { subscribeDriverLive } from '../../services/liveLocation';
 import { openSupportTicket } from '../../services/profile';
 import { friendlyError } from '../../lib/errors';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -76,6 +77,8 @@ const fmtMoney = (v?: number | null) =>
 
 // Farther than this from the pickup, the driver's position is not believable.
 const MAX_DRIVER_KM = 150;
+// Driver this close to the pickup: "Seu motorista está chegando!".
+const NEAR_PICKUP_M = 300;
 
 function haversineKm(a: [number, number], b: [number, number]): number {
   const R = 6371;
@@ -225,25 +228,38 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
     return () => { active = false; };
   }, [origin?.[0], origin?.[1], destination?.[0], destination?.[1]]);
 
-  // Localização do motorista ao vivo (poll a cada 4s) + linha até o embarque.
+  // Localização do motorista ao vivo. Each GPS fix of the driver arrives by
+  // Supabase Realtime broadcast (under a second, no reload); the poll is only
+  // a fallback for when that connection drops.
   // A position hundreds of km from the pickup is a stale or simulated one (a
   // test driver left in another city): drawing it sent the map and the route
   // across Brazil. It is left out until a plausible one arrives.
   const originRef = useRef(origin);
   originRef.current = origin;
+  const [driverHeading, setDriverHeading] = useState<number | null>(null);
   useEffect(() => {
     if (!rideId) return;
     let active = true;
-    const tick = async () => {
-      const loc = await getRideDriverLocation(rideId);
-      if (!active || !loc) return;
-      const at: [number, number] = [loc.lng, loc.lat];
+    let liveAt = 0;
+    const apply = (at: [number, number], heading: number | null) => {
       const o = originRef.current;
       setDriverLoc(o && haversineKm(at, o) > MAX_DRIVER_KM ? null : at);
+      if (heading != null) setDriverHeading(heading);
+    };
+    const unsub = subscribeDriverLive(rideId, (fix) => {
+      if (!active) return;
+      liveAt = Date.now();
+      apply([fix.lng, fix.lat], fix.heading);
+    });
+    const tick = async () => {
+      if (Date.now() - liveAt < 8000) return;
+      const loc = await getRideDriverLocation(rideId);
+      if (!active || !loc || Date.now() - liveAt < 8000) return;
+      apply([loc.lng, loc.lat], loc.heading ?? null);
     };
     tick();
-    const iv = setInterval(tick, 3000);
-    return () => { active = false; clearInterval(iv); };
+    const iv = setInterval(tick, 5000);
+    return () => { active = false; clearInterval(iv); unsub(); };
   }, [rideId]);
 
   // Driver finishing another ride first (queued trip): where that ride ends.
@@ -401,6 +417,16 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
   const rawEtaMin = approachMin ?? (driverLoc && origin ? (haversineKm(driverLoc, origin) / 30) * 60 : null);
   const pickupEtaMin = rawEtaMin != null && rawEtaMin <= 60 ? Math.max(1, Math.round(rawEtaMin)) : null;
 
+  // The car is almost here: the passenger gets ready at the pickup (one buzz).
+  const pickupDistM = rideStatus === 'on_way' && !queueVia && driverLoc && origin ? haversineKm(driverLoc, origin) * 1000 : null;
+  const driverNear = pickupDistM != null && pickupDistM <= NEAR_PICKUP_M;
+  const nearBuzzedRef = useRef(false);
+  useEffect(() => {
+    if (!driverNear || nearBuzzedRef.current) return;
+    nearBuzzedRef.current = true;
+    Vibration.vibrate([0, 120, 90, 120]);
+  }, [driverNear]);
+
   // Trip progress and time left, from the driver's last known position.
   const rideProgress = rideStatus === 'in_ride' && route && driverLoc
     ? routeProgress(route.coordinates, driverLoc)
@@ -442,6 +468,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
         approachRoute={shownApproach}
         restrictToSinop
         driverLocation={driverLoc ?? undefined}
+        driverHeading={driverHeading}
         recenterKey={recenterKey}
         {...mapPadding}
         style={styles.map}
@@ -470,6 +497,17 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
         {rideStatus === 'on_way' && (
           <View>
             {/* ETA strip */}
+            {driverNear ? (
+              <View style={styles.nearBanner}>
+                <MapPin size={18} color={Colors.success} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.nearTitle}>Seu motorista está chegando!</Text>
+                  <Text style={styles.nearSub}>
+                    A {pickupDistM! < 50 ? 'poucos metros' : `${Math.round(pickupDistM! / 10) * 10} m`} do embarque. Fique pronto no local.
+                  </Text>
+                </View>
+              </View>
+            ) : (
             <View style={styles.etaBanner}>
               <Clock size={15} color={Colors.info} />
               <Text style={styles.etaBannerTxt}>
@@ -478,6 +516,7 @@ const RideTrackingScreen: React.FC<RideTrackingScreenProps> = ({ onRideCompleted
                   : pickupEtaMin ? <>Chegando em <Text style={{ fontFamily: 'Poppins_700Bold', color: Colors.info }}>~{pickupEtaMin} min</Text></> : 'Motorista a caminho'}
               </Text>
             </View>
+            )}
             {queueVia && (
               <Text style={styles.queueSub}>
                 Ele vem até você em seguida{pickupEtaMin ? <> · chega em <Text style={{ fontFamily: 'Poppins_700Bold', color: Colors.info }}>~{pickupEtaMin} min</Text></> : ''}
@@ -891,6 +930,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 10, marginBottom: 12,
     borderWidth: 1, borderColor: Colors.info + '25',
   },
+  nearBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    backgroundColor: Colors.success + '14', borderRadius: Radius.md,
+    paddingHorizontal: 14, paddingVertical: 10, marginBottom: 12,
+    borderWidth: 1, borderColor: Colors.success + '40',
+  },
+  nearTitle: { fontSize: 14, fontFamily: 'Poppins_700Bold', color: Colors.success },
+  nearSub: { fontSize: 12, fontFamily: 'Poppins_400Regular', color: Colors.textSecondary },
   recenterBtn: {
     position: 'absolute', right: 16, width: 44, height: 44, borderRadius: 22,
     alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF',

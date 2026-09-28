@@ -9,6 +9,7 @@ import { usePasswordRecoveryLink } from '../hooks/usePasswordRecoveryLink';
 import type { RideRow, RideTypeDb, SubscriptionRow } from '../types/db';
 import { requestRide, cancelRide, subscribeToRide, updateRideStatus, acceptRide, getRidePoints, getRide, getActiveRide, getDriverActiveRides, relaxFemalePreference, getRideCounterpart } from '../services/rides';
 import { getSearchingRides, subscribeSearchingRides, declineRide, hasDeclinedRide, setStatus, updateLocation, getMyDriver } from '../services/drivers';
+import { reportDriverFix, setLiveRide, startBackgroundTracking, stopBackgroundTracking } from '../services/liveLocation';
 import { playSound, stopSound } from '../lib/sounds';
 import { registerForPushNotifications, clearPushToken, onPlanRenewalTap, onCommissionTap } from '../services/push';
 import { showSearchingNotification, showDriverFoundNotification, showRideStatusNotification, clearRideNotification, ensureNotificationPermission } from '../services/localNotifications';
@@ -829,7 +830,7 @@ const DriverFlow: React.FC = () => {
         { accuracy: Location.Accuracy.High, distanceInterval: 0, timeInterval: 4000 },
         (pos) => {
           setDriverCoords([pos.coords.longitude, pos.coords.latitude]);
-          updateLocation(pos.coords.latitude, pos.coords.longitude, pos.coords.heading ?? undefined).catch(() => {});
+          void reportDriverFix(pos.coords);
         },
       );
       if (cancelled) next.remove();
@@ -838,7 +839,16 @@ const DriverFlow: React.FC = () => {
     return () => { cancelled = true; sub?.remove(); };
   }, [tracking]);
 
-  const handleLogout = async () => { await clearPushToken(); await signOut(); };
+  // During a ride the passenger follows the car live (broadcast), also with
+  // the screen off or another app in front (background location service).
+  const liveRideId = activeRide && !['completed', 'cancelled'].includes(activeRide.status) ? activeRide.id : null;
+  useEffect(() => {
+    setLiveRide(liveRideId);
+    if (!liveRideId) { void stopBackgroundTracking(); return; }
+    void startBackgroundTracking();
+  }, [liveRideId]);
+
+  const handleLogout = async () => { setLiveRide(null); await stopBackgroundTracking(); await clearPushToken(); await signOut(); };
 
   // Load the active ride's points (lat/lng) so the map can draw the route.
   useEffect(() => {

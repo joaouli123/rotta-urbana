@@ -21,8 +21,9 @@ module.exports = ({ config }) => ({
         'O Rotta Urbana acessa suas fotos para enviar documentos do motorista e anexos de suporte.',
       // App uses only standard/exempt encryption (HTTPS) — skips the export-compliance prompt.
       ITSAppUsesNonExemptEncryption: false,
-      // Let iOS wake the app for incoming ride push notifications when backgrounded.
-      UIBackgroundModes: ['remote-notification'],
+      // Let iOS wake the app for incoming ride push notifications when backgrounded,
+      // and keep sending the driver's location during a ride.
+      UIBackgroundModes: ['remote-notification', 'location'],
     },
   },
   plugins: [
@@ -32,6 +33,13 @@ module.exports = ({ config }) => ({
       {
         locationWhenInUsePermission:
           'O Rotta Urbana usa sua localização para mostrar motoristas próximos e traçar rotas.',
+        locationAlwaysAndWhenInUsePermission:
+          'Durante a corrida, o Rotta Urbana compartilha a localização do motorista com o passageiro, mesmo com a tela desligada.',
+        // The driver's location keeps going to the passenger with the screen
+        // off (foreground service with a notification, like Uber / 99).
+        isAndroidBackgroundLocationEnabled: true,
+        isAndroidForegroundServiceEnabled: true,
+        isIosBackgroundLocationEnabled: true,
       },
     ],
     [

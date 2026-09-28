@@ -44,6 +44,8 @@ import {
   Route as RouteIcon,
 } from 'lucide-react-native';
 import * as Location from 'expo-location';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import { reportDriverFix } from '../../services/liveLocation';
 import { Avatar, Button, Card } from '../../components/ui';
 import { Colors, Radius, Typography } from '../../constants';
 import RouteMap, { useRideMapPadding } from '../../components/RouteMap';
@@ -61,6 +63,7 @@ import {
   type NavigationLine,
   type PlaceSuggestion,
   type RouteStep,
+  reverseGeocode,
 } from '../../services/geo';
 import { getServiceArea, serviceAreaLabel } from '../../services/serviceArea';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -242,6 +245,12 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   onDestinationChanged,
 }) => {
   const insets = useSafeAreaInsets();
+  // The screen stays on for the whole ride, like a GPS app. (A browser may
+  // refuse the wake lock; the ride goes on.)
+  useEffect(() => {
+    activateKeepAwakeAsync('driver-ride').catch(() => {});
+    return () => { Promise.resolve(deactivateKeepAwake('driver-ride')).catch(() => {}); };
+  }, []);
   // Short phones: a tighter sheet so the route stays visible above it.
   const win = useWindowDimensions();
   const compact = win.height < 760;
@@ -442,36 +451,63 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
     clearTimeout(approachRef.current.timer);
   }, []);
 
+  // The passenger's app saves "Sua localização atual" when the pickup is where
+  // they stand, which tells the driver nothing: show the street instead.
+  const vagueOrigin = !originAddress || /localiza[cç][aã]o atual/i.test(originAddress);
+  const [pickupStreet, setPickupStreet] = useState<string | null>(null);
+  useEffect(() => {
+    if (!vagueOrigin || !origin) return;
+    let active = true;
+    reverseGeocode(origin[0], origin[1]).then((a) => { if (active && a) setPickupStreet(a); }).catch(() => {});
+    return () => { active = false; };
+  }, [vagueOrigin, origin?.[0], origin?.[1]]);
+  const pickupAddress = vagueOrigin ? (pickupStreet ?? originAddress) : originAddress;
+
   // ── Live GPS watch ───────────────────────────────────────────────────────────
+  // Without a position there is no car, no route to the passenger and no
+  // "Minha posição". So: ask for the permission if missing, show the last
+  // known position right away, and keep asking the GPS directly while the
+  // continuous watch has not delivered (slow first fix, indoors, some phones).
   useEffect(() => {
     let cancelled = false;
     let sub: Location.LocationSubscription | null = null;
+    let lastFixAt = 0;
+    const onFix = (pos: Location.LocationObject) => {
+      if (cancelled) return;
+      lastFixAt = Date.now();
+      const here: LngLat = [pos.coords.longitude, pos.coords.latitude];
+      // GPS heading while moving; otherwise the direction of the last ~10 m.
+      const prev = driverPosRef.current;
+      if ((pos.coords.speed ?? 0) > 1 && pos.coords.heading != null && pos.coords.heading >= 0) {
+        setDriverHeading(pos.coords.heading);
+      } else if (prev && haversineM(prev, here) > 10) {
+        setDriverHeading(bearingDeg(prev, here));
+      }
+      driverPosRef.current = here;
+      driverAccuracyRef.current = pos.coords.accuracy;
+      setDriverPos(here);
+      // Straight to the passenger's map (broadcast), every second.
+      void reportDriverFix(pos.coords);
+      setDriverSpeedMs(Math.max(0, pos.coords.speed ?? 0));
+    };
+    const ask = () => Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }).then(onFix).catch(() => {});
+    const fallback = setInterval(() => { if (Date.now() - lastFixAt > 4000) void ask(); }, 4000);
     (async () => {
-      const { status: perm } = await Location.getForegroundPermissionsAsync();
+      let { status: perm } = await Location.getForegroundPermissionsAsync();
+      if (perm !== 'granted') ({ status: perm } = await Location.requestForegroundPermissionsAsync());
       if (cancelled || perm !== 'granted') return;
-      const next = await Location.watchPositionAsync(
-        // Every second, so the turn banner and the voice keep up with the car.
-        { accuracy: Location.Accuracy.BestForNavigation, distanceInterval: 0, timeInterval: 1000 },
-        (pos) => {
-          const here: LngLat = [pos.coords.longitude, pos.coords.latitude];
-          // GPS heading while moving; otherwise the direction of the last ~10 m.
-          const prev = driverPosRef.current;
-          if ((pos.coords.speed ?? 0) > 1 && pos.coords.heading != null && pos.coords.heading >= 0) {
-            setDriverHeading(pos.coords.heading);
-          } else if (prev && haversineM(prev, here) > 10) {
-            setDriverHeading(bearingDeg(prev, here));
-          }
-          driverPosRef.current = here;
-          driverAccuracyRef.current = pos.coords.accuracy;
-          setDriverPos(here);
-          setDriverSpeedMs(Math.max(0, pos.coords.speed ?? 0));
-        },
-      );
+      const last = await Location.getLastKnownPositionAsync().catch(() => null);
+      if (last && !lastFixAt) onFix(last);
+      void ask();
+      const opts = { distanceInterval: 0, timeInterval: 1000 };
+      // Every second, so the turn banner and the voice keep up with the car.
+      const next = await Location.watchPositionAsync({ ...opts, accuracy: Location.Accuracy.BestForNavigation }, onFix)
+        .catch(() => Location.watchPositionAsync({ ...opts, accuracy: Location.Accuracy.High }, onFix));
       // The screen may have closed while the watch was starting.
       if (cancelled) next.remove();
       else sub = next;
     })().catch(() => {});
-    return () => { cancelled = true; sub?.remove(); };
+    return () => { cancelled = true; clearInterval(fallback); sub?.remove(); };
   }, []);
 
   // ── Ride counterpart & chat ──────────────────────────────────────────────────
@@ -691,7 +727,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   const statusConfig: Record<DriverRideStatus, { label: string; sub: string; color: string; nextLabel: string }> = {
     to_passenger: {
       label: 'A caminho do passageiro',
-      sub: etaText ?? (originAddress ?? 'Calculando rota...'),
+      sub: etaText ?? (pickupAddress ?? 'Calculando rota...'),
       color: Colors.info,
       nextLabel: 'Cheguei ao passageiro',
     },
@@ -724,7 +760,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   const canChangeRoute = status === 'passenger_pickup' || status === 'in_ride';
   const canNavigate = (status === 'to_passenger' && !!origin) || (status === 'in_ride' && !!currentDestination);
   const stopIsDest = status === 'in_ride' || status === 'completed';
-  const pickupLabel = originAddress ?? (origin ? `${origin[1].toFixed(4)}, ${origin[0].toFixed(4)}` : '—');
+  const pickupLabel = pickupAddress ?? (origin ? `${origin[1].toFixed(4)}, ${origin[0].toFixed(4)}` : '—');
   const destLabel = currentDestinationAddress ?? (currentDestination ? `${currentDestination[1].toFixed(4)}, ${currentDestination[0].toFixed(4)}` : '—');
   const ManeuverIcon = maneuver ? maneuverIcon(maneuver.step) : ArrowUp;
 
@@ -786,6 +822,7 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
         approachRoute={approachLine}
         restrictToSinop
         driverLocation={driverPos ?? undefined}
+        driverHeading={routeHeading ?? driverHeading}
         followUser
         focus={mapMode === 'follow' && driverPos ? { center: driverPos, heading: routeHeading ?? driverHeading } : null}
         recenterKey={recenterKey}

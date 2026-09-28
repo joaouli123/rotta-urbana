@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ViewStyle, useWindowDimensions, type LayoutChan
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../constants';
 import { Flag } from 'lucide-react-native';
+import Svg, { Circle, Path } from 'react-native-svg';
 import { DEFAULT_SERVICE_AREA, getServiceArea, serviceAreaBbox, type ServiceArea } from '../services/serviceArea';
 import { resolveServiceAreaBounds } from '../services/geo';
 
@@ -27,6 +28,8 @@ try {
     if (missing.length) {
       Mapbox = { ...Mapbox, ...Object.fromEntries(missing.map((p) => [p, Nothing])) };
     }
+    // The moving car: MarkerView moves a live view natively; PointAnnotation otherwise.
+    if (!Mapbox.MarkerView) Mapbox = { ...Mapbox, MarkerView: Mapbox.PointAnnotation };
     if (!Mapbox.StyleURL?.Street) Mapbox = { ...Mapbox, StyleURL: { ...Mapbox.StyleURL, Street: 'mapbox://styles/mapbox/streets-v12' } };
   }
   const token = process.env.EXPO_PUBLIC_MAPBOX_PUBLIC_TOKEN;
@@ -60,6 +63,8 @@ interface RouteMapProps {
   /** Room taken by buttons along the right edge of the map. */
   paddingRight?: number;
   driverLocation?: LngLat;
+  /** Direction of the car in degrees; with it the car is an arrow (north-up maps only). */
+  driverHeading?: number | null;
   secondaryRoute?: { type: 'LineString'; coordinates: LngLat[] } | null;
   /** Street route from the driver to the pickup, drawn in blue above the trip route. */
   approachRoute?: { type: 'LineString'; coordinates: LngLat[] } | null;
@@ -166,7 +171,81 @@ function useMapLimits(enabled: boolean): MapLimits | null {
   return enabled ? limits : null;
 }
 
-const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, paddingRight, driverLocation, secondaryRoute, approachRoute, focus, recenterKey = 0, style }) => {
+// The ride's car, gliding between GPS fixes like in Uber / 99 instead of
+// jumping. Each move lasts about the gap between fixes, so it keeps going
+// until the next one arrives; only this marker re-renders (~20 fps).
+const CAR_FRAME_MS = 50;
+const CAR_SNAP_DEG = 0.005; // ~500 m: a new position, not movement
+// Google Maps style navigation arrow: blue, white edge, notched tail, tip
+// pointing where the car goes.
+function NavArrow() {
+  return (
+    <Svg width={44} height={44} viewBox="0 0 44 44">
+      <Circle cx={22} cy={22} r={20} fill="rgba(26,115,232,0.18)" />
+      <Path
+        d="M22 5 L36 37 L22 29.5 L8 37 Z"
+        fill="#1A73E8"
+        stroke="#FFFFFF"
+        strokeWidth={3}
+        strokeLinejoin="round"
+      />
+    </Svg>
+  );
+}
+
+const LiveCar = React.memo(function LiveCar({ coordinate, heading, bearing = 0 }: { coordinate: LngLat; heading: number | null; bearing?: number }) {
+  const [shown, setShown] = useState<LngLat>(coordinate);
+  const [angle, setAngle] = useState<number | null>(heading);
+  const shownRef = useRef<LngLat>(coordinate);
+  const angleRef = useRef<number | null>(heading);
+  const lastFixAt = useRef(0);
+  useEffect(() => {
+    const now = Date.now();
+    const gap = lastFixAt.current ? now - lastFixAt.current : 0;
+    lastFixAt.current = now;
+    const from = shownRef.current;
+    const fromAngle = angleRef.current;
+    // Shortest turn: 350° -> 10° goes through 0°, not back around.
+    const turn = heading == null || fromAngle == null ? 0 : ((heading - fromAngle + 540) % 360) - 180;
+    const far = Math.abs(coordinate[0] - from[0]) > CAR_SNAP_DEG || Math.abs(coordinate[1] - from[1]) > CAR_SNAP_DEG;
+    if (!gap || far) {
+      shownRef.current = coordinate; angleRef.current = heading;
+      setShown(coordinate); setAngle(heading);
+      return;
+    }
+    const duration = Math.min(Math.max(gap, 300), 2500);
+    const started = now;
+    const iv = setInterval(() => {
+      const t = Math.min(1, (Date.now() - started) / duration);
+      const p: LngLat = [from[0] + (coordinate[0] - from[0]) * t, from[1] + (coordinate[1] - from[1]) * t];
+      shownRef.current = p;
+      setShown(p);
+      if (heading != null) {
+        const a = fromAngle == null ? heading : (fromAngle + turn * Math.min(1, t * 2) + 360) % 360;
+        angleRef.current = a;
+        setAngle(a);
+      }
+      if (t >= 1) clearInterval(iv);
+    }, CAR_FRAME_MS);
+    return () => clearInterval(iv);
+  }, [coordinate[0], coordinate[1], heading]);
+
+  return (
+    <Mapbox.MarkerView coordinate={shown} anchor={{ x: 0.5, y: 0.5 }} allowOverlap>
+      {angle == null ? (
+        <View style={styles.carPin} />
+      ) : (
+        // The marker is drawn on the screen: turn it by the map's own rotation
+        // too, so it points up the road when the map faces the road.
+        <View style={{ transform: [{ rotate: `${(angle - bearing + 360) % 360}deg` }] }}>
+          <NavArrow />
+        </View>
+      )}
+    </Mapbox.MarkerView>
+  );
+});
+
+const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], route, followUser, restrictToSinop = false, paddingTop, paddingBottom, paddingRight, driverLocation, driverHeading, secondaryRoute, approachRoute, focus, recenterKey = 0, style }) => {
   const limits = useMapLimits(restrictToSinop);
   // Last frame sent to the camera; see the framing below.
   const frameRef = useRef<{ bbox: number[]; pad: string; bounds: any; key: number } | null>(null);
@@ -285,7 +364,8 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
         <Mapbox.Camera zoomLevel={pinned ? pinnedZoom : Math.min(15, minServiceZoom + 3.5)} centerCoordinate={mapCenter} maxBounds={maxBounds} minZoomLevel={minZoomLevel} padding={pad} animationDuration={700} />
       )}
       {/* Stable location dot (default puck, no spinning heading arrow). */}
-      <Mapbox.UserLocation visible androidRenderMode="normal" />
+      {/* Hidden while following the ride's arrow, which marks the car already. */}
+      <Mapbox.UserLocation visible={!focus} androidRenderMode="normal" />
 
       {origin && (
         <Mapbox.PointAnnotation id="origin" coordinate={origin}>
@@ -335,11 +415,7 @@ const RouteMap: React.FC<RouteMapProps> = ({ origin, destination, drivers = [], 
           style={{ lineColor: '#555555', lineWidth: 4, lineDasharray: [2, 2], lineCap: 'round' }}
         />
       </Mapbox.ShapeSource>
-      {driverLocation && (
-        <Mapbox.PointAnnotation id="liveDriver" coordinate={driverLocation}>
-          <View style={styles.carPin} />
-        </Mapbox.PointAnnotation>
-      )}
+      {driverLocation && <LiveCar coordinate={driverLocation} heading={driverHeading ?? null} bearing={focus?.heading ?? 0} />}
     </Mapbox.MapView>
   );
 };
