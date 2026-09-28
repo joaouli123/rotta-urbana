@@ -1178,7 +1178,7 @@ const styles = StyleSheet.create({
     borderRadius: TOP_ROW_HEIGHT / 2, borderWidth: 1,
     shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.12, shadowRadius: 8, elevation: 5,
   },
-  mapBtns: { position: 'absolute', right: 16, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  mapBtns: { position: 'absolute', right: 16, flexDirection: 'column', alignItems: 'center', gap: 8 },
   mapBtn: {
     height: 44, paddingHorizontal: 14, borderRadius: 22, flexDirection: 'row', alignItems: 'center', gap: 6,
     backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: Colors.borderLight,
