@@ -756,7 +756,6 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
   // Only "Outro motivo" needs a written reason; the others already say it.
   const needsDetail = cancelReason === 'Outro motivo';
   const canConfirm = !!cancelReason && (!needsDetail || cancelDescription.trim().length > 0);
-  const progressPct = Math.round(progress * 100);
   const canChangeRoute = status === 'passenger_pickup' || status === 'in_ride';
   const canNavigate = (status === 'to_passenger' && !!origin) || (status === 'in_ride' && !!currentDestination);
   const stopIsDest = status === 'in_ride' || status === 'completed';
@@ -902,16 +901,6 @@ const DriverActiveRideScreen: React.FC<DriverActiveRideProps> = ({
       {/* Bottom sheet */}
       <View style={[styles.bottomSheet, { paddingBottom: insets.bottom + (compact ? 10 : 16) }, compact && { paddingTop: 8 }]} onLayout={onSheetLayout}>
         <View style={[styles.handle, compact && { marginBottom: 8 }]} />
-
-        {/* Progress bar — visible when route is active */}
-        {status !== 'completed' && status !== 'passenger_pickup' && progressPct > 0 && (
-          <View style={styles.progressTrack}>
-            <View style={[styles.progressFill, {
-              width: `${progressPct}%`,
-              backgroundColor: status === 'in_ride' ? Colors.success : Colors.info,
-            }]} />
-          </View>
-        )}
 
         {/* Compact sheet, like Uber / 99: where to go now, the passenger and the
             fare. It scrolls on short phones; the action button stays on screen. */}
@@ -1230,13 +1219,6 @@ const styles = StyleSheet.create({
     shadowColor: '#000', shadowOffset: { width: 0, height: -4 }, shadowOpacity: 0.12, shadowRadius: 16, elevation: 16,
   },
   handle: { width: 40, height: 4, backgroundColor: Colors.border, borderRadius: 2, alignSelf: 'center', marginBottom: 12 },
-
-  // Progress bar
-  progressTrack: {
-    height: 5, backgroundColor: Colors.borderLight, borderRadius: 3,
-    overflow: 'hidden', marginBottom: 12,
-  },
-  progressFill: { height: 5, borderRadius: 3 },
 
   passengerRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingTop: 10, marginBottom: 6, borderTopWidth: 1, borderTopColor: Colors.borderLight },
   stopRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingBottom: 10 },
