@@ -26,58 +26,67 @@ const topic = (rideId: string) => `ride-live:${rideId}`;
 
 const BROADCAST_MIN_MS = 800;
 const DB_MIN_MS = 4_000;
-const RIDE_KEY = 'live-location:ride';
+const RIDES_KEY = 'live-location:rides';
 
-let liveRideId: string | null = null;
-let pubChannel: RealtimeChannel | null = null;
-let pubJoined = false;
+// The current ride and, while finishing it, the queued one: both passengers
+// follow the car.
+const publishers = new Map<string, { channel: RealtimeChannel; joined: boolean }>();
 let lastBroadcastAt = 0;
 let lastDbAt = 0;
 
 function openPublisher(rideId: string) {
-  closePublisher();
-  pubChannel = supabase.channel(topic(rideId), { config: { broadcast: { self: false, ack: false } } });
-  pubChannel.subscribe((status) => { pubJoined = status === 'SUBSCRIBED'; });
+  const entry = { channel: supabase.channel(topic(rideId), { config: { broadcast: { self: false, ack: false } } }), joined: false };
+  entry.channel.subscribe((status) => { entry.joined = status === 'SUBSCRIBED'; });
+  publishers.set(rideId, entry);
 }
 
-function closePublisher() {
-  if (pubChannel) void supabase.removeChannel(pubChannel);
-  pubChannel = null;
-  pubJoined = false;
+function closePublisher(rideId: string) {
+  const entry = publishers.get(rideId);
+  if (!entry) return;
+  publishers.delete(rideId);
+  void supabase.removeChannel(entry.channel);
 }
 
-/** The ride whose passenger gets the driver's fixes; null ends it. */
-export function setLiveRide(rideId: string | null) {
-  if (rideId === liveRideId) return;
-  liveRideId = rideId;
+/** The rides whose passengers get the driver's fixes; empty ends it. */
+export function setLiveRides(rideIds: (string | null | undefined)[]) {
+  const wanted = new Set(rideIds.filter((id): id is string => !!id));
+  let changed = false;
+  for (const id of Array.from(publishers.keys())) if (!wanted.has(id)) { closePublisher(id); changed = true; }
+  for (const id of wanted) if (!publishers.has(id)) { openPublisher(id); changed = true; }
+  if (!changed) return;
   lastBroadcastAt = 0;
-  if (rideId) openPublisher(rideId);
-  else closePublisher();
-  void (rideId ? AsyncStorage.setItem(RIDE_KEY, rideId) : AsyncStorage.removeItem(RIDE_KEY)).catch(() => {});
+  const ids = Array.from(wanted);
+  void (ids.length ? AsyncStorage.setItem(RIDES_KEY, JSON.stringify(ids)) : AsyncStorage.removeItem(RIDES_KEY)).catch(() => {});
 }
 
-/** One GPS fix of the driver: broadcast to the ride and saved every few seconds. */
+/** One ride only (or none). */
+export function setLiveRide(rideId: string | null) {
+  setLiveRides([rideId]);
+}
+
+/** One GPS fix of the driver: broadcast to the rides and saved every few seconds. */
 export async function reportDriverFix(coords: Pick<Location.LocationObjectCoords, 'latitude' | 'longitude' | 'heading' | 'speed'>) {
   const now = Date.now();
   // The background task can run after the app process was restarted.
-  if (!liveRideId) {
-    const saved = await AsyncStorage.getItem(RIDE_KEY).catch(() => null);
-    if (saved) setLiveRide(saved);
+  if (!publishers.size) {
+    const saved = await AsyncStorage.getItem(RIDES_KEY).catch(() => null);
+    if (saved) {
+      try { setLiveRides(JSON.parse(saved)); } catch { /* ignore */ }
+    }
   }
   const heading = coords.heading != null && coords.heading >= 0 && coords.heading < 360 ? coords.heading : null;
   if (now - lastDbAt >= DB_MIN_MS) {
     lastDbAt = now;
     updateLocation(coords.latitude, coords.longitude, heading ?? undefined).catch(() => { lastDbAt = 0; });
   }
-  if (!liveRideId || !pubChannel || now - lastBroadcastAt < BROADCAST_MIN_MS) return;
+  if (!publishers.size || now - lastBroadcastAt < BROADCAST_MIN_MS) return;
   lastBroadcastAt = now;
   const fix: LiveFix = { lat: coords.latitude, lng: coords.longitude, heading, speed: coords.speed ?? null, at: now };
-  // Websocket while joined; REST when it is still (re)connecting, as happens
-  // in the background.
-  if (pubJoined) {
-    pubChannel.send({ type: 'broadcast', event: EVENT, payload: fix }).catch(() => {});
-  } else {
-    pubChannel.httpSend(EVENT, fix).catch(() => {});
+  for (const { channel, joined } of publishers.values()) {
+    // Websocket while joined; REST when it is still (re)connecting, as
+    // happens in the background.
+    if (joined) channel.send({ type: 'broadcast', event: EVENT, payload: fix }).catch(() => {});
+    else channel.httpSend(EVENT, fix).catch(() => {});
   }
 }
 
