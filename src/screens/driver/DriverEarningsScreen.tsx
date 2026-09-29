@@ -87,6 +87,12 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
       const commissionByRide = new Map(commissions.map((c) => [c.ride_id, c]));
       const splitByRide = new Map(ridePayments.map((p) => [p.ride_id, p]));
       const isCommissionPlan = planType === 'commission' || (planType == null && commissions.length > 0);
+      // Mercado Pago rides still unconfirmed have no fee yet: estimate it with
+      // the driver's usual rate so the ride counts in the totals now instead
+      // of showing R$ 0,00 until the payment clears.
+      const usualPct = commissions.find((c) => Number(c.commission_pct) > 0)?.commission_pct
+        ?? ridePayments.find((p) => Number(p.commission_pct) > 0)?.commission_pct
+        ?? 15;
       const earningsRides: EarningsRide[] = rides.map((ride) => {
         const commissionRow = commissionByRide.get(ride.id);
         const splitPayment = splitByRide.get(ride.id);
@@ -96,7 +102,9 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
         const gross = usesAutomaticSplit ? Number(splitPayment?.gross_amount) || Number(ride.price) || 0 : Number(ride.price) || 0;
         const commission = usesAutomaticSplit
           ? Number(splitPayment?.marketplace_fee) || 0
-          : !isMercadoPagoRide && isCommissionPlan && commissionRow?.status !== 'waived'
+          : isMercadoPagoRide
+          ? (isCommissionPlan ? Math.round(gross * Number(usualPct)) / 100 : 0)
+          : isCommissionPlan && commissionRow?.status !== 'waived'
           ? Number(commissionRow?.commission_amount) || 0
           : 0;
         const pendingCommission = isMercadoPagoRide ? 0 : commissionRow?.status === 'pending' ? commission : 0;
@@ -105,8 +113,8 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
           : automaticPaymentApproved
           ? 'automatic'
           : 'automatic_pending';
-        const net = isMercadoPagoRide
-          ? automaticPaymentApproved ? Number(splitPayment?.driver_amount) || 0 : 0
+        const net = automaticPaymentApproved
+          ? Number(splitPayment?.driver_amount) || 0
           : Math.max(0, gross - commission);
         return {
           ride, gross, commission, pendingCommission, net, settlement,
@@ -166,14 +174,13 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
     const all = earningsRides;
 
     const summary = (items: EarningsRide[]) => {
-      const settled = items.filter((item) => item.settlement !== 'automatic_pending');
       const waitingForMercadoPago = items.filter((item) => item.settlement === 'automatic_pending');
       return {
         count: items.length,
-        gross: sumValue(settled, 'gross'),
-        commission: sumValue(settled, 'commission'),
+        gross: sumValue(items, 'gross'),
+        commission: sumValue(items, 'commission'),
         pending: sumValue(items, 'pendingCommission'),
-        net: sumValue(settled, 'net'),
+        net: sumValue(items, 'net'),
         waitingForMercadoPagoCount: waitingForMercadoPago.length,
         waitingForMercadoPagoGross: sumValue(waitingForMercadoPago, 'gross'),
       };
@@ -269,14 +276,14 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
                 <View style={{ flex: 1 }}>
                   <Text style={styles.commissionTitle}>Fechamento da comissão</Text>
                   <Text style={styles.commissionSubtitle}>
-                    {agg.periodSummary.count} corridas • cartão direto gera PIX manual; Mercado Pago divide após confirmação
+                    {agg.periodSummary.count} corridas • Pix e dinheiro: comissão por Pix; Mercado Pago: desconto automático
                   </Text>
                 </View>
                 <Navigation size={18} color={Colors.primary} />
               </View>
               <View style={styles.calculationRow}>
                 <View style={styles.calculationCell}>
-                    <Text style={styles.calculationLabel}>Vendas liquidadas</Text>
+                    <Text style={styles.calculationLabel}>Vendas</Text>
                   <Text style={styles.calculationValue}>{fmtMoney(agg.periodSummary.gross)}</Text>
                 </View>
                 <Text style={styles.calculationOperator}>−</Text>
@@ -300,8 +307,8 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
               </View>
               {agg.periodSummary.waitingForMercadoPagoCount > 0 && (
                 <View style={[styles.transferNote, styles.paymentPendingNote]}>
-                  <Text style={styles.transferNoteText}>Mercado Pago aguardando confirmação</Text>
-                  <Text style={styles.transferNoteValue}>
+                  <Text style={styles.transferNoteText}>Mercado Pago a confirmar</Text>
+                  <Text style={[styles.transferNoteValue, { color: Colors.info }]}>
                     {agg.periodSummary.waitingForMercadoPagoCount} · {fmtMoney(agg.periodSummary.waitingForMercadoPagoGross)}
                   </Text>
                 </View>
@@ -375,7 +382,9 @@ const DriverEarningsScreen: React.FC<DriverEarningsScreenProps> = ({ onBack }) =
                   </Text>
                   {agg.isCommissionPlan && (
                     item.settlement === 'automatic_pending' ? (
-                      <Text style={[styles.rideBreakdown, { color: Colors.warning }]}>Mercado Pago sem confirmação • não entra no líquido</Text>
+                      <Text style={[styles.rideBreakdown, { color: Colors.info }]}>
+                        Total {fmtMoney(item.gross)} • comissão {fmtMoney(item.commission)} • Mercado Pago a confirmar
+                      </Text>
                     ) : (
                       <Text style={styles.rideBreakdown}>
                         Total {fmtMoney(item.gross)} • comissão {fmtMoney(item.commission)}{item.settlement === 'automatic' ? ' • split automático' : ''}
@@ -444,8 +453,8 @@ const styles = StyleSheet.create({
     marginTop: 14,
   },
   paymentPendingNote: { backgroundColor: Colors.info + '14', marginTop: 8 },
-  transferNoteText: { fontSize: 12, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary },
-  transferNoteValue: { fontSize: 13, fontFamily: 'Poppins_700Bold', color: Colors.warning },
+  transferNoteText: { flex: 1, marginRight: 10, fontSize: 12, fontFamily: 'Poppins_500Medium', color: Colors.textSecondary },
+  transferNoteValue: { flexShrink: 0, fontSize: 13, fontFamily: 'Poppins_700Bold', color: Colors.warning },
 
   // Chart
   chartCard: { padding: 16, marginBottom: 16, borderWidth: 1, borderColor: Colors.border },
